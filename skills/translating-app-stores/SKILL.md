@@ -60,7 +60,9 @@ When a store rejects submitted metadata or assets, preserve an immutable rejecti
 
 Classify the rejection by its actual cause—such as unsupported fact/claim, current policy, field/format constraint, metadata-to-build mismatch, asset defect, or unclear reviewer interpretation—and route it to the owner of that cause. Research current store rules only when the classification or correction hinges on a current policy, limit, or platform detail. Do not automatically reopen keyword, competitor, market, or whole-listing research.
 
-Revise the smallest rejected field or asset and only its necessary dependencies. Preserve accepted content, route replacement meaning to `translating-core` and linguistic form to the installed language specialist, and obtain fact/claim or platform approval from its owner. Revalidate the corrected field against the rejection, approved facts, applicable current rule when needed, and the final submission diff; then resubmit or appeal with the evidence packet intact.
+Revise the smallest rejected field or asset and only its necessary dependencies. Preserve accepted content, route replacement meaning to `translating-core` and linguistic form to the installed language specialist, and obtain fact/claim or platform approval from its owner. Revalidate the corrected field against the rejection, approved facts, applicable current rule when needed, and the final submission diff; then return a resubmission-ready or appeal-ready evidence packet.
+
+Do not upload assets or metadata, contact the store, resubmit, or appeal unless the user explicitly authorizes that external action. When authorized, perform only the scoped action represented by the approved packet and preserve the evidence trail.
 
 ## Targeted Research
 

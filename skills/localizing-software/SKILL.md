@@ -40,7 +40,7 @@ This skill does not author target strings, choose terminology, inflect values, o
 Preserve exactly unless engineering supplies a changed resource contract:
 
 - resource keys, namespaces, object structure, ordering when significant, encoding declarations, comments marked as protected, and escapes
-- placeholder names, case, types, delimiters, and occurrence counts
+- placeholder names, case, types, delimiters, and branch scope; compare occurrence counts only within corresponding retained or fixed branches, not as whole-message totals across a changed plural category set
 - ICU argument syntax, `plural` and `select` controls, exact-number selectors, fixed `select` keys, `other`, number signs, offsets, skeletons, and required fallback branches
 - markup, code, commands, identifiers, URLs, product codes, analytics values, and opaque runtime data
 
@@ -49,7 +49,7 @@ Translate prose inside required branches independently. Never translate a key or
 ## Software Constraints
 
 - Preserve source/target key parity and reject duplicate, renamed, missing, or unexpected keys according to the approved catalog policy.
-- Preserve placeholder set, type, multiplicity, and branch scope. Reordering prose around a placeholder is allowed only through translation, not by renaming the argument.
+- Preserve placeholder set, type, multiplicity, and scope within every retained exact-number branch and fixed `select` branch. For plural categories, define the required nested-placeholder schema per target branch: adding or removing valid locale categories may change whole-message occurrence totals, but each retained or added target branch must contain its required placeholders and number signs without omission, renaming, duplication, or cross-branch substitution.
 - Derive plural category branches from the target locale and production runtime, not exact source parity. Add categories such as `few` or `many` when required, omit category labels invalid for the target contract, and retain `other` plus every exact-number selector. Branch completeness means every category required by the target runtime has a non-empty target branch.
 - Preserve fixed `select` keys exactly because they are application values rather than locale plural categories. Change them only when engineering changes the application contract.
 - Keep values typed through runtime locale formats for numbers, dates, times, units, lists, and currency. Product owners decide the underlying value or currency; language specialists decide linguistic surroundings.
@@ -72,7 +72,7 @@ This skill owns software field classification, protected syntax, runtime constra
 Pass source and target catalogs, locale pair, runtime/version, key and placeholder inventories, resource comments, rendering context, fallback policy, and these gates to `reviewing-translations` and CI:
 
 - parse or compile every catalog and ICU message with the production runtime
-- compare exact key, argument, fixed `select` key, exact-number selector, `other`, markup, escape, and protected-span parity
+- compare exact key, argument, fixed `select` key, exact-number selector, `other`, markup, escape, protected-span parity, and branch-scoped nested-placeholder schemas
 - validate plural category labels against the target locale and production runtime, require complete target branches, and reject source-parity checks that would block required target categories
 - execute representative values for every target plural category and fixed `select` key, including boundaries and exact-number selectors present in source
 - render controlled dates, numbers, currency, units, and user/opaque data under the explicit target locale
@@ -80,4 +80,4 @@ Pass source and target catalogs, locale pair, runtime/version, key and placehold
 - run pseudo-localization plus long-text, accessibility, truncation, and supported viewport checks
 - run RTL/bidirectional cases for placeholders, punctuation, controls, directional symbols, and identifiers when applicable
 
-Block CI or release on parse failure, key or placeholder drift, lost ICU branches, hardcoded runtime values, unintended fallback-language text, unresolved direction semantics, or rendering that hides required content. Route each defect with its exact key and smallest unchanged message to the responsible installed skill.
+Block CI or release on parse failure; key, argument, or ICU syntax drift; missing or changed exact-number selectors, fixed `select` keys, or required `other`; invalid or incomplete target-locale plural categories; branch-scoped placeholder-schema violations outside valid category additions/removals; hardcoded runtime values; unintended fallback-language text; unresolved direction semantics; or rendering that hides required content. Route each defect with its exact key and smallest unchanged message to the responsible installed skill.
