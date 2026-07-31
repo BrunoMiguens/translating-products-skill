@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "suite_version": "0.1.0",
+  "skills": [
+    {
+      "name": "translating-products",
+      "version": "0.1.0",
+      "category": "orchestrator",
+      "capabilities": [
+        "orchestrator",
+        "project-bootstrap",
+        "skill-routing",
+        "subagent-routing"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-core",
+      "version": "0.1.0",
+      "category": "core",
+      "capabilities": [
+        "core-translation",
+        "terminology",
+        "cultural-adaptation",
+        "structural-fidelity"
+      ],
+      "depends_on": [
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "reviewing-translations",
+      "version": "0.1.0",
+      "category": "quality",
+      "capabilities": [
+        "translation-qa",
+        "terminology-qa",
+        "structural-qa"
+      ],
+      "depends_on": []
+    },
+    {
+      "name": "translating-web",
+      "version": "0.1.0",
+      "category": "surface",
+      "capabilities": [
+        "surface:web",
+        "html",
+        "markdown",
+        "accessibility",
+        "hreflang"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "localizing-software",
+      "version": "0.1.0",
+      "category": "surface",
+      "capabilities": [
+        "surface:software",
+        "icu",
+        "placeholders",
+        "plurals",
+        "locale-formatting"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-mobile",
+      "version": "0.1.0",
+      "category": "surface",
+      "capabilities": [
+        "surface:mobile",
+        "mobile-ui",
+        "accessibility",
+        "pseudo-localization"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-ios",
+      "version": "0.1.0",
+      "category": "platform",
+      "capabilities": [
+        "platform:ios",
+        "xcstrings",
+        "swiftui",
+        "apple-locales"
+      ],
+      "depends_on": [
+        "translating-mobile",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-android",
+      "version": "0.1.0",
+      "category": "platform",
+      "capabilities": [
+        "platform:android",
+        "string-resources",
+        "compose",
+        "android-locales"
+      ],
+      "depends_on": [
+        "translating-mobile",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-flutter",
+      "version": "0.1.0",
+      "category": "platform",
+      "capabilities": [
+        "platform:flutter",
+        "arb",
+        "flutter-localizations",
+        "icu"
+      ],
+      "depends_on": [
+        "translating-mobile",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-app-stores",
+      "version": "0.1.0",
+      "category": "surface",
+      "capabilities": [
+        "surface:app-store",
+        "surface:play-store",
+        "aso",
+        "store-metadata"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-marketing",
+      "version": "0.1.0",
+      "category": "surface",
+      "capabilities": [
+        "surface:marketing",
+        "transcreation",
+        "brand-voice",
+        "calls-to-action"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-documentation",
+      "version": "0.1.0",
+      "category": "surface",
+      "capabilities": [
+        "surface:documentation",
+        "code-preservation",
+        "technical-terminology"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-rtl",
+      "version": "0.1.0",
+      "category": "script",
+      "capabilities": [
+        "script:rtl",
+        "bidi",
+        "mirroring",
+        "mixed-direction"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-arabic",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:arabic",
+        "locale:ar"
+      ],
+      "depends_on": [
+        "translating-core",
+        "translating-rtl",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-hebrew",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:hebrew",
+        "locale:he"
+      ],
+      "depends_on": [
+        "translating-core",
+        "translating-rtl",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-japanese",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:japanese",
+        "locale:ja"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-chinese",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:chinese",
+        "locale:zh-Hans",
+        "locale:zh-Hant"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-korean",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:korean",
+        "locale:ko"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-portuguese",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:portuguese",
+        "locale:pt-BR",
+        "locale:pt-PT"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-spanish",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:spanish",
+        "locale:es-ES",
+        "locale:es-419"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-french",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:french",
+        "locale:fr-FR",
+        "locale:fr-CA"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    },
+    {
+      "name": "translating-german",
+      "version": "0.1.0",
+      "category": "language",
+      "capabilities": [
+        "language:german",
+        "locale:de-DE",
+        "locale:de-AT",
+        "locale:de-CH"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ]
+    }
+  ]
+}
