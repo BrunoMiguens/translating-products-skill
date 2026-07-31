@@ -1,0 +1,55 @@
+tests/test_catalog.py
+  s_51f69c54a42bb0::t_c7748f3eb2ce9c 1-103
+scripts/render_catalog.py
+  s_51f69c54a42bb0::t_530e32831a7654 1-126
+skills/translating-products/assets/translation-project/style-guide.md
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-22
+skills/translating-products/references/compatibility-registry.json
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-4
+skills/translating-products/assets/translation-project/research-sources.md
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-7
+skills/translating-products/assets/translation-project/protected-terms.txt
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1
+skills/translating-products/SKILL.md
+  s_51f69c54a42bb0::t_466f0c8bbc9bae 1-81
+skills/translating-products/references/extension-contract.md
+  s_51f69c54a42bb0::t_da27e54c3671b1 3
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-2,4-46
+skills/translating-products/assets/translation-project/translation-memory.csv
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-2
+tests/test_routing.py
+  s_51f69c54a42bb0::t_e2f2a0b162c9f4 110
+  s_51f69c54a42bb0::t_c7748f3eb2ce9c 1-109,111-195
+skills/translating-products/assets/translation-project/project-brief.md
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-28
+skills/translating-products/assets/translation-project/glossary.csv
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-2
+skills/translating-products/assets/translation-project/decisions.md
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-8
+skills/translating-products/scripts/route_capabilities.py
+  s_51f69c54a42bb0::t_530e32831a7654 1-90
+skills/translating-products/assets/translation-project/locales.yaml
+  s_51f69c54a42bb0::t_f5a7214a2a906f 1-4
+skills/translating-products/scripts/policy.py
+  s_51f69c54a42bb0::t_530e32831a7654 1-64
+skills/translating-products/references/capability-catalog.json
+  s_51f69c54a42bb0::t_6837a81406c9b0 1-322
+skills/translating-products/references/capability-catalog.md
+  s_51f69c54a42bb0::t_80d92f004b3a6f 1-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "ff03c7eb5a761fc6b64bd589ba70abd15b511c8c",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
