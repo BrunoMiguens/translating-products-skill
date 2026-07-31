@@ -1,0 +1,27 @@
+tests/test_manifest.py
+  s_51f69c54a42bb0::t_f9fa2838310cd2 1-42
+skills-manifest.json
+  s_51f69c54a42bb0::t_6144c7a36f51cb 1-285
+THIRD_PARTY_NOTICES.md
+  s_51f69c54a42bb0::t_6144c7a36f51cb 1-14
+scripts/repo_model.py
+  s_51f69c54a42bb0::t_6144c7a36f51cb 1-82
+LICENSE
+  s_51f69c54a42bb0::t_6144c7a36f51cb 1-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "6316c86eab9670ce7926605ae42ce32cb75d9306",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
