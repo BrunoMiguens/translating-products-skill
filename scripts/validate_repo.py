@@ -19,6 +19,7 @@ HOST_TOKENS = (
     re.compile(r"@[a-z0-9-]+", re.I),
     re.compile(r"(?m)^/[a-z0-9-]+", re.I),
 )
+FRONTMATTER_FIELDS = {"name", "description"}
 
 
 def parse_frontmatter(path: Path) -> dict[str, str]:
@@ -30,12 +31,17 @@ def parse_frontmatter(path: Path) -> dict[str, str]:
     except ValueError as error:
         raise ValueError("missing closing frontmatter delimiter") from error
 
-    result = {}
+    result: dict[str, str] = {}
     for line in lines[1:end]:
         if ":" not in line:
             raise ValueError(f"invalid frontmatter line: {line}")
         key, value = line.split(":", 1)
-        result[key.strip()] = value.strip()
+        key = key.strip()
+        if key not in FRONTMATTER_FIELDS:
+            raise ValueError(f"unexpected frontmatter field: {key}")
+        if key in result:
+            raise ValueError(f"duplicate frontmatter field: {key}")
+        result[key] = value.strip()
     return result
 
 
