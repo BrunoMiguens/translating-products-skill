@@ -54,6 +54,14 @@ Never improve a listing by inventing superiority, coverage, outcomes, endorsemen
 - Keep overlay copy legible within every required asset size and safe area; preserve asset IDs and ordering unless the approved listing plan changes them.
 - Maintain store-specific parity between metadata, screenshots, preview media, in-app experience, privacy/support information, and regional availability.
 
+## Store-Review Rejections
+
+When a store rejects submitted metadata or assets, preserve an immutable rejection packet: store/storefront, locale, submission and version IDs, review date, exact reviewer feedback, exact rejected field or asset, rejected content, attachments, and fields explicitly accepted or unaffected. Never delete or paraphrase away the evidence.
+
+Classify the rejection by its actual cause—such as unsupported fact/claim, current policy, field/format constraint, metadata-to-build mismatch, asset defect, or unclear reviewer interpretation—and route it to the owner of that cause. Research current store rules only when the classification or correction hinges on a current policy, limit, or platform detail. Do not automatically reopen keyword, competitor, market, or whole-listing research.
+
+Revise the smallest rejected field or asset and only its necessary dependencies. Preserve accepted content, route replacement meaning to `translating-core` and linguistic form to the installed language specialist, and obtain fact/claim or platform approval from its owner. Revalidate the corrected field against the rejection, approved facts, applicable current rule when needed, and the final submission diff; then resubmit or appeal with the evidence packet intact.
+
 ## Targeted Research
 
 Research only current facts needed for the listing:
@@ -72,7 +80,7 @@ This skill owns listing field classification, store/market constraints, protecte
 
 ## QA Handoff
 
-Pass source and target listings, per-store field map, locale/market, current rule citations, approved facts/claims, keyword evidence, release-build identifier, screenshot manifest, UI string source, and these checks to `reviewing-translations`:
+Pass source and target listings, per-store field map, locale/market, current rule citations, approved facts/claims, keyword evidence, release-build identifier, screenshot manifest, UI string source, any rejection packet and classification, and these checks to `reviewing-translations`:
 
 - product names, numbers, claims, availability, contacts, links, asset IDs, and required disclosures preserve approved truth
 - title, subtitle/short description, description, promotional/update fields, and screenshots satisfy their verified store-specific constraints
@@ -80,5 +88,6 @@ Pass source and target listings, per-store field map, locale/market, current rul
 - every screenshot matches the localized release build, contains approved UI strings, and avoids accidental mixed-language content
 - overlay and metadata wording preserve meaning, brand voice, conversion intent, and accessibility/readability without adding a claim
 - App Store and Play Store packages were validated independently for field, asset, policy, and submission parity
+- a rejected resubmission preserves the exact review evidence, changes only the rejected field or necessary dependencies, resolves the classified cause, and retains accepted fields unchanged
 
 Block submission for an invented or unsubstantiated claim, protected-name change, inaccurate regional availability, unverified platform constraint, unsupported keyword assertion, mismatched screenshot/UI, required-field failure, or accidental mixed-language customer content. Route the exact affected field or asset to its responsible installed skill.

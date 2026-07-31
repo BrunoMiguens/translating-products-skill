@@ -71,13 +71,16 @@ This skill owns the transcreation brief, invariant/adaptable classification, con
 
 ## QA Handoff
 
-Pass the source and target campaign, locale/market, approved brief, claim/proof sheet, brand voice, platform constraints, funnel map, visual manifest, tracking inventory, research evidence, and these checks to `reviewing-translations`:
+Pass the source and target campaign, locale/market, approved brief, claim/proof sheet, brand voice, platform constraints, funnel map, visual manifest, tracking inventory, research evidence, sensitive-claim evidence record, and these checks to `reviewing-translations`:
+
+For every regulated, safety, health, financial, quantified, comparative, guaranteed, or otherwise sensitive claim, require one review artifact produced from the returned target copy: either an exact back-translation into the source language or a recorded rationale mapping each target proposition and qualifier to the approved source claim and evidence. Use the rationale when back-translation would obscure a deliberate transcreation choice. This skill requests and preserves that evidence; it does not generate target copy.
 
 - proposition, benefits, proof, qualifications, offer, facts, and required disclosures preserve semantic parity
 - brand voice, emotional effect, and cultural adaptation remain suitable without stereotypes or off-brief tone
 - CTA describes the actual next action and supports the stated conversion objective
 - headline, body, CTA, image/alt text, landing experience, and localized product surface remain coherent
 - names, IDs, URLs, tracking values, prices, deadlines, statistics, testimonials, and claims match approved inputs
+- every sensitive claim has a back-translation or recorded proposition-and-qualifier rationale tied to the exact target asset, source claim, and evidence ID
 - copy fits verified placement, timing, layout, accessibility, and platform requirements without omitting required meaning
 
 Block release for an invented or unsubstantiated claim, false urgency/scarcity, altered tracking identity, inaccurate CTA, prohibited tone, culturally harmful or irrelevant substitution, missing qualification/disclosure, or target copy that changes conversion intent. Route the exact affected field or asset to its responsible installed skill.
