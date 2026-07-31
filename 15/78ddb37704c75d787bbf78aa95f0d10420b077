@@ -1,0 +1,23 @@
+skills/translating-app-stores/SKILL.md
+  s_51f69c54a42bb0::t_86e3f72b829801 57-64,83,91
+skills/translating-marketing/SKILL.md
+  s_51f69c54a42bb0::t_25ede6dd6edf33 74-76,83
+skills/localizing-software/SKILL.md
+  s_51f69c54a42bb0::t_c507288a31ad54 44,47,53-54,75-77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "1578ddb37704c75d787bbf78aa95f0d10420b077",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
