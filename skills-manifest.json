@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "suite_version": "0.1.0",
+  "orchestrator": "translating-products",
+  "minimum_skill_versions": {
+    "translating-core": "0.1.0",
+    "reviewing-translations": "0.1.0",
+    "translating-web": "0.1.0",
+    "localizing-software": "0.1.0",
+    "translating-mobile": "0.1.0",
+    "translating-ios": "0.1.0",
+    "translating-android": "0.1.0",
+    "translating-flutter": "0.1.0",
+    "translating-app-stores": "0.1.0",
+    "translating-marketing": "0.1.0",
+    "translating-documentation": "0.1.0",
+    "translating-rtl": "0.1.0",
+    "translating-arabic": "0.1.0",
+    "translating-hebrew": "0.1.0",
+    "translating-japanese": "0.1.0",
+    "translating-chinese": "0.1.0",
+    "translating-korean": "0.1.0",
+    "translating-portuguese": "0.1.0",
+    "translating-spanish": "0.1.0",
+    "translating-french": "0.1.0",
+    "translating-german": "0.1.0"
+  },
+  "skills": [
+    {
+      "name": "translating-products",
+      "version": "0.1.0",
+      "category": "orchestrator",
+      "description": "Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.",
+      "capabilities": ["orchestrator", "project-bootstrap", "skill-routing", "subagent-routing"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-core",
+      "version": "0.1.0",
+      "category": "core",
+      "description": "Use when producing meaning-faithful, natural, culturally appropriate translations for any language translation before applying product or language specialists.",
+      "capabilities": ["core-translation", "terminology", "cultural-adaptation", "structural-fidelity"],
+      "depends_on": ["reviewing-translations"]
+    },
+    {
+      "name": "reviewing-translations",
+      "version": "0.1.0",
+      "category": "quality",
+      "description": "Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.",
+      "capabilities": ["translation-qa", "terminology-qa", "structural-qa"],
+      "depends_on": []
+    },
+    {
+      "name": "translating-web",
+      "version": "0.1.0",
+      "category": "surface",
+      "description": "Use when localizing websites while preserving markup, metadata, accessibility, links, and locale signals for HTML, Markdown, or web-content translation.",
+      "capabilities": ["surface:web", "html", "markdown", "accessibility", "hreflang"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "localizing-software",
+      "version": "0.1.0",
+      "category": "surface",
+      "description": "Use when localizing software resources while preserving ICU syntax, placeholders, plurals, keys, and locale formatting for application resource files and UI strings.",
+      "capabilities": ["surface:software", "icu", "placeholders", "plurals", "locale-formatting"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-mobile",
+      "version": "0.1.0",
+      "category": "surface",
+      "description": "Use when applying shared mobile-localization constraints for mobile UI, accessibility strings, screenshots, expansion, truncation, and pseudo-localization.",
+      "capabilities": ["surface:mobile", "mobile-ui", "accessibility", "pseudo-localization"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-ios",
+      "version": "0.1.0",
+      "category": "platform",
+      "description": "Use when localizing Apple-platform resources and UI copy for String Catalogs, SwiftUI, UIKit, VoiceOver, and Apple locale behavior.",
+      "capabilities": ["platform:ios", "xcstrings", "swiftui", "apple-locales"],
+      "depends_on": ["translating-mobile", "reviewing-translations"]
+    },
+    {
+      "name": "translating-android",
+      "version": "0.1.0",
+      "category": "platform",
+      "description": "Use when localizing Android resources and UI copy for strings.xml, plurals, Compose, views, TalkBack, pseudo-locales, and bidirectional layouts.",
+      "capabilities": ["platform:android", "string-resources", "compose", "android-locales"],
+      "depends_on": ["translating-mobile", "reviewing-translations"]
+    },
+    {
+      "name": "translating-flutter",
+      "version": "0.1.0",
+      "category": "platform",
+      "description": "Use when localizing Flutter applications for ARB, generated localization, ICU messages, flutter_localizations, accessibility, and responsive layout checks.",
+      "capabilities": ["platform:flutter", "arb", "flutter-localizations", "icu"],
+      "depends_on": ["translating-mobile", "reviewing-translations"]
+    },
+    {
+      "name": "translating-app-stores",
+      "version": "0.1.0",
+      "category": "surface",
+      "description": "Use when localizing App Store and Play Store product listings for store metadata, screenshots, keywords, market adaptation, and listing constraints.",
+      "capabilities": ["surface:app-store", "surface:play-store", "aso", "store-metadata"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-marketing",
+      "version": "0.1.0",
+      "category": "surface",
+      "description": "Use when transcreating marketing content while preserving brand voice and conversion intent for campaigns, landing pages, calls to action, and cultural adaptation.",
+      "capabilities": ["surface:marketing", "transcreation", "brand-voice", "calls-to-action"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-documentation",
+      "version": "0.1.0",
+      "category": "surface",
+      "description": "Use when localizing technical documentation while preserving code, commands, identifiers, diagrams, references, and technical terminology for guides, API references, READMEs, and developer documentation.",
+      "capabilities": ["surface:documentation", "code-preservation", "technical-terminology"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-rtl",
+      "version": "0.1.0",
+      "category": "script",
+      "description": "Use when applying right-to-left script and bidirectional UI rules for Arabic, Hebrew, Persian, Urdu, or mixed RTL/LTR product content.",
+      "capabilities": ["script:rtl", "bidi", "mirroring", "mixed-direction"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-arabic",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining Arabic translations for the requested locale and register, including Arabic wording, agreement, terminology, punctuation, and product naturalness.",
+      "capabilities": ["language:arabic", "locale:ar"],
+      "depends_on": ["translating-core", "translating-rtl", "reviewing-translations"]
+    },
+    {
+      "name": "translating-hebrew",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining Hebrew translations for the requested locale and register, including Hebrew wording, gender, number, construct forms, punctuation, and transliteration.",
+      "capabilities": ["language:hebrew", "locale:he"],
+      "depends_on": ["translating-core", "translating-rtl", "reviewing-translations"]
+    },
+    {
+      "name": "translating-japanese",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining Japanese translations for the requested locale and register, including politeness, honorifics, omission, counters, loanwords, punctuation, and concise UI copy.",
+      "capabilities": ["language:japanese", "locale:ja"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-chinese",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining Chinese translations for script and region, including Simplified or Traditional Chinese, classifiers, terminology, punctuation, and product conventions.",
+      "capabilities": ["language:chinese", "locale:zh-Hans", "locale:zh-Hant"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-korean",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining Korean translations for the requested locale and register, including speech level, honorifics, spacing, counters, loanwords, and concise UI copy.",
+      "capabilities": ["language:korean", "locale:ko"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-portuguese",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining Portuguese translations for Brazil or Portugal, including regional grammar, vocabulary, spelling, formality, and product register.",
+      "capabilities": ["language:portuguese", "locale:pt-BR", "locale:pt-PT"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-spanish",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining Spanish translations for Spain, Latin America, or a named region, including regional vocabulary, pronouns, formality, and product register.",
+      "capabilities": ["language:spanish", "locale:es-ES", "locale:es-419"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-french",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining French translations for France or Canada, including regional vocabulary, formality, typography, spacing, anglicisms, and product register.",
+      "capabilities": ["language:french", "locale:fr-FR", "locale:fr-CA"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    },
+    {
+      "name": "translating-german",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining German translations for Germany, Austria, or Switzerland, including formality, terminology, compounds, capitalization, expansion, and UI constraints.",
+      "capabilities": ["language:german", "locale:de-DE", "locale:de-AT", "locale:de-CH"],
+      "depends_on": ["translating-core", "reviewing-translations"]
+    }
+  ],
+  "sources": [
+    {
+      "id": "kostja-translation",
+      "repository": "kostja94/marketing-skills",
+      "ref": "70987bad4ebe9dce1f74858c1c64f3f8810f18e4",
+      "path": "skills/content/translation/SKILL.md",
+      "license": "MIT",
+      "sha256": "78f5d4dab63820614bd37eaf5d3e86a88b26c2ebc4b5ef48d51d3a1b534e5354",
+      "mode": "adapted",
+      "capabilities": ["core-translation", "terminology", "cultural-adaptation"],
+      "adapter": "adapters/kostja-translation.md"
+    },
+    {
+      "id": "vasily-software-localisation",
+      "repository": "vasilyu1983/AI-Agents-public",
+      "ref": "6a223ba13c311c09b41c1dc09c14ab75e703894b",
+      "path": "frameworks/shared-skills/skills/software-localisation/SKILL.md",
+      "license": "MIT",
+      "sha256": "18c4d65d0a295644b68d08540051054a72195a257720ab41445b238f1bfb5ae9",
+      "mode": "adapted",
+      "capabilities": ["surface:web", "surface:software", "icu", "placeholders"],
+      "adapter": "adapters/vasily-software-localisation.md"
+    },
+    {
+      "id": "flutter-localization",
+      "repository": "flutter/agent-plugins",
+      "ref": "8aaa41d87b0d36cdd70dcc219049b6df5bcf124c",
+      "path": "skills/flutter-setup-localization/SKILL.md",
+      "license": "BSD-3-Clause",
+      "sha256": "dda4ef8b74976a3e51faa43d7ad00f03eab64d6d5ed0ef89cf4184a04196da17",
+      "mode": "adapted",
+      "capabilities": ["platform:flutter", "arb", "icu"],
+      "adapter": "adapters/flutter-localization.md"
+    },
+    {
+      "id": "johnrogers-apple-localization",
+      "repository": "johnrogers/claude-swift-engineering",
+      "ref": "1dc2cf4d020bd524168f20bec95104da6cb2888c",
+      "path": "plugins/swift-engineering/skills/localization/SKILL.md",
+      "license": "MIT",
+      "sha256": "2c05d2866f9100916ec54c34d045bd21980a48a2cd89c2e199de8dfd40195a18",
+      "mode": "adapted",
+      "capabilities": ["platform:ios", "xcstrings", "swiftui"],
+      "adapter": "adapters/johnrogers-apple-localization.md"
+    },
+    {
+      "id": "eronred-app-store",
+      "repository": "Eronred/aso-skills",
+      "ref": "f97c943d44481dd3e29e2deaf672fc3c7ee83fa9",
+      "path": "skills/localization/SKILL.md",
+      "license": "MIT",
+      "sha256": "31db527619d95895c4a5f5440d7e35f5014ebe3801ec10566ff102fd74b31899",
+      "mode": "adapted",
+      "capabilities": ["surface:app-store", "surface:play-store", "aso", "store-metadata"],
+      "adapter": "adapters/eronred-app-store.md"
+    },
+    {
+      "id": "agrici-blog-translate",
+      "repository": "AgriciDaniel/claude-blog",
+      "ref": "aec971ac511370c6216cd93776c9cf2fec97b32a",
+      "path": "skills/blog-translate/SKILL.md",
+      "license": "MIT",
+      "sha256": "49d4f776793d68702b3c69cd4c2974f91af1c5a65bf5b7d49bf941b57b50fb62",
+      "mode": "adapted",
+      "capabilities": ["surface:web", "surface:documentation", "subagent-routing"],
+      "adapter": "adapters/agrici-blog.md"
+    },
+    {
+      "id": "agrici-blog-locale-audit",
+      "repository": "AgriciDaniel/claude-blog",
+      "ref": "aec971ac511370c6216cd93776c9cf2fec97b32a",
+      "path": "skills/blog-locale-audit/SKILL.md",
+      "license": "MIT",
+      "sha256": "891a51aed0bd31fa7ece519d1c5ab8d3ddae3bc565b565a3327a80e319415b20",
+      "mode": "adapted",
+      "capabilities": ["translation-qa", "terminology-qa", "structural-qa"],
+      "adapter": "adapters/agrici-blog.md"
+    }
+  ]
+}
