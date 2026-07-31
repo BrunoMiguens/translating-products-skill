@@ -1,0 +1,27 @@
+skills/translating-web/SKILL.md
+  s_51f69c54a42bb0::t_2ec5b7e3be098b 1-79
+skills/translating-documentation/SKILL.md
+  s_51f69c54a42bb0::t_8c0a9f3fb4e46d 1-81
+skills/translating-app-stores/SKILL.md
+  s_51f69c54a42bb0::t_bf78f68aeeb83b 1-84
+skills/localizing-software/SKILL.md
+  s_51f69c54a42bb0::t_68c4d3debf132f 1-81
+skills/translating-marketing/SKILL.md
+  s_51f69c54a42bb0::t_5cb9cb5bcd9653 1-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "d8bf92c0f9fdeef8131c7f38e490ed4dc1eb26e1",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
