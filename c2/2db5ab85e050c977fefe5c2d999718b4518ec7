@@ -1,0 +1,23 @@
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_787b645fc22f66 4-5,11-13,56-67
+  s_51f69c54a42bb0::t_fc30629a94e3fc 1-3,6-10,14-55,68-176
+scripts/validate_repo.py
+  s_51f69c54a42bb0::t_20a148d7ec96e4 7-10
+  s_51f69c54a42bb0::t_715d80ac94b2ad 1-6,11-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "c22db5ab85e050c977fefe5c2d999718b4518ec7",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
