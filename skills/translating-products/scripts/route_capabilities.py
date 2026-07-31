@@ -18,8 +18,17 @@ SURFACE_SKILLS = {
     "documentation": "translating-documentation",
 }
 
+CLASSIFIED_FIELDS = ("languages", "locales", "surfaces", "domains", "scripts")
+
 
 def route(request: dict, catalog: dict) -> list[str]:
+    for field in CLASSIFIED_FIELDS:
+        value = request.get(field, [])
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) for item in value
+        ):
+            raise ValueError(f"{field} must be a list of strings")
+
     entries = catalog["skills"]
     by_name = {item["name"]: item for item in entries}
     selected = {"translating-core", "reviewing-translations"}

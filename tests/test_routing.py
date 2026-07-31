@@ -109,6 +109,33 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertRegex(result.stderr, r"^invalid request: .+\n$")
 
+    def test_cli_returns_two_when_classified_fields_are_not_string_lists(self):
+        fields = ("languages", "locales", "surfaces", "domains", "scripts")
+        invalid_values = ("not-a-list", [123])
+
+        for field in fields:
+            for invalid_value in invalid_values:
+                with self.subTest(field=field, invalid_value=invalid_value):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        request_path = Path(tmp) / "request.json"
+                        request_path.write_text(
+                            json.dumps({field: invalid_value}), encoding="utf-8"
+                        )
+
+                        result = subprocess.run(
+                            [sys.executable, str(ROUTER), str(request_path)],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(
+                        result.stderr,
+                        f"invalid request: {field} must be a list of strings\n",
+                    )
+
 
 class PolicyTests(unittest.TestCase):
     def setUp(self):
