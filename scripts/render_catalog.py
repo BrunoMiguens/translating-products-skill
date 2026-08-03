@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 
 CATEGORIES = (
@@ -26,6 +27,36 @@ AUTHORITY_ORDER = (
 )
 INVENTORY_START = "<!-- skill-inventory:start -->"
 INVENTORY_END = "<!-- skill-inventory:end -->"
+
+
+class InventoryMarkerError(ValueError):
+    """A README inventory marker contract is malformed."""
+
+
+def split_readme_inventory(text: str) -> tuple[str, str, str]:
+    start_count = text.count(INVENTORY_START)
+    end_count = text.count(INVENTORY_END)
+    if start_count == 0:
+        raise InventoryMarkerError("skill inventory start marker is missing")
+    if start_count != 1:
+        raise InventoryMarkerError(
+            f"skill inventory start marker appears {start_count} times"
+        )
+    if end_count == 0:
+        raise InventoryMarkerError("skill inventory end marker is missing")
+    if end_count != 1:
+        raise InventoryMarkerError(
+            f"skill inventory end marker appears {end_count} times"
+        )
+
+    start = text.index(INVENTORY_START)
+    end = text.index(INVENTORY_END)
+    if start > end:
+        raise InventoryMarkerError("skill inventory markers are reversed")
+    before = text[:start]
+    inventory = text[start + len(INVENTORY_START) : end]
+    after = text[end + len(INVENTORY_END) :]
+    return before, inventory, after
 
 
 def _catalog_from_manifest(manifest: dict) -> dict:
@@ -130,12 +161,9 @@ def render_readme_inventory(
     check: bool = False,
 ) -> bool:
     if not readme_path.exists():
-        return False
+        raise InventoryMarkerError("README.md is missing")
     text = readme_path.read_text(encoding="utf-8")
-    if INVENTORY_START not in text or INVENTORY_END not in text:
-        return False
-    before, remainder = text.split(INVENTORY_START, 1)
-    _, after = remainder.split(INVENTORY_END, 1)
+    before, _, after = split_readme_inventory(text)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     expected = before + _render_readme_inventory(manifest) + after
     if check:
@@ -158,11 +186,15 @@ def main() -> int:
         references / "capability-catalog.md",
         check=args.check,
     )
-    readme_matched = render_readme_inventory(
-        root / "skills-manifest.json",
-        root / "README.md",
-        check=args.check,
-    )
+    try:
+        readme_matched = render_readme_inventory(
+            root / "skills-manifest.json",
+            root / "README.md",
+            check=args.check,
+        )
+    except InventoryMarkerError as error:
+        print(f"README.md: {error}", file=sys.stderr)
+        readme_matched = False
     return 0 if catalog_matched and readme_matched else 1
 
 

@@ -5,15 +5,90 @@ import subprocess
 import sys
 
 from scripts.repo_model import Manifest, SkillRecord, SourceRecord
+from scripts.render_catalog import (
+    InventoryMarkerError,
+    render_catalog,
+    render_readme_inventory,
+)
 from scripts.validate_repo import (
     parse_frontmatter,
     validate_distribution,
     validate_repository,
     validate_skill,
+    validate_workflow,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+INVENTORY_START = "<!-- skill-inventory:start -->"
+INVENTORY_END = "<!-- skill-inventory:end -->"
+MALFORMED_INVENTORIES = (
+    (
+        "missing-start",
+        f"before\n{INVENTORY_END}\nafter\n",
+        "skill inventory start marker is missing",
+    ),
+    (
+        "missing-end",
+        f"before\n{INVENTORY_START}\nafter\n",
+        "skill inventory end marker is missing",
+    ),
+    (
+        "reversed",
+        f"before\n{INVENTORY_END}\ncontent\n{INVENTORY_START}\nafter\n",
+        "skill inventory markers are reversed",
+    ),
+    (
+        "duplicate-start",
+        f"{INVENTORY_START}\n{INVENTORY_START}\n{INVENTORY_END}\n",
+        "skill inventory start marker appears 2 times",
+    ),
+    (
+        "duplicate-end",
+        f"{INVENTORY_START}\n{INVENTORY_END}\n{INVENTORY_END}\n",
+        "skill inventory end marker appears 2 times",
+    ),
+    (
+        "duplicate-pair",
+        f"{INVENTORY_START}\n{INVENTORY_END}\n"
+        f"{INVENTORY_START}\n{INVENTORY_END}\n",
+        "skill inventory start marker appears 2 times",
+    ),
+)
+VALID_WORKFLOW = """name: Validate
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 scripts/render_catalog.py --check
+      - run: python3 scripts/validate_repo.py
+      - run: python3 -m unittest discover -s tests -v
+
+  verify-pinned-sources:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 scripts/verify_sources.py
+"""
 
 
 def manifest_with(
@@ -353,7 +428,7 @@ npx skills add OWNER/REPOSITORY --all
             "[README](../README.md)\n", encoding="utf-8"
         )
         (root / ".github" / "workflows" / "validate.yml").write_text(
-            "name: validate\n", encoding="utf-8"
+            VALID_WORKFLOW, encoding="utf-8"
         )
 
     def test_distribution_requires_publication_files(self):
@@ -403,6 +478,276 @@ npx skills add OWNER/REPOSITORY --all
             errors,
         )
         self.assertIn("README.md: broken link docs/missing.md", errors)
+
+    def test_distribution_rejects_absolute_escaping_and_symlink_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sandbox = Path(tmp)
+            root = sandbox / "repo"
+            root.mkdir()
+            self.write_valid_distribution(root)
+            external = sandbox / "outside.txt"
+            external.write_text("outside\n", encoding="utf-8")
+            (root / "escape-link").symlink_to(external)
+            with (root / "README.md").open("a", encoding="utf-8") as readme:
+                readme.write(
+                    "[Absolute](/etc/passwd)\n"
+                    "[Parent](../outside.txt)\n"
+                    "[Symlink](escape-link)\n"
+                )
+
+            errors = validate_distribution(root, self.manifest)
+
+        self.assertEqual(
+            [error for error in errors if "link" in error],
+            [
+                "README.md: absolute local link is not allowed: /etc/passwd",
+                "README.md: local link escapes repository: ../outside.txt",
+                "README.md: local link escapes repository: escape-link",
+            ],
+        )
+
+    def test_distribution_accepts_in_repository_relative_and_fragment_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_valid_distribution(root)
+            with (root / "README.md").open("a", encoding="utf-8") as readme:
+                readme.write(
+                    "[Architecture section](docs/architecture.md#routing)\n"
+                    "[Same document](#demo)\n"
+                )
+
+            self.assertEqual(validate_distribution(root, self.manifest), [])
+
+    def test_distribution_reports_every_malformed_inventory_without_crashing(self):
+        for label, malformed, expected in MALFORMED_INVENTORIES:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.write_valid_distribution(root)
+                (root / "README.md").write_text(malformed, encoding="utf-8")
+
+                errors = validate_distribution(root, self.manifest)
+
+                self.assertIn(f"README.md: {expected}", errors)
+
+
+class WorkflowContractTests(unittest.TestCase):
+    def validate_text(self, text: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow = Path(tmp) / "validate.yml"
+            workflow.write_text(text, encoding="utf-8")
+            return validate_workflow(workflow)
+
+    def test_valid_workflow_has_no_contract_errors(self):
+        self.assertEqual(self.validate_text(VALID_WORKFLOW), [])
+
+    def test_workflow_requires_every_trigger_and_read_only_permissions(self):
+        trigger_mutations = {
+            "push": VALID_WORKFLOW.replace("  push:\n", ""),
+            "pull_request": VALID_WORKFLOW.replace("  pull_request:\n", ""),
+            "schedule": VALID_WORKFLOW.replace(
+                '  schedule:\n    - cron: "23 6 * * 1"\n', ""
+            ),
+            "workflow_dispatch": VALID_WORKFLOW.replace(
+                "  workflow_dispatch:\n", ""
+            ),
+        }
+        for trigger, mutated in trigger_mutations.items():
+            with self.subTest(trigger=trigger):
+                self.assertIn(
+                    f"workflow: missing trigger {trigger}",
+                    self.validate_text(mutated),
+                )
+
+        self.assertIn(
+            "workflow: top-level permissions must be exactly contents: read",
+            self.validate_text(
+                VALID_WORKFLOW.replace("contents: read", "contents: write")
+            ),
+        )
+
+    def test_validate_job_requires_python_and_all_offline_commands(self):
+        self.assertIn(
+            "workflow: validate job must use Python 3.11",
+            self.validate_text(
+                VALID_WORKFLOW.replace(
+                    'python-version: "3.11"', 'python-version: "3.12"', 1
+                )
+            ),
+        )
+        commands = (
+            "python3 scripts/render_catalog.py --check",
+            "python3 scripts/validate_repo.py",
+            "python3 -m unittest discover -s tests -v",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIn(
+                    f"workflow: validate job is missing required command: {command}",
+                    self.validate_text(
+                        VALID_WORKFLOW.replace(f"      - run: {command}\n", "")
+                    ),
+                )
+
+    def test_source_verification_is_separate_gated_and_not_a_pr_dependency(self):
+        verify_command = "python3 scripts/verify_sources.py"
+        in_validate = VALID_WORKFLOW.replace(
+            "\n  verify-pinned-sources:\n",
+            f"      - run: {verify_command}\n\n  verify-pinned-sources:\n",
+        )
+        self.assertIn(
+            "workflow: source verification must not run in validate job",
+            self.validate_text(in_validate),
+        )
+        self.assertIn(
+            "workflow: expected exactly one separate source verification job",
+            self.validate_text(
+                VALID_WORKFLOW.replace(f"      - run: {verify_command}\n", "")
+            ),
+        )
+        self.assertIn(
+            "workflow: source verification job must be gated to schedule and workflow_dispatch only",
+            self.validate_text(
+                VALID_WORKFLOW.replace(
+                    "    if: github.event_name == 'schedule' || "
+                    "github.event_name == 'workflow_dispatch'\n",
+                    "",
+                )
+            ),
+        )
+        self.assertIn(
+            "workflow: validate job must not depend on source verification job",
+            self.validate_text(
+                VALID_WORKFLOW.replace(
+                    "  validate:\n", "  validate:\n    needs: verify-pinned-sources\n"
+                )
+            ),
+        )
+        self.assertIn(
+            "workflow: validate job must not depend on source verification job",
+            self.validate_text(
+                VALID_WORKFLOW.replace(
+                    "  validate:\n",
+                    "  validate:\n    needs:\n      - verify-pinned-sources\n",
+                )
+            ),
+        )
+        first_python = VALID_WORKFLOW.index('python-version: "3.11"')
+        second_python = VALID_WORKFLOW.index(
+            'python-version: "3.11"', first_python + 1
+        )
+        mutated = (
+            VALID_WORKFLOW[:second_python]
+            + 'python-version: "3.12"'
+            + VALID_WORKFLOW[second_python + len('python-version: "3.11"') :]
+        )
+        self.assertIn(
+            "workflow: source verification job must use Python 3.11",
+            self.validate_text(mutated),
+        )
+
+    def test_source_gate_rejects_pr_access_and_permission_elevation(self):
+        self.assertIn(
+            "workflow: source verification job must be gated to schedule and workflow_dispatch only",
+            self.validate_text(
+                VALID_WORKFLOW.replace(
+                    "github.event_name == 'workflow_dispatch'",
+                    "github.event_name == 'pull_request'",
+                )
+            ),
+        )
+        self.assertIn(
+            "workflow: job validate must not override top-level permissions",
+            self.validate_text(
+                VALID_WORKFLOW.replace(
+                    "  validate:\n",
+                    "  validate:\n    permissions:\n      contents: write\n",
+                )
+            ),
+        )
+
+
+class InventoryMarkerTests(unittest.TestCase):
+    def test_renderer_rejects_malformed_markers_without_rewriting(self):
+        for label, malformed, expected in MALFORMED_INVENTORIES:
+            for check in (False, True):
+                with (
+                    self.subTest(case=label, check=check),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
+                    readme = Path(tmp) / "README.md"
+                    readme.write_text(malformed, encoding="utf-8")
+
+                    with self.assertRaisesRegex(InventoryMarkerError, expected):
+                        render_readme_inventory(
+                            ROOT / "skills-manifest.json", readme, check=check
+                        )
+
+                    self.assertEqual(readme.read_text(encoding="utf-8"), malformed)
+
+    def test_renderer_check_accepts_valid_inventory_without_rewriting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            readme = Path(tmp) / "README.md"
+            readme.write_text(
+                f"before\n{INVENTORY_START}\nstale\n{INVENTORY_END}\nafter\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                render_readme_inventory(ROOT / "skills-manifest.json", readme)
+            )
+            expected = readme.read_text(encoding="utf-8")
+
+            self.assertTrue(
+                render_readme_inventory(
+                    ROOT / "skills-manifest.json", readme, check=True
+                )
+            )
+            self.assertEqual(readme.read_text(encoding="utf-8"), expected)
+
+    def test_catalog_cli_reports_marker_error_without_rewriting_readme(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = root / "skills-manifest.json"
+            manifest_path.write_text(
+                (ROOT / "skills-manifest.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            references = root / "skills/translating-products/references"
+            references.mkdir(parents=True)
+            render_catalog(
+                manifest_path,
+                references / "capability-catalog.json",
+                references / "capability-catalog.md",
+            )
+            malformed = (
+                f"before\n{INVENTORY_END}\ncontent\n{INVENTORY_START}\nafter\n"
+            )
+            readme = root / "README.md"
+            readme.write_text(malformed, encoding="utf-8")
+
+            for check_args in ([], ["--check"]):
+                with self.subTest(check=bool(check_args)):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(ROOT / "scripts/render_catalog.py"),
+                            "--root",
+                            str(root),
+                            *check_args,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(
+                        result.stderr,
+                        "README.md: skill inventory markers are reversed\n",
+                    )
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertEqual(
+                        readme.read_text(encoding="utf-8"), malformed
+                    )
 
 
 if __name__ == "__main__":

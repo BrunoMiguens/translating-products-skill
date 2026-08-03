@@ -11,6 +11,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.repo_model import Manifest, load_manifest
+from scripts.render_catalog import InventoryMarkerError, split_readme_inventory
 
 
 NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -30,9 +31,14 @@ PUBLICATION_FILES = (
 SHELL_FENCE = re.compile(r"```(?:bash|sh|shell)\s*\n(.*?)```", re.DOTALL)
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SKILL_LINK = re.compile(r"\]\(skills/([a-z0-9]+(?:-[a-z0-9]+)*)/?\)")
-INVENTORY_START = "<!-- skill-inventory:start -->"
-INVENTORY_END = "<!-- skill-inventory:end -->"
 SUPPORTED_AGENTS = {"claude-code", "codex", "cursor", "universal"}
+WORKFLOW_TRIGGERS = {"push", "pull_request", "schedule", "workflow_dispatch"}
+OFFLINE_VALIDATION_COMMANDS = (
+    "python3 scripts/render_catalog.py --check",
+    "python3 scripts/validate_repo.py",
+    "python3 -m unittest discover -s tests -v",
+)
+SOURCE_VERIFICATION_COMMAND = "python3 scripts/verify_sources.py"
 
 
 def parse_frontmatter(path: Path) -> dict[str, str]:
@@ -290,13 +296,192 @@ def _validate_install_commands(markdown: str) -> list[str]:
 def _validate_markdown_links(root: Path, path: Path) -> list[str]:
     errors = []
     text = path.read_text(encoding="utf-8")
+    repository = root.resolve()
     for raw_target in MARKDOWN_LINK.findall(text):
         target = raw_target.split(maxsplit=1)[0].strip("<>")
         if target.startswith(("#", "http://", "https://", "mailto:")):
             continue
         local = target.split("#", 1)[0]
-        if local and not (path.parent / local).resolve().exists():
+        if not local:
+            continue
+        relative = Path(local)
+        if relative.is_absolute():
+            errors.append(
+                f"{path.relative_to(root)}: absolute local link is not allowed: "
+                f"{target}"
+            )
+            continue
+        resolved = (path.parent / relative).resolve()
+        try:
+            resolved.relative_to(repository)
+        except ValueError:
+            errors.append(
+                f"{path.relative_to(root)}: local link escapes repository: {target}"
+            )
+            continue
+        if not resolved.exists():
             errors.append(f"{path.relative_to(root)}: broken link {target}")
+    return errors
+
+
+def _mapping_entries(
+    lines: list[str],
+    name: str,
+    *,
+    indent: int = 0,
+) -> dict[str, str]:
+    header = f"{' ' * indent}{name}:"
+    try:
+        start = lines.index(header) + 1
+    except ValueError:
+        return {}
+    entries = {}
+    for line in lines[start:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        current_indent = len(line) - len(line.lstrip())
+        if current_indent <= indent:
+            break
+        if current_indent != indent + 2:
+            continue
+        match = re.match(r"^([A-Za-z0-9_-]+):(?:\s*(.*))?$", line.strip())
+        if match:
+            entries[match.group(1)] = (match.group(2) or "").strip('"\'')
+    return entries
+
+
+def _workflow_jobs(lines: list[str]) -> dict[str, list[str]]:
+    try:
+        start = lines.index("jobs:") + 1
+    except ValueError:
+        return {}
+    boundaries = []
+    for index in range(start, len(lines)):
+        match = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", lines[index])
+        if match:
+            boundaries.append((index, match.group(1)))
+    jobs = {}
+    for position, (index, name) in enumerate(boundaries):
+        end = (
+            boundaries[position + 1][0]
+            if position + 1 < len(boundaries)
+            else len(lines)
+        )
+        jobs[name] = lines[index + 1 : end]
+    return jobs
+
+
+def _job_contract(lines: list[str]) -> dict[str, object]:
+    commands = []
+    setup_python = False
+    python_versions = []
+    condition = ""
+    needs = ""
+    collecting_needs = False
+    permissions_override = False
+    for line in lines:
+        indent = len(line) - len(line.lstrip())
+        stripped = line.strip()
+        if collecting_needs:
+            if indent > 4 and stripped.startswith("-"):
+                needs = f"{needs} {stripped[1:].strip()}".strip()
+            elif stripped and indent <= 4:
+                collecting_needs = False
+        run = re.match(r"^(?:-\s+)?run:\s*(.+)$", stripped)
+        if run:
+            commands.append(run.group(1).strip())
+        uses = re.match(r"^(?:-\s+)?uses:\s*(.+)$", stripped)
+        if uses and uses.group(1).startswith("actions/setup-python@"):
+            setup_python = True
+        version = re.match(r'^python-version:\s*["\']?([^"\']+)', stripped)
+        if version:
+            python_versions.append(version.group(1).strip())
+        if indent == 4 and stripped.startswith("if:"):
+            condition = stripped.split(":", 1)[1].strip()
+        if indent == 4 and stripped.startswith("needs:"):
+            needs = stripped.split(":", 1)[1].strip()
+            collecting_needs = not needs
+        if indent == 4 and stripped == "permissions:":
+            permissions_override = True
+    return {
+        "commands": commands,
+        "uses_python_311": setup_python and "3.11" in python_versions,
+        "condition": condition,
+        "needs": needs,
+        "permissions_override": permissions_override,
+    }
+
+
+def validate_workflow(path: Path) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    errors = []
+    triggers = set(_mapping_entries(lines, "on"))
+    for trigger in sorted(WORKFLOW_TRIGGERS - triggers):
+        errors.append(f"workflow: missing trigger {trigger}")
+
+    permissions = _mapping_entries(lines, "permissions")
+    if permissions != {"contents": "read"}:
+        errors.append(
+            "workflow: top-level permissions must be exactly contents: read"
+        )
+
+    parsed_jobs = {
+        name: _job_contract(job_lines)
+        for name, job_lines in _workflow_jobs(lines).items()
+    }
+    for name, job in parsed_jobs.items():
+        if job["permissions_override"]:
+            errors.append(
+                f"workflow: job {name} must not override top-level permissions"
+            )
+
+    validate_job = parsed_jobs.get("validate")
+    if validate_job is None:
+        errors.append("workflow: validate job is missing")
+    else:
+        if not validate_job["uses_python_311"]:
+            errors.append("workflow: validate job must use Python 3.11")
+        for command in OFFLINE_VALIDATION_COMMANDS:
+            if command not in validate_job["commands"]:
+                errors.append(
+                    f"workflow: validate job is missing required command: {command}"
+                )
+        if SOURCE_VERIFICATION_COMMAND in validate_job["commands"]:
+            errors.append(
+                "workflow: source verification must not run in validate job"
+            )
+
+    source_jobs = [
+        (name, job)
+        for name, job in parsed_jobs.items()
+        if name != "validate" and SOURCE_VERIFICATION_COMMAND in job["commands"]
+    ]
+    if len(source_jobs) != 1:
+        errors.append(
+            "workflow: expected exactly one separate source verification job"
+        )
+    else:
+        source_name, source_job = source_jobs[0]
+        if not source_job["uses_python_311"]:
+            errors.append(
+                "workflow: source verification job must use Python 3.11"
+            )
+        gated_events = re.findall(
+            r"github\.event_name\s*==\s*['\"]([^'\"]+)['\"]",
+            str(source_job["condition"]),
+        )
+        if len(gated_events) != 2 or set(gated_events) != {
+            "schedule",
+            "workflow_dispatch",
+        }:
+            errors.append(
+                "workflow: source verification job must be gated to schedule "
+                "and workflow_dispatch only"
+            )
+        if validate_job is not None and source_name in str(validate_job["needs"]):
+            errors.append(
+                "workflow: validate job must not depend on source verification job"
+            )
     return errors
 
 
@@ -309,10 +494,11 @@ def validate_distribution(root: Path, manifest: Manifest) -> list[str]:
     readme = root / "README.md"
     if readme.is_file():
         text = readme.read_text(encoding="utf-8")
-        if INVENTORY_START not in text or INVENTORY_END not in text:
-            errors.append("README.md: skill inventory markers are missing")
+        try:
+            _, inventory, _ = split_readme_inventory(text)
+        except InventoryMarkerError as error:
+            errors.append(f"README.md: {error}")
         else:
-            inventory = text.split(INVENTORY_START, 1)[1].split(INVENTORY_END, 1)[0]
             linked_skills = SKILL_LINK.findall(inventory)
             expected_skills = [skill.name for skill in manifest.skills]
             if linked_skills != expected_skills:
@@ -327,6 +513,9 @@ def validate_distribution(root: Path, manifest: Manifest) -> list[str]:
         path = root / relative
         if path.is_file():
             errors.extend(_validate_markdown_links(root, path))
+    workflow = root / ".github/workflows/validate.yml"
+    if workflow.is_file():
+        errors.extend(validate_workflow(workflow))
     return errors
 
 
