@@ -18,7 +18,15 @@ This specialist covers useful Arabic product patterns, not every dialect or mark
 
 ## Entry Contract
 
-Require an explicit target locale or market and an approved register choice: Modern Standard Arabic (MSA), a named regional variety, or a documented blend appropriate to the product. “Arabic” alone is insufficient. If either decision is missing, return one focused question through the orchestrator that asks for the target market and preferred MSA/regional register, then withhold target copy. Urgency is not permission to choose a default silently.
+Require an explicit target locale or market and an approved register choice: Modern Standard Arabic (MSA), a named regional variety, or a documented blend appropriate to the product. “Arabic” alone is insufficient.
+
+Resolve setup one missing decision at a time without re-asking known values:
+
+1. If the market or locale is missing, ask only for the target market or locale through the orchestrator, withhold affected target copy, and return.
+2. Once the market is known, if the register is missing, ask only whether to use MSA, a named regional variety, or a documented blend, withhold affected target copy, and return.
+3. If the register is already known but the market is missing, ask only for the market. Do not ask for the known register again.
+
+Do not combine both decisions into one question. Urgency is not permission to choose a default silently. Begin revision only when both required decisions are complete.
 
 Consume the core draft, source context, audience, surface, glossary, protected terms, placeholder contract, and length constraints. Do not translate before project setup and approval. Never install another skill at runtime.
 
