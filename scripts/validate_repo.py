@@ -453,6 +453,17 @@ def _workflow_jobs(lines: list[str]) -> dict[str, list[str]]:
     return jobs
 
 
+def _yaml_mapping_key(line: str) -> str | None:
+    match = re.match(
+        r"^(?:(?P<quote>['\"])(?P<quoted>[^'\"]+)(?P=quote)|"
+        r"(?P<plain>[A-Za-z0-9_-]+))\s*:",
+        line,
+    )
+    if match is None:
+        return None
+    return match.group("quoted") or match.group("plain")
+
+
 def _job_contract(lines: list[str]) -> dict[str, object]:
     commands = []
     setup_python = False
@@ -483,7 +494,7 @@ def _job_contract(lines: list[str]) -> dict[str, object]:
         if indent == 4 and stripped.startswith("needs:"):
             needs = stripped.split(":", 1)[1].strip()
             collecting_needs = not needs
-        if indent == 4 and re.match(r"^permissions\s*:", stripped):
+        if indent == 4 and _yaml_mapping_key(stripped) == "permissions":
             permissions_override = True
     return {
         "commands": commands,

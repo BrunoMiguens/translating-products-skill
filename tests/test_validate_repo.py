@@ -736,6 +736,8 @@ class WorkflowContractTests(unittest.TestCase):
             "permissions: write-all",
             "permissions: read-all",
             "permissions: {contents: write}",
+            '"permissions": write-all',
+            "'permissions': write-all",
         )
         for declaration in inline_permissions:
             with self.subTest(declaration=declaration):
@@ -748,6 +750,13 @@ class WorkflowContractTests(unittest.TestCase):
                         )
                     ),
                 )
+
+        quoted_benign_key = VALID_WORKFLOW.replace(
+            "    runs-on: ubuntu-latest\n",
+            '    "runs-on": ubuntu-latest\n',
+            1,
+        )
+        self.assertEqual(self.validate_text(quoted_benign_key), [])
 
     def test_source_gate_requires_semantic_or_with_both_allowed_events(self):
         condition = (
