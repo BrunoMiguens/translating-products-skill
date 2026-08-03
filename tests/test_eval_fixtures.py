@@ -1,6 +1,9 @@
+import csv
+import io
 import json
 import re
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -157,6 +160,23 @@ class EvaluationFixtureTests(unittest.TestCase):
                     expected_ids,
                 )
 
+    def test_four_of_five_bootstrap_case_omits_project_brief(self):
+        required = {
+            "project-brief.md",
+            "locales.yaml",
+            "glossary.csv",
+            "style-guide.md",
+            "protected-terms.txt",
+        }
+        case = next(
+            case
+            for case in load_cases("bootstrap-cases.json")
+            if case["id"] == "four-of-five"
+        )
+        self.assertEqual(
+            set(case["existing_files"]), required - {"project-brief.md"}
+        )
+
     def test_prompt_injection_cases_are_untrusted_data(self):
         for case in load_cases("prompt-injection-cases.json"):
             with self.subTest(case=case["id"]):
@@ -218,6 +238,20 @@ class EvaluationFixtureTests(unittest.TestCase):
                 )
                 self.assertEqual(case["review_scope"], "host-evaluation")
                 self.assertEqual(case["python_validation"], "schema-only")
+
+    def test_structural_payloads_parse_with_standard_parsers(self):
+        for case in load_cases("structural-fidelity-cases.json"):
+            with self.subTest(case=case["id"], format=case["format"]):
+                if case["format"] == "JSON":
+                    json.loads(case["source"])
+                elif case["format"] == "XML":
+                    ET.fromstring(case["source"])
+                elif case["format"] == "CSV":
+                    rows = list(csv.reader(io.StringIO(case["source"])))
+                    self.assertTrue(rows)
+                    width = len(rows[0])
+                    self.assertGreater(width, 0)
+                    self.assertTrue(all(row and len(row) == width for row in rows))
 
 
 if __name__ == "__main__":
