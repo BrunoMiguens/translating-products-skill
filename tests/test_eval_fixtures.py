@@ -14,9 +14,10 @@ SCHEMAS = {
     "routing-cases.json": {"id", "request", "expected_skills"},
     "bootstrap-cases.json": {
         "id",
-        "existing_files",
+        "fixture",
         "request",
         "expected_action",
+        "expected_issue",
     },
     "orchestration-cases.json": {"id", "policy", "inputs", "expected"},
     "research-cases.json": {
@@ -53,7 +54,7 @@ SCHEMAS = {
 
 EXPECTED_COUNTS = {
     "routing-cases.json": 40,
-    "bootstrap-cases.json": 10,
+    "bootstrap-cases.json": 14,
     "orchestration-cases.json": 10,
     "research-cases.json": 15,
     "prompt-injection-cases.json": 10,
@@ -63,16 +64,20 @@ EXPECTED_COUNTS = {
 
 EXPECTED_IDS = {
     "bootstrap-cases.json": {
-        "none",
-        "brief-only",
-        "locales-only",
-        "missing-glossary",
-        "missing-style",
-        "missing-protected",
-        "four-of-five",
-        "all-required",
-        "all-plus-optional",
-        "conflicting-request",
+        "filenames-only-old-caller",
+        "missing-project-directory",
+        "blank-templates",
+        "partial-values",
+        "draft-context",
+        "unapproved-context",
+        "malformed-approval",
+        "hash-mismatch-after-edit",
+        "empty-collections-unapproved",
+        "approved-empty-collections",
+        "complete-approved-context",
+        "source-locale-conflict",
+        "target-locale-conflict",
+        "first-issue-is-deterministic",
     },
     "orchestration-cases.json": {
         "short-single-no-subagent",
@@ -159,23 +164,6 @@ class EvaluationFixtureTests(unittest.TestCase):
                     {case["id"] for case in load_cases(filename)},
                     expected_ids,
                 )
-
-    def test_four_of_five_bootstrap_case_omits_project_brief(self):
-        required = {
-            "project-brief.md",
-            "locales.yaml",
-            "glossary.csv",
-            "style-guide.md",
-            "protected-terms.txt",
-        }
-        case = next(
-            case
-            for case in load_cases("bootstrap-cases.json")
-            if case["id"] == "four-of-five"
-        )
-        self.assertEqual(
-            set(case["existing_files"]), required - {"project-brief.md"}
-        )
 
     def test_prompt_injection_cases_are_untrusted_data(self):
         for case in load_cases("prompt-injection-cases.json"):

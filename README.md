@@ -81,10 +81,19 @@ translation and asks one setup question at a time. After approval it creates:
 ├── glossary.csv
 ├── style-guide.md
 ├── protected-terms.txt
+├── setup-approval.json
 ├── decisions.md
 ├── translation-memory.csv
 └── research-sources.md
 ```
+
+The orchestrator inspects semantic values, not filenames. The approval record
+contains the explicit approver and timestamp plus SHA-256 hashes of the five
+context files above it; the approval file does not hash itself. Empty glossary
+or protected-term collections must be explicitly approved. Changing any
+context byte, including line endings, requires approval again, while optional
+project-memory files do not invalidate the hashes. A source-locale mismatch or
+an unconfigured requested target pauses translation for one focused question.
 
 Existing approved configuration is reused. Research is capability-adaptive:
 the agent browses only for a concrete unresolved current, market, or

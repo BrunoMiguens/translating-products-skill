@@ -1,12 +1,16 @@
 [
-  {"id": "none", "existing_files": [], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
-  {"id": "brief-only", "existing_files": ["project-brief.md"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
-  {"id": "locales-only", "existing_files": ["locales.yaml"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
-  {"id": "missing-glossary", "existing_files": ["project-brief.md", "locales.yaml", "style-guide.md", "protected-terms.txt"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
-  {"id": "missing-style", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "protected-terms.txt"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
-  {"id": "missing-protected", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "style-guide.md"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
-  {"id": "four-of-five", "existing_files": ["locales.yaml", "glossary.csv", "style-guide.md", "protected-terms.txt"], "request": {"target_locale": "fr-CA"}, "expected_action": "setup-one-question-at-a-time"},
-  {"id": "all-required", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "style-guide.md", "protected-terms.txt"], "request": {"target_locale": "fr-FR"}, "expected_action": "translate"},
-  {"id": "all-plus-optional", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "style-guide.md", "protected-terms.txt", "decisions.md", "translation-memory.csv", "research-sources.md"], "request": {"target_locale": "fr-CA"}, "expected_action": "translate"},
-  {"id": "conflicting-request", "existing_files": ["project-brief.md", "glossary.csv", "style-guide.md", "protected-terms.txt"], "request": {"target_locale": "de-CH", "project_target_locale": "de-DE"}, "expected_action": "setup-one-question-at-a-time"}
+  {"id": "filenames-only-old-caller", "fixture": "legacy-filenames", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "context-inspection-required"},
+  {"id": "missing-project-directory", "fixture": "missing-directory", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "missing:.translation"},
+  {"id": "blank-templates", "fixture": "blank-templates", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "incomplete:project-brief.md:status"},
+  {"id": "partial-values", "fixture": "partial-values", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "incomplete:project-brief.md:audience"},
+  {"id": "draft-context", "fixture": "draft-context", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "incomplete:style-guide.md:status"},
+  {"id": "unapproved-context", "fixture": "unapproved-context", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "unapproved:setup-approval.json"},
+  {"id": "malformed-approval", "fixture": "malformed-approval", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "malformed:setup-approval.json"},
+  {"id": "hash-mismatch-after-edit", "fixture": "hash-mismatch", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "approval-hash-mismatch:style-guide.md"},
+  {"id": "empty-collections-unapproved", "fixture": "empty-unapproved", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "unapproved-empty:glossary.csv"},
+  {"id": "approved-empty-collections", "fixture": "empty-approved", "request": {"source_locale": "en-US", "target_locale": "fr-FR"}, "expected_action": "translate", "expected_issue": null},
+  {"id": "complete-approved-context", "fixture": "complete-approved", "request": {"source_locale": "en-US", "target_locales": ["fr-FR", "ja-JP"]}, "expected_action": "translate", "expected_issue": null},
+  {"id": "source-locale-conflict", "fixture": "complete-approved", "request": {"source_locale": "en-GB", "target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "conflict:source-locale"},
+  {"id": "target-locale-conflict", "fixture": "complete-approved", "request": {"source_locale": "en-US", "target_locales": ["fr-FR", "de-DE"]}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "conflict:target-locale:de-DE"},
+  {"id": "first-issue-is-deterministic", "fixture": "multiple-issues", "request": {"source_locale": "en-GB", "target_locale": "de-DE"}, "expected_action": "setup-one-question-at-a-time", "expected_issue": "malformed:locales.yaml"}
 ]

@@ -171,7 +171,7 @@ class PolicyTests(unittest.TestCase):
     def setUp(self):
         self.policy = load_module("translation_policy", POLICY)
 
-    def test_bootstrap_requires_all_required_project_files(self):
+    def test_bootstrap_legacy_filename_callers_fail_safe(self):
         self.assertEqual(
             self.policy.bootstrap_action(
                 {
@@ -182,7 +182,7 @@ class PolicyTests(unittest.TestCase):
                     "protected-terms.txt",
                 }
             ),
-            "translate",
+            "setup-one-question-at-a-time",
         )
         self.assertEqual(
             self.policy.bootstrap_action({"project-brief.md", "locales.yaml"}),
@@ -246,14 +246,6 @@ class PolicyTests(unittest.TestCase):
             ),
             "report-missing-capability",
         )
-
-    def test_bootstrap_evaluations_match_required_file_policy(self):
-        for case in load_cases("bootstrap-cases.json"):
-            with self.subTest(case=case["id"]):
-                self.assertEqual(
-                    self.policy.bootstrap_action(set(case["existing_files"])),
-                    case["expected_action"],
-                )
 
     def test_research_evaluations_match_capability_gate(self):
         for case in load_cases("research-cases.json"):

@@ -63,10 +63,30 @@ context pauses translation and starts a one-question-at-a-time dialogue. The
 agent presents the complete proposed configuration and waits for approval
 before creating the project files or translating.
 
+Readiness comes from `scripts/policy.py` inspecting the files, not from their
+names. The project brief and style guide require approved statuses and complete
+labeled values. The locales file uses four deterministic top-level fields:
+`source_locale`, `target_locales`, `fallback_locale`, and the boolean
+`neutral_variants_allowed`. Glossary rows must use the supplied header and be
+usable and approved; protected terms contain one non-comment term per line.
+An empty glossary or protected-term collection is valid only when explicitly
+approved as empty.
+
+`.translation/setup-approval.json` stores an approved status, nonblank
+approver and timestamp, the explicitly approved empty collections, and an exact
+SHA-256 map for `project-brief.md`, `locales.yaml`, `glossary.csv`,
+`style-guide.md`, and `protected-terms.txt`. It does not hash itself. Any byte
+change to those five files, including a line-ending change, invalidates the
+approval; changes to optional memory files do not. Missing, malformed, draft,
+or stale context returns the first deterministic setup issue, which becomes one
+focused question.
+
 Approved context is reused. New decisions and source-target pairs begin as
 `draft`; only explicit acceptance or the project's declared review process can
-promote them. A material request/configuration conflict becomes one focused
-question instead of a silent override.
+promote them. The policy compares real `source_locale`, `target_locale`, and
+`target_locales` request fields with configured locales. A mismatch becomes one
+focused question and affected copy remains withheld instead of being silently
+overridden.
 
 ## Research gate
 
