@@ -1,0 +1,24 @@
+tests/test_eval_fixtures.py
+  s_51f69c54a42bb0::t_e3f50da8faa173 1-2,6,163-179,242-254
+  s_51f69c54a42bb0::t_b3fae3d0bb54db 255
+evals/structural-fidelity-cases.json
+  s_51f69c54a42bb0::t_7be14e0e1e384c 7
+evals/bootstrap-cases.json
+  s_51f69c54a42bb0::t_7be14e0e1e384c 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "b874e1de9575d7853980e03a2a45699e4f647607",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
