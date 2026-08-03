@@ -1,0 +1,25 @@
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_97869fa454de0d 555
+  s_51f69c54a42bb0::t_7a1d96f583a503 521-554,556-568,575-578,625-634,735-764,767-777
+  s_51f69c54a42bb0::t_33ff5f62e404d5 569-574,765-766
+scripts/validate_repo.py
+  s_51f69c54a42bb0::t_33ff5f62e404d5 304-305
+  s_51f69c54a42bb0::t_70e1468904d00d 9,34,298-303,306-330,335-362,364-370,372,392-408,486,497-516,523-526,575
+  s_51f69c54a42bb0::t_b1cb94caf65cb2 35,373
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "79e84acbe4f8808da00d1f0a66a58839322a67ec",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
