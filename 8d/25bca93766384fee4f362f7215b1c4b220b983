@@ -1,0 +1,34 @@
+scripts/validate_repo.py
+  s_51f69c54a42bb0::t_4f1dcce973cda2 7,24-35,180-332,340-341
+.github/workflows/validate.yml
+  s_51f69c54a42bb0::t_eaee612b7593ba 1-45
+docs/architecture.md
+  s_51f69c54a42bb0::t_eaee612b7593ba 1-153
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_95abfbc44f5f50 8-13,309-405
+  s_51f69c54a42bb0::t_6ffd03ffca23b6 406-407
+CONTRIBUTING.md
+  s_51f69c54a42bb0::t_eaee612b7593ba 1-106
+tests/test_catalog.py
+  s_51f69c54a42bb0::t_190656f074db27 8,15-42
+README.md
+  s_51f69c54a42bb0::t_eaee612b7593ba 1-149
+scripts/render_catalog.py
+  s_51f69c54a42bb0::t_29a0256178092a 27-28,110-146,155,161-166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "8d25bca93766384fee4f362f7215b1c4b220b983",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
