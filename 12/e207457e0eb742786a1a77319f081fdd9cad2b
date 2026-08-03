@@ -1,0 +1,29 @@
+docs/release-checklist.md
+  s_51f69c54a42bb0::t_03ad3920d4816a 18
+  s_51f69c54a42bb0::t_dfa9aeb76e5f4e 1-17,19-35
+scripts/smoke_install.sh
+  s_51f69c54a42bb0::t_b3f9ca5bff7ca4 28-37
+  s_51f69c54a42bb0::t_fe854ddadadadb 1-27,38-101
+tests/test_smoke_install.py
+  s_51f69c54a42bb0::t_7caab55fcc6f69 107,119-127,129-131,134,136-141,143-144,147,149-150,152-165,167,170-179,182-185,187
+  s_51f69c54a42bb0::t_85f25b6259d7a0 88-94,96-98
+  s_51f69c54a42bb0::t_fe854ddadadadb 128,142
+  s_51f69c54a42bb0::t_b0ca010111d263 95,102-103,132,148,151,166,186
+  s_51f69c54a42bb0::t_71f92dd32ee5d9 1-87,99-101,104-106,108-118,133,135,145-146,168-169,180-181,188-191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "12e207457e0eb742786a1a77319f081fdd9cad2b",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
