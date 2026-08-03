@@ -1,0 +1,20 @@
+docs/superpowers/specs/2026-08-03-pt-pt-translation-benchmark-design.md
+  s_51f69c54a42bb0::t_f9f96d1f4fdeca 1-148,151-373,376-632
+  s_51f69c54a42bb0::t_0240a7f1970da9 149-150,374-375
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "0b7d32c8f3743cc5c6685a489fa4c8efef1fc712",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
