@@ -1,0 +1,27 @@
+docs/superpowers/plans/2026-08-03-pt-pt-translation-benchmark.md
+  s_51f69c54a42bb0::t_299e7e5971e154 347-461,464-722
+  s_51f69c54a42bb0::t_9b38452d29821d 1128-1131,1133-1150,1152-1300,1302-1318,1320-1444,1446-1478,1488-1534,1536-1592
+  s_51f69c54a42bb0::t_659339fcfbb5fd 723-878,880-916,933-1008,1010,1017-1127
+  s_51f69c54a42bb0::t_c7455bc4c0b189 61,93,104,310-315,329
+  s_51f69c54a42bb0::t_81a16c8f71930a 1-60,62-92,94-103,105-309,316-328,330-346
+  s_51f69c54a42bb0::t_55a6ccf07ac39c 1445,1479-1487,1535
+  s_51f69c54a42bb0::t_8a1cff9572a1fa 879,917-932,1009,1011-1016
+  s_51f69c54a42bb0::t_cecc587e54a7cf 1132,1151,1301,1319
+  s_51f69c54a42bb0::t_9618dbc3818e56 462-463
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "c0066fd2da28476fbdce1df818b992ec9ad12086",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
