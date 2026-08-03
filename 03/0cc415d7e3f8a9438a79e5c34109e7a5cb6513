@@ -1,0 +1,41 @@
+tests/test_eval_fixtures.py
+  s_51f69c54a42bb0::t_3b86a1b055cd79 17,20,57,67-80
+evals/bootstrap-cases.json
+  s_51f69c54a42bb0::t_3b86a1b055cd79 2-15
+docs/architecture.md
+  s_51f69c54a42bb0::t_d1c02914684e7b 66-83,86-89
+README.md
+  s_51f69c54a42bb0::t_d1c02914684e7b 84,90-96
+  s_51f69c54a42bb0::t_34a33a111829ab 97
+tests/test_routing.py
+  s_51f69c54a42bb0::t_2969da6cf8df34 174,185
+tests/test_bootstrap_policy.py
+  s_51f69c54a42bb0::t_3b86a1b055cd79 1-295,316-400
+  s_51f69c54a42bb0::t_21d2177bcba539 296-315
+skills/translating-products/SKILL.md
+  s_51f69c54a42bb0::t_d1c02914684e7b 18,20-21,24-25,28,30-49
+  s_51f69c54a42bb0::t_ba19e22edf165f 14-15,19,22-23,26-27,63,69,71,75,86
+  s_51f69c54a42bb0::t_6b9abdb529d678 29
+skills/translating-products/scripts/policy.py
+  s_51f69c54a42bb0::t_1f69dedca77d9d 365-373,375-376
+  s_51f69c54a42bb0::t_d39f95617594a5 1-15,21-44,46-364,374,377-383,388,393-398,403-450,456-462,469-471,473-479,481-504,507,512-518,521-536,541-542,547-621,669-719
+  s_51f69c54a42bb0::t_cc633cd19e104f 384-387,389-392,399-402,451-455,463-468,519-520,537-540,543-546
+skills/translating-products/assets/translation-project/setup-approval.json
+  s_51f69c54a42bb0::t_d1c02914684e7b 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "030cc415d7e3f8a9438a79e5c34109e7a5cb6513",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
