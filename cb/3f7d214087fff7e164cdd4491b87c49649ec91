@@ -1,0 +1,25 @@
+skills/translating-french/SKILL.md
+  s_51f69c54a42bb0::t_10ef7220a66412 1-71
+skills/translating-german/SKILL.md
+  s_51f69c54a42bb0::t_6262b1f3c8020c 1-74
+skills/translating-portuguese/SKILL.md
+  s_51f69c54a42bb0::t_f4b0b38958cc84 1-70
+skills/translating-spanish/SKILL.md
+  s_51f69c54a42bb0::t_2a3657ec016db4 1-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "cb3f7d214087fff7e164cdd4491b87c49649ec91",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
