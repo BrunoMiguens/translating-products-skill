@@ -1,0 +1,33 @@
+skills/translating-arabic/SKILL.md
+  s_51f69c54a42bb0::t_ad5dabba654fca 1-69
+skills/translating-chinese/SKILL.md
+  s_51f69c54a42bb0::t_1512047d0bcaeb 1-71
+skills/translating-korean/SKILL.md
+  s_51f69c54a42bb0::t_d659425598fdfe 32,53
+  s_51f69c54a42bb0::t_279537bd65b36d 25-26,45
+  s_51f69c54a42bb0::t_7fa3d614324f07 1-24,27-31,33-44,46-52,54-72
+skills/translating-hebrew/SKILL.md
+  s_51f69c54a42bb0::t_b20002cb206adb 1-22,24-40,42-73
+  s_51f69c54a42bb0::t_210f08d18f66de 23,41
+skills/translating-rtl/SKILL.md
+  s_51f69c54a42bb0::t_6014c0ec91a3af 1-75
+skills/translating-japanese/SKILL.md
+  s_51f69c54a42bb0::t_c08d3dc0880a53 45,54
+  s_51f69c54a42bb0::t_80e8c74c76e0cb 1-44,46-53,55-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "3da8107746c0a04acf7d6686353d10246e719747",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
