@@ -4,6 +4,7 @@ import argparse
 from collections import defaultdict
 from pathlib import Path
 import re
+import shlex
 import sys
 
 if __package__ in {None, ""}:
@@ -20,6 +21,18 @@ HOST_TOKENS = (
     re.compile(r"(?m)^/[a-z0-9-]+", re.I),
 )
 FRONTMATTER_FIELDS = {"name", "description"}
+PUBLICATION_FILES = (
+    ".github/workflows/validate.yml",
+    "CONTRIBUTING.md",
+    "README.md",
+    "docs/architecture.md",
+)
+SHELL_FENCE = re.compile(r"```(?:bash|sh|shell)\s*\n(.*?)```", re.DOTALL)
+MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
+SKILL_LINK = re.compile(r"\]\(skills/([a-z0-9]+(?:-[a-z0-9]+)*)/?\)")
+INVENTORY_START = "<!-- skill-inventory:start -->"
+INVENTORY_END = "<!-- skill-inventory:end -->"
+SUPPORTED_AGENTS = {"claude-code", "codex", "cursor", "universal"}
 
 
 def parse_frontmatter(path: Path) -> dict[str, str]:
@@ -164,6 +177,159 @@ def validate_repository(
     return errors
 
 
+def _shell_commands(markdown: str) -> list[str]:
+    commands = []
+    for block in SHELL_FENCE.findall(markdown):
+        pending = ""
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            pending = f"{pending} {line}".strip()
+            if pending.endswith("\\"):
+                pending = pending[:-1].rstrip()
+                continue
+            if pending.startswith("npx skills add "):
+                commands.append(pending)
+            pending = ""
+    return commands
+
+
+def _parse_install_command(
+    command: str,
+) -> tuple[dict[str, object] | None, list[str]]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError as error:
+        return None, [f"invalid install command: {error}"]
+    if tokens[:3] != ["npx", "skills", "add"] or len(tokens) < 4:
+        return None, ["invalid install command form"]
+
+    record: dict[str, object] = {
+        "source": tokens[3],
+        "list": False,
+        "all": False,
+        "skills": [],
+        "agents": [],
+    }
+    errors = []
+    index = 4
+    while index < len(tokens):
+        option = tokens[index]
+        if option in {"--list", "--all", "--yes", "--global"}:
+            record[option[2:]] = True
+            index += 1
+            continue
+        if option not in {"--skill", "--agent"}:
+            errors.append(f"unsupported install argument {option}")
+            index += 1
+            continue
+        values = []
+        index += 1
+        while index < len(tokens) and not tokens[index].startswith("--"):
+            values.append(tokens[index])
+            index += 1
+        if not values:
+            errors.append(f"{option} requires at least one value")
+            continue
+        key = "skills" if option == "--skill" else "agents"
+        record[key] = [*record[key], *values]
+
+    if not (record["list"] or record["all"] or record["skills"]):
+        errors.append("install command needs --list, --all, or --skill")
+    for agent in record["agents"]:
+        if agent not in SUPPORTED_AGENTS:
+            errors.append(f"unsupported --agent value {agent}")
+    return record, errors
+
+
+def _validate_install_commands(markdown: str) -> list[str]:
+    errors = []
+    records = []
+    for command in _shell_commands(markdown):
+        record, command_errors = _parse_install_command(command)
+        errors.extend(command_errors)
+        if record is not None:
+            records.append(record)
+
+    if not records:
+        return ["no fenced npx skills add commands found"]
+
+    coverage = {
+        "local preview": any(
+            record["source"] == "." and record["list"] for record in records
+        ),
+        "local full-suite install": any(
+            record["source"] == "." and record["all"] for record in records
+        ),
+        "remote full-suite install": any(
+            record["source"] == "OWNER/REPOSITORY" and record["all"]
+            for record in records
+        ),
+        "individual specialist install": any(
+            record["source"] == "OWNER/REPOSITORY"
+            and "translating-japanese" in record["skills"]
+            for record in records
+        ),
+    }
+    for agent in sorted(SUPPORTED_AGENTS):
+        coverage[f"remote wildcard install for {agent}"] = any(
+            record["source"] == "OWNER/REPOSITORY"
+            and "*" in record["skills"]
+            and agent in record["agents"]
+            for record in records
+        )
+    errors.extend(
+        f"missing {name} example"
+        for name, covered in coverage.items()
+        if not covered
+    )
+    return errors
+
+
+def _validate_markdown_links(root: Path, path: Path) -> list[str]:
+    errors = []
+    text = path.read_text(encoding="utf-8")
+    for raw_target in MARKDOWN_LINK.findall(text):
+        target = raw_target.split(maxsplit=1)[0].strip("<>")
+        if target.startswith(("#", "http://", "https://", "mailto:")):
+            continue
+        local = target.split("#", 1)[0]
+        if local and not (path.parent / local).resolve().exists():
+            errors.append(f"{path.relative_to(root)}: broken link {target}")
+    return errors
+
+
+def validate_distribution(root: Path, manifest: Manifest) -> list[str]:
+    errors = [
+        f"{relative}: file is missing"
+        for relative in PUBLICATION_FILES
+        if not (root / relative).is_file()
+    ]
+    readme = root / "README.md"
+    if readme.is_file():
+        text = readme.read_text(encoding="utf-8")
+        if INVENTORY_START not in text or INVENTORY_END not in text:
+            errors.append("README.md: skill inventory markers are missing")
+        else:
+            inventory = text.split(INVENTORY_START, 1)[1].split(INVENTORY_END, 1)[0]
+            linked_skills = SKILL_LINK.findall(inventory)
+            expected_skills = [skill.name for skill in manifest.skills]
+            if linked_skills != expected_skills:
+                errors.append(
+                    "README.md: skill inventory does not match skills-manifest.json"
+                )
+        errors.extend(
+            f"README.md: {error}" for error in _validate_install_commands(text)
+        )
+
+    for relative in ("README.md", "CONTRIBUTING.md", "docs/architecture.md"):
+        path = root / relative
+        if path.is_file():
+            errors.extend(_validate_markdown_links(root, path))
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--partial", action="store_true")
@@ -171,6 +337,8 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     manifest = load_manifest(root / "skills-manifest.json")
     errors = validate_repository(root, manifest, partial=args.partial)
+    if not args.partial:
+        errors.extend(validate_distribution(root, manifest))
     if errors:
         print("\n".join(errors))
         return 1

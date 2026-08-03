@@ -5,13 +5,41 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.render_catalog import render_catalog
+from scripts.render_catalog import render_catalog, render_readme_inventory
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class CatalogTests(unittest.TestCase):
+    def test_readme_inventory_is_rendered_from_manifest_order(self):
+        manifest = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            readme = Path(tmp) / "README.md"
+            readme.write_text(
+                "before\n<!-- skill-inventory:start -->\nstale\n"
+                "<!-- skill-inventory:end -->\nafter\n",
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                render_readme_inventory(ROOT / "skills-manifest.json", readme)
+            )
+            text = readme.read_text(encoding="utf-8")
+            linked = [
+                line.split("(skills/", 1)[1].split("/)", 1)[0]
+                for line in text.splitlines()
+                if "(skills/" in line
+            ]
+            self.assertEqual(linked, [item["name"] for item in manifest["skills"]])
+            self.assertTrue(
+                render_readme_inventory(
+                    ROOT / "skills-manifest.json", readme, check=True
+                )
+            )
+
     def test_catalog_contains_every_manifest_skill(self):
         manifest = json.loads(
             (ROOT / "skills-manifest.json").read_text(encoding="utf-8")

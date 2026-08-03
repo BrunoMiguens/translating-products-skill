@@ -5,7 +5,12 @@ import subprocess
 import sys
 
 from scripts.repo_model import Manifest, SkillRecord, SourceRecord
-from scripts.validate_repo import parse_frontmatter, validate_repository, validate_skill
+from scripts.validate_repo import (
+    parse_frontmatter,
+    validate_distribution,
+    validate_repository,
+    validate_skill,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -299,6 +304,105 @@ class ValidatorTests(unittest.TestCase):
                 "skills-manifest.json: invalid minimum version for translating-first",
             ],
         )
+
+
+class DistributionTests(unittest.TestCase):
+    def setUp(self):
+        self.skills = (
+            skill("translating-products"),
+            skill("translating-japanese"),
+        )
+        self.manifest = manifest_with(
+            skills=self.skills,
+            minimum_skill_versions={"translating-japanese": "0.1.0"},
+        )
+
+    def write_valid_distribution(self, root: Path) -> None:
+        for record in self.skills:
+            (root / "skills" / record.name).mkdir(parents=True)
+        (root / "docs").mkdir()
+        (root / ".github" / "workflows").mkdir(parents=True)
+        (root / "README.md").write_text(
+            """# Demo
+
+<!-- skill-inventory:start -->
+- [translating-products](skills/translating-products/)
+- [translating-japanese](skills/translating-japanese/)
+<!-- skill-inventory:end -->
+
+```bash
+npx skills add . --list
+npx skills add . --all
+npx skills add OWNER/REPOSITORY --skill '*' --agent claude-code
+npx skills add OWNER/REPOSITORY --skill '*' --agent codex
+npx skills add OWNER/REPOSITORY --skill '*' --agent cursor
+npx skills add OWNER/REPOSITORY --skill '*' --agent universal
+npx skills add OWNER/REPOSITORY --skill translating-japanese --agent claude-code
+npx skills add OWNER/REPOSITORY --all
+```
+
+[Architecture](docs/architecture.md)
+""",
+            encoding="utf-8",
+        )
+        (root / "CONTRIBUTING.md").write_text(
+            "[Manifest](skills-manifest.json)\n", encoding="utf-8"
+        )
+        (root / "skills-manifest.json").write_text("{}\n", encoding="utf-8")
+        (root / "docs" / "architecture.md").write_text(
+            "[README](../README.md)\n", encoding="utf-8"
+        )
+        (root / ".github" / "workflows" / "validate.yml").write_text(
+            "name: validate\n", encoding="utf-8"
+        )
+
+    def test_distribution_requires_publication_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            errors = validate_distribution(Path(tmp), self.manifest)
+
+        self.assertEqual(
+            errors,
+            [
+                ".github/workflows/validate.yml: file is missing",
+                "CONTRIBUTING.md: file is missing",
+                "README.md: file is missing",
+                "docs/architecture.md: file is missing",
+            ],
+        )
+
+    def test_distribution_accepts_manifest_inventory_commands_and_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_valid_distribution(root)
+
+            self.assertEqual(validate_distribution(root, self.manifest), [])
+
+    def test_distribution_rejects_inventory_drift_bad_commands_and_broken_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_valid_distribution(root)
+            readme = (root / "README.md").read_text(encoding="utf-8")
+            readme = readme.replace(
+                "- [translating-japanese](skills/translating-japanese/)\n", ""
+            ).replace(
+                "--agent cursor", "--agent unsupported-host"
+            ).replace(
+                "[Architecture](docs/architecture.md)",
+                "[Architecture](docs/missing.md)",
+            )
+            (root / "README.md").write_text(readme, encoding="utf-8")
+
+            errors = validate_distribution(root, self.manifest)
+
+        self.assertIn(
+            "README.md: skill inventory does not match skills-manifest.json",
+            errors,
+        )
+        self.assertIn(
+            "README.md: unsupported --agent value unsupported-host",
+            errors,
+        )
+        self.assertIn("README.md: broken link docs/missing.md", errors)
 
 
 if __name__ == "__main__":

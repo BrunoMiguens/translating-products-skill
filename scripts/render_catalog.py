@@ -24,6 +24,8 @@ AUTHORITY_ORDER = (
     "product-platform-formatting",
     "stylistic-preferences",
 )
+INVENTORY_START = "<!-- skill-inventory:start -->"
+INVENTORY_END = "<!-- skill-inventory:end -->"
 
 
 def _catalog_from_manifest(manifest: dict) -> dict:
@@ -105,6 +107,43 @@ def render_catalog(
     return True
 
 
+def _render_readme_inventory(manifest: dict) -> str:
+    lines = [
+        INVENTORY_START,
+        "| Skill | Category | When to use |",
+        "| --- | --- | --- |",
+    ]
+    for item in manifest["skills"]:
+        description = item["description"].replace("|", "\\|")
+        lines.append(
+            f"| [`{item['name']}`](skills/{item['name']}/) "
+            f"| `{item['category']}` | {description} |"
+        )
+    lines.append(INVENTORY_END)
+    return "\n".join(lines)
+
+
+def render_readme_inventory(
+    manifest_path: Path,
+    readme_path: Path,
+    *,
+    check: bool = False,
+) -> bool:
+    if not readme_path.exists():
+        return False
+    text = readme_path.read_text(encoding="utf-8")
+    if INVENTORY_START not in text or INVENTORY_END not in text:
+        return False
+    before, remainder = text.split(INVENTORY_START, 1)
+    _, after = remainder.split(INVENTORY_END, 1)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = before + _render_readme_inventory(manifest) + after
+    if check:
+        return text == expected
+    readme_path.write_text(expected, encoding="utf-8")
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -113,13 +152,18 @@ def main() -> int:
 
     root = args.root or Path(__file__).resolve().parents[1]
     references = root / "skills" / "translating-products" / "references"
-    matched = render_catalog(
+    catalog_matched = render_catalog(
         root / "skills-manifest.json",
         references / "capability-catalog.json",
         references / "capability-catalog.md",
         check=args.check,
     )
-    return 0 if matched else 1
+    readme_matched = render_readme_inventory(
+        root / "skills-manifest.json",
+        root / "README.md",
+        check=args.check,
+    )
+    return 0 if catalog_matched and readme_matched else 1
 
 
 if __name__ == "__main__":
