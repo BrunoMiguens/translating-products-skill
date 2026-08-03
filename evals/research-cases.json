@@ -1,0 +1,17 @@
+[
+  {"id": "ordinary-ui", "question": "How should the Save button read in French?", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "ordinary-marketing", "question": "Adapt this friendly call to action for Portuguese.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "ordinary-docs", "question": "Translate this installation paragraph into Japanese.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "known-glossary", "question": "Use the approved glossary term for workspace.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "known-platform", "question": "Preserve the Android resource placeholder.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "known-locale-format", "question": "Format this date for de-CH.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "known-rtl", "question": "Keep the URL direction stable in Arabic text.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "known-idiom", "question": "Adapt this familiar idiom rather than translating literally.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "known-store-copy", "question": "Translate this approved store subtitle.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "known-terminology", "question": "Apply the project's term for passkey.", "bundled_knowledge_sufficient": true, "expected_research": false},
+  {"id": "current-app-store-limit", "question": "What is the current App Store subtitle character limit?", "bundled_knowledge_sufficient": false, "expected_research": true},
+  {"id": "current-play-store-policy", "question": "Does the current Play Store policy permit this promotional claim?", "bundled_knowledge_sufficient": false, "expected_research": true},
+  {"id": "market-campaign-term", "question": "Which search term is currently used for this campaign category in Quebec?", "bundled_knowledge_sufficient": false, "expected_research": true},
+  {"id": "current-os-label", "question": "What label does the current iOS release use for this settings control?", "bundled_knowledge_sufficient": false, "expected_research": true},
+  {"id": "regulated-current-term", "question": "What is the current regulated consumer term required in this market?", "bundled_knowledge_sufficient": false, "expected_research": true}
+]

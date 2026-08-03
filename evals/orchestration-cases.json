@@ -1,0 +1,12 @@
+[
+  {"id": "short-single-no-subagent", "policy": "subagents", "inputs": {"host_supports_subagents": true, "target_locales": 1, "source_units": 19, "separable_sections": 1, "terminology_pass": false, "independent_review": false}, "expected": false},
+  {"id": "short-multi-no-subagent", "policy": "subagents", "inputs": {"host_supports_subagents": true, "target_locales": 2, "source_units": 19, "separable_sections": 1, "terminology_pass": false, "independent_review": false}, "expected": false},
+  {"id": "meaningful-multi-subagent", "policy": "subagents", "inputs": {"host_supports_subagents": true, "target_locales": 2, "source_units": 20, "separable_sections": 1, "terminology_pass": false, "independent_review": false}, "expected": true},
+  {"id": "large-separable-subagent", "policy": "subagents", "inputs": {"host_supports_subagents": true, "target_locales": 1, "source_units": 100, "separable_sections": 2, "terminology_pass": false, "independent_review": false}, "expected": true},
+  {"id": "terminology-subagent", "policy": "subagents", "inputs": {"host_supports_subagents": true, "target_locales": 1, "source_units": 12, "separable_sections": 1, "terminology_pass": true, "independent_review": false}, "expected": true},
+  {"id": "review-subagent", "policy": "subagents", "inputs": {"host_supports_subagents": true, "target_locales": 1, "source_units": 12, "separable_sections": 1, "terminology_pass": false, "independent_review": true}, "expected": true},
+  {"id": "unsupported-host-sequential", "policy": "subagents", "inputs": {"host_supports_subagents": false, "target_locales": 4, "source_units": 200, "separable_sections": 5, "terminology_pass": true, "independent_review": true}, "expected": false},
+  {"id": "missing-external-use-bundled", "policy": "missing-specialist", "inputs": {"core_can_cover": true, "bundled_available": true}, "expected": "use-bundled-specialist"},
+  {"id": "missing-specialist-use-core", "policy": "missing-specialist", "inputs": {"core_can_cover": true, "bundled_available": false}, "expected": "use-core"},
+  {"id": "missing-required-capability", "policy": "missing-specialist", "inputs": {"core_can_cover": false, "bundled_available": false}, "expected": "report-missing-capability"}
+]

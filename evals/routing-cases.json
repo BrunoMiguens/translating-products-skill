@@ -1,0 +1,202 @@
+[
+  {
+    "id": "ar-web-marketing",
+    "request": {"languages": ["arabic"], "locales": ["ar-SA"], "surfaces": ["web", "marketing"], "domains": [], "scripts": ["rtl"]},
+    "expected_skills": ["translating-core", "translating-web", "translating-marketing", "translating-rtl", "translating-arabic", "reviewing-translations"]
+  },
+  {
+    "id": "ar-android",
+    "request": {"languages": ["arabic"], "locales": ["ar-SA"], "surfaces": ["android"], "domains": [], "scripts": ["rtl"]},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-android", "translating-rtl", "translating-arabic", "reviewing-translations"]
+  },
+  {
+    "id": "he-web",
+    "request": {"languages": ["hebrew"], "locales": ["he-IL"], "surfaces": ["web"], "domains": [], "scripts": ["rtl"]},
+    "expected_skills": ["translating-core", "translating-web", "translating-rtl", "translating-hebrew", "reviewing-translations"]
+  },
+  {
+    "id": "he-ios",
+    "request": {"languages": ["hebrew"], "locales": ["he-IL"], "surfaces": ["ios"], "domains": [], "scripts": ["rtl"]},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-ios", "translating-rtl", "translating-hebrew", "reviewing-translations"]
+  },
+  {
+    "id": "ja-ios",
+    "request": {"languages": ["japanese"], "locales": ["ja-JP"], "surfaces": ["ios"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-ios", "translating-japanese", "reviewing-translations"]
+  },
+  {
+    "id": "ja-docs",
+    "request": {"languages": ["japanese"], "locales": ["ja-JP"], "surfaces": ["documentation"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-documentation", "translating-japanese", "reviewing-translations"]
+  },
+  {
+    "id": "zh-android",
+    "request": {"languages": ["chinese"], "locales": ["zh-Hans-CN"], "surfaces": ["android"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-android", "translating-chinese", "reviewing-translations"]
+  },
+  {
+    "id": "zh-marketing",
+    "request": {"languages": ["chinese"], "locales": ["zh-Hant-TW"], "surfaces": ["marketing"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-marketing", "translating-chinese", "reviewing-translations"]
+  },
+  {
+    "id": "ko-flutter",
+    "request": {"languages": ["korean"], "locales": ["ko-KR"], "surfaces": ["flutter"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-flutter", "translating-korean", "reviewing-translations"]
+  },
+  {
+    "id": "ko-stores",
+    "request": {"languages": ["korean"], "locales": ["ko-KR"], "surfaces": ["app-store"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-app-stores", "translating-korean", "reviewing-translations"]
+  },
+  {
+    "id": "pt-app-store",
+    "request": {"languages": ["portuguese"], "locales": ["pt-BR"], "surfaces": ["app-store"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-app-stores", "translating-portuguese", "reviewing-translations"]
+  },
+  {
+    "id": "pt-docs",
+    "request": {"languages": ["portuguese"], "locales": ["pt-PT"], "surfaces": ["documentation"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-documentation", "translating-portuguese", "reviewing-translations"]
+  },
+  {
+    "id": "es-play-store",
+    "request": {"languages": ["spanish"], "locales": ["es-419"], "surfaces": ["play-store"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-app-stores", "translating-spanish", "reviewing-translations"]
+  },
+  {
+    "id": "es-web",
+    "request": {"languages": ["spanish"], "locales": ["es-ES"], "surfaces": ["web"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-web", "translating-spanish", "reviewing-translations"]
+  },
+  {
+    "id": "fr-web-marketing",
+    "request": {"languages": ["french"], "locales": ["fr-FR"], "surfaces": ["web", "marketing"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-web", "translating-marketing", "translating-french", "reviewing-translations"]
+  },
+  {
+    "id": "fr-docs",
+    "request": {"languages": ["french"], "locales": ["fr-CA"], "surfaces": ["documentation"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-documentation", "translating-french", "reviewing-translations"]
+  },
+  {
+    "id": "de-software",
+    "request": {"languages": ["german"], "locales": ["de-DE"], "surfaces": ["software"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "localizing-software", "translating-german", "reviewing-translations"]
+  },
+  {
+    "id": "de-web",
+    "request": {"languages": ["german"], "locales": ["de-AT"], "surfaces": ["web"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-web", "translating-german", "reviewing-translations"]
+  },
+  {
+    "id": "mobile-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["mobile"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-mobile", "reviewing-translations"]
+  },
+  {
+    "id": "ios-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["ios"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-ios", "reviewing-translations"]
+  },
+  {
+    "id": "android-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["android"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-android", "reviewing-translations"]
+  },
+  {
+    "id": "flutter-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["flutter"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-flutter", "reviewing-translations"]
+  },
+  {
+    "id": "web-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["web"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-web", "reviewing-translations"]
+  },
+  {
+    "id": "software-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["software"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "localizing-software", "reviewing-translations"]
+  },
+  {
+    "id": "app-store-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["app-store"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-app-stores", "reviewing-translations"]
+  },
+  {
+    "id": "play-store-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["play-store"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-app-stores", "reviewing-translations"]
+  },
+  {
+    "id": "marketing-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["marketing"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-marketing", "reviewing-translations"]
+  },
+  {
+    "id": "docs-only",
+    "request": {"languages": [], "locales": [], "surfaces": ["documentation"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-documentation", "reviewing-translations"]
+  },
+  {
+    "id": "rtl-script-only",
+    "request": {"languages": [], "locales": [], "surfaces": [], "domains": [], "scripts": ["rtl"]},
+    "expected_skills": ["translating-core", "translating-rtl", "reviewing-translations"]
+  },
+  {
+    "id": "ar-flutter-store",
+    "request": {"languages": ["arabic"], "locales": ["ar-SA"], "surfaces": ["flutter", "play-store"], "domains": [], "scripts": ["rtl"]},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-flutter", "translating-app-stores", "translating-rtl", "translating-arabic", "reviewing-translations"]
+  },
+  {
+    "id": "he-android-software",
+    "request": {"languages": ["hebrew"], "locales": ["he-IL"], "surfaces": ["software", "android"], "domains": [], "scripts": ["rtl"]},
+    "expected_skills": ["translating-core", "localizing-software", "translating-mobile", "translating-android", "translating-rtl", "translating-hebrew", "reviewing-translations"]
+  },
+  {
+    "id": "ja-web-marketing",
+    "request": {"languages": ["japanese"], "locales": ["ja-JP"], "surfaces": ["web", "marketing"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-web", "translating-marketing", "translating-japanese", "reviewing-translations"]
+  },
+  {
+    "id": "zh-ios-docs",
+    "request": {"languages": ["chinese"], "locales": ["zh-Hans-CN"], "surfaces": ["ios", "documentation"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-mobile", "translating-ios", "translating-documentation", "translating-chinese", "reviewing-translations"]
+  },
+  {
+    "id": "ko-web-software",
+    "request": {"languages": ["korean"], "locales": ["ko-KR"], "surfaces": ["web", "software"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-web", "localizing-software", "translating-korean", "reviewing-translations"]
+  },
+  {
+    "id": "multi-romance",
+    "request": {"languages": ["portuguese", "spanish", "french"], "locales": ["pt-BR", "es-419", "fr-CA"], "surfaces": ["web", "mobile"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-web", "translating-mobile", "translating-portuguese", "translating-spanish", "translating-french", "reviewing-translations"]
+  },
+  {
+    "id": "multi-cjk",
+    "request": {"languages": ["japanese", "chinese", "korean"], "locales": ["ja-JP", "zh-Hant-TW", "ko-KR"], "surfaces": ["documentation"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-documentation", "translating-japanese", "translating-chinese", "translating-korean", "reviewing-translations"]
+  },
+  {
+    "id": "unsupported-icelandic",
+    "request": {"languages": ["icelandic"], "locales": ["is-IS"], "surfaces": ["documentation"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-documentation", "reviewing-translations"]
+  },
+  {
+    "id": "unsupported-swahili",
+    "request": {"languages": ["swahili"], "locales": ["sw-KE"], "surfaces": ["marketing"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-marketing", "reviewing-translations"]
+  },
+  {
+    "id": "unsupported-mixed",
+    "request": {"languages": ["icelandic", "japanese"], "locales": ["is-IS", "ja-JP"], "surfaces": ["web"], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "translating-web", "translating-japanese", "reviewing-translations"]
+  },
+  {
+    "id": "empty-classification",
+    "request": {"languages": [], "locales": [], "surfaces": [], "domains": [], "scripts": []},
+    "expected_skills": ["translating-core", "reviewing-translations"]
+  }
+]

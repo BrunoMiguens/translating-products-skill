@@ -1,0 +1,12 @@
+[
+  {"id": "none", "existing_files": [], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
+  {"id": "brief-only", "existing_files": ["project-brief.md"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
+  {"id": "locales-only", "existing_files": ["locales.yaml"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
+  {"id": "missing-glossary", "existing_files": ["project-brief.md", "locales.yaml", "style-guide.md", "protected-terms.txt"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
+  {"id": "missing-style", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "protected-terms.txt"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
+  {"id": "missing-protected", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "style-guide.md"], "request": {"target_locale": "fr-FR"}, "expected_action": "setup-one-question-at-a-time"},
+  {"id": "four-of-five", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "protected-terms.txt"], "request": {"target_locale": "fr-CA"}, "expected_action": "setup-one-question-at-a-time"},
+  {"id": "all-required", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "style-guide.md", "protected-terms.txt"], "request": {"target_locale": "fr-FR"}, "expected_action": "translate"},
+  {"id": "all-plus-optional", "existing_files": ["project-brief.md", "locales.yaml", "glossary.csv", "style-guide.md", "protected-terms.txt", "decisions.md", "translation-memory.csv", "research-sources.md"], "request": {"target_locale": "fr-CA"}, "expected_action": "translate"},
+  {"id": "conflicting-request", "existing_files": ["project-brief.md", "glossary.csv", "style-guide.md", "protected-terms.txt"], "request": {"target_locale": "de-CH", "project_target_locale": "de-DE"}, "expected_action": "setup-one-question-at-a-time"}
+]

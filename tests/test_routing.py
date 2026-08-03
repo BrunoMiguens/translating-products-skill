@@ -13,6 +13,7 @@ POLICY = ROOT / "skills/translating-products/scripts/policy.py"
 CATALOG = (
     ROOT / "skills/translating-products/references/capability-catalog.json"
 )
+EVALS = ROOT / "evals"
 
 
 def load_module(name: str, path: Path):
@@ -27,7 +28,36 @@ def load_catalog() -> dict:
     return json.loads(CATALOG.read_text(encoding="utf-8"))
 
 
+def load_cases(name: str) -> list[dict]:
+    return json.loads((EVALS / name).read_text(encoding="utf-8"))
+
+
 class RoutingTests(unittest.TestCase):
+    def test_all_routing_evaluations_match_exact_order(self):
+        router = load_module("route_capabilities_evals", ROUTER)
+        catalog = load_catalog()
+        cases = load_cases("routing-cases.json")
+        mismatches = []
+
+        for case in cases:
+            actual = router.route(case["request"], catalog)
+            if actual != case["expected_skills"]:
+                mismatches.append(
+                    {
+                        "id": case["id"],
+                        "expected": case["expected_skills"],
+                        "actual": actual,
+                    }
+                )
+
+        accuracy = (len(cases) - len(mismatches)) / len(cases)
+        self.assertEqual(
+            mismatches,
+            [],
+            f"routing exact-match accuracy was {accuracy:.1%}",
+        )
+        self.assertGreaterEqual(accuracy, 0.95)
+
     def test_arabic_marketing_web_route(self):
         router = load_module("route_capabilities", ROUTER)
         request = {
@@ -216,6 +246,37 @@ class PolicyTests(unittest.TestCase):
             ),
             "report-missing-capability",
         )
+
+    def test_bootstrap_evaluations_match_required_file_policy(self):
+        for case in load_cases("bootstrap-cases.json"):
+            with self.subTest(case=case["id"]):
+                self.assertEqual(
+                    self.policy.bootstrap_action(set(case["existing_files"])),
+                    case["expected_action"],
+                )
+
+    def test_research_evaluations_match_capability_gate(self):
+        for case in load_cases("research-cases.json"):
+            with self.subTest(case=case["id"]):
+                self.assertEqual(
+                    self.policy.should_research(
+                        case["question"],
+                        case["bundled_knowledge_sufficient"],
+                    ),
+                    case["expected_research"],
+                )
+
+    def test_orchestration_evaluations_match_policy_functions(self):
+        functions = {
+            "subagents": self.policy.should_use_subagents,
+            "missing-specialist": self.policy.missing_specialist_action,
+        }
+        for case in load_cases("orchestration-cases.json"):
+            with self.subTest(case=case["id"]):
+                self.assertEqual(
+                    functions[case["policy"]](**case["inputs"]),
+                    case["expected"],
+                )
 
 
 if __name__ == "__main__":
