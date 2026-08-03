@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shlex
 import sys
+from urllib.parse import unquote, urlsplit
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -29,8 +30,9 @@ PUBLICATION_FILES = (
     "docs/architecture.md",
 )
 SHELL_FENCE = re.compile(r"```(?:bash|sh|shell)\s*\n(.*?)```", re.DOTALL)
-MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SKILL_LINK = re.compile(r"\]\(skills/([a-z0-9]+(?:-[a-z0-9]+)*)/?\)")
+RESIDUAL_PATH_CONTROL = re.compile(r"%(?:00|2e|2f|5c)", re.IGNORECASE)
+WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
 SUPPORTED_AGENTS = {"claude-code", "codex", "cursor", "universal"}
 WORKFLOW_TRIGGERS = {"push", "pull_request", "schedule", "workflow_dispatch"}
 OFFLINE_VALIDATION_COMMANDS = (
@@ -293,19 +295,82 @@ def _validate_install_commands(markdown: str) -> list[str]:
     return errors
 
 
+def _markdown_link_destinations(markdown: str) -> list[str]:
+    destinations = []
+    cursor = 0
+    while (close := markdown.find("](", cursor)) != -1:
+        label_start = markdown.rfind("[", 0, close)
+        cursor = close + 2
+        if label_start == -1:
+            continue
+        if label_start > 0 and markdown[label_start - 1] == "!":
+            continue
+        start = cursor
+        while start < len(markdown) and markdown[start].isspace():
+            start += 1
+        if start >= len(markdown):
+            break
+        if markdown[start] == "<":
+            end = markdown.find(">", start + 1)
+            if end == -1:
+                continue
+            destinations.append(markdown[start + 1 : end])
+            cursor = end + 1
+            continue
+        end = start
+        while end < len(markdown) and not (
+            markdown[end].isspace() or markdown[end] == ")"
+        ):
+            end += 1
+        if end > start:
+            destinations.append(markdown[start:end])
+        cursor = max(end + 1, cursor)
+    return destinations
+
+
 def _validate_markdown_links(root: Path, path: Path) -> list[str]:
     errors = []
     text = path.read_text(encoding="utf-8")
     repository = root.resolve()
-    for raw_target in MARKDOWN_LINK.findall(text):
-        target = raw_target.split(maxsplit=1)[0].strip("<>")
-        if target.startswith(("#", "http://", "https://", "mailto:")):
+    for target in _markdown_link_destinations(text):
+        if target.startswith("#"):
             continue
-        local = target.split("#", 1)[0]
-        if not local:
+        try:
+            parsed = urlsplit(target)
+        except ValueError as error:
+            errors.append(
+                f"{path.relative_to(root)}: invalid link destination {target}: "
+                f"{error}"
+            )
             continue
-        relative = Path(local)
-        if relative.is_absolute():
+        if parsed.scheme.lower() in {"http", "https", "mailto"}:
+            continue
+        if not parsed.scheme and parsed.netloc:
+            continue
+        if not parsed.path:
+            continue
+        try:
+            decoded = unquote(parsed.path, encoding="utf-8", errors="strict")
+        except UnicodeDecodeError:
+            errors.append(
+                f"{path.relative_to(root)}: invalid UTF-8 in local link: {target}"
+            )
+            continue
+        if "\x00" in decoded:
+            errors.append(
+                f"{path.relative_to(root)}: decoded local link contains NUL: {target}"
+            )
+            continue
+        # Decode exactly once. Residual encoded path controls are rejected
+        # instead of being decoded a second time or trusted as literal names.
+        if RESIDUAL_PATH_CONTROL.search(decoded):
+            errors.append(
+                f"{path.relative_to(root)}: local link retains encoded path "
+                f"control after one decode: {target}"
+            )
+            continue
+        relative = Path(decoded.replace("\\", "/"))
+        if relative.is_absolute() or WINDOWS_ABSOLUTE.match(decoded):
             errors.append(
                 f"{path.relative_to(root)}: absolute local link is not allowed: "
                 f"{target}"
@@ -322,6 +387,23 @@ def _validate_markdown_links(root: Path, path: Path) -> list[str]:
         if not resolved.exists():
             errors.append(f"{path.relative_to(root)}: broken link {target}")
     return errors
+
+
+def _schedule_has_cron(lines: list[str]) -> bool:
+    try:
+        start = lines.index("  schedule:") + 1
+    except ValueError:
+        return False
+    for line in lines[start:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= 2:
+            break
+        match = re.match(r"^-\s+cron:\s*(.*)$", line.strip())
+        if match and match.group(1).strip().strip('"\''):
+            return True
+    return False
 
 
 def _mapping_entries(
@@ -401,7 +483,7 @@ def _job_contract(lines: list[str]) -> dict[str, object]:
         if indent == 4 and stripped.startswith("needs:"):
             needs = stripped.split(":", 1)[1].strip()
             collecting_needs = not needs
-        if indent == 4 and stripped == "permissions:":
+        if indent == 4 and re.match(r"^permissions\s*:", stripped):
             permissions_override = True
     return {
         "commands": commands,
@@ -412,12 +494,36 @@ def _job_contract(lines: list[str]) -> dict[str, object]:
     }
 
 
+def _is_source_verification_gate(condition: str) -> bool:
+    expression = condition.strip()
+    if expression.startswith("${{") and expression.endswith("}}"):
+        expression = expression[3:-2].strip()
+    expression = expression.replace("(", "").replace(")", "")
+    branches = re.split(r"\s*\|\|\s*", expression)
+    if len(branches) != 2:
+        return False
+    events = []
+    for branch in branches:
+        match = re.fullmatch(
+            r"\s*github\.event_name\s*==\s*(['\"])(schedule|workflow_dispatch)\1\s*",
+            branch,
+        )
+        if match is None:
+            return False
+        events.append(match.group(2))
+    return set(events) == {"schedule", "workflow_dispatch"}
+
+
 def validate_workflow(path: Path) -> list[str]:
     lines = path.read_text(encoding="utf-8").splitlines()
     errors = []
     triggers = set(_mapping_entries(lines, "on"))
     for trigger in sorted(WORKFLOW_TRIGGERS - triggers):
         errors.append(f"workflow: missing trigger {trigger}")
+    if "schedule" in triggers and not _schedule_has_cron(lines):
+        errors.append(
+            "workflow: schedule trigger must contain a nonempty cron entry"
+        )
 
     permissions = _mapping_entries(lines, "permissions")
     if permissions != {"contents": "read"}:
@@ -466,14 +572,7 @@ def validate_workflow(path: Path) -> list[str]:
             errors.append(
                 "workflow: source verification job must use Python 3.11"
             )
-        gated_events = re.findall(
-            r"github\.event_name\s*==\s*['\"]([^'\"]+)['\"]",
-            str(source_job["condition"]),
-        )
-        if len(gated_events) != 2 or set(gated_events) != {
-            "schedule",
-            "workflow_dispatch",
-        }:
+        if not _is_source_verification_gate(str(source_job["condition"])):
             errors.append(
                 "workflow: source verification job must be gated to schedule "
                 "and workflow_dispatch only"

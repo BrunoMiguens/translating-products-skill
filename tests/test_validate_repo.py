@@ -518,6 +518,64 @@ npx skills add OWNER/REPOSITORY --all
 
             self.assertEqual(validate_distribution(root, self.manifest), [])
 
+    def test_distribution_accepts_decoded_angle_query_and_external_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_valid_distribution(root)
+            (root / "docs" / "My File.md").write_text(
+                "# Spaced file\n", encoding="utf-8"
+            )
+            with (root / "README.md").open("a", encoding="utf-8") as readme:
+                readme.write(
+                    "[Encoded space](docs/My%20File.md)\n"
+                    "[Angle destination](<docs/My File.md>)\n"
+                    "[Query](docs/architecture.md?view=raw)\n"
+                    "[Query fragment](docs/architecture.md?view=raw#routing)\n"
+                    "[Protocol relative](//example.com/reference)\n"
+                )
+
+            self.assertEqual(validate_distribution(root, self.manifest), [])
+
+    def test_distribution_rejects_encoded_path_controls_and_nul(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sandbox = Path(tmp)
+            root = sandbox / "repo"
+            root.mkdir()
+            self.write_valid_distribution(root)
+            external = sandbox / "outside.txt"
+            external.write_text("outside\n", encoding="utf-8")
+            residual = root / "%2e%2e"
+            residual.mkdir()
+            (residual / "outside.txt").write_text("decoy\n", encoding="utf-8")
+            with (root / "README.md").open("a", encoding="utf-8") as readme:
+                readme.write(
+                    "[Encoded parent](%2e%2e/outside.txt)\n"
+                    "[Encoded slash](..%2foutside.txt)\n"
+                    "[Encoded absolute](%2fetc%2fpasswd)\n"
+                    "[Encoded Windows absolute](C%3a%5cWindows%5cSystem32)\n"
+                    "[Encoded backslash](docs%5c..%5c..%5coutside.txt)\n"
+                    "[Double encoded parent](%252e%252e/outside.txt)\n"
+                    "[Decoded NUL](docs%00/file.md)\n"
+                )
+
+            errors = validate_distribution(root, self.manifest)
+
+        self.assertEqual(
+            [error for error in errors if "link" in error or "NUL" in error],
+            [
+                "README.md: local link escapes repository: %2e%2e/outside.txt",
+                "README.md: local link escapes repository: ..%2foutside.txt",
+                "README.md: absolute local link is not allowed: %2fetc%2fpasswd",
+                "README.md: absolute local link is not allowed: "
+                "C%3a%5cWindows%5cSystem32",
+                "README.md: local link escapes repository: "
+                "docs%5c..%5c..%5coutside.txt",
+                "README.md: local link retains encoded path control after "
+                "one decode: %252e%252e/outside.txt",
+                "README.md: decoded local link contains NUL: docs%00/file.md",
+            ],
+        )
+
     def test_distribution_reports_every_malformed_inventory_without_crashing(self):
         for label, malformed, expected in MALFORMED_INVENTORIES:
             with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
@@ -564,6 +622,16 @@ class WorkflowContractTests(unittest.TestCase):
                 VALID_WORKFLOW.replace("contents: read", "contents: write")
             ),
         )
+        empty_schedules = (
+            VALID_WORKFLOW.replace('    - cron: "23 6 * * 1"\n', ""),
+            VALID_WORKFLOW.replace('cron: "23 6 * * 1"', 'cron: ""'),
+        )
+        for mutated in empty_schedules:
+            with self.subTest(schedule=mutated):
+                self.assertIn(
+                    "workflow: schedule trigger must contain a nonempty cron entry",
+                    self.validate_text(mutated),
+                )
 
     def test_validate_job_requires_python_and_all_offline_commands(self):
         self.assertIn(
@@ -663,6 +731,49 @@ class WorkflowContractTests(unittest.TestCase):
                     "  validate:\n    permissions:\n      contents: write\n",
                 )
             ),
+        )
+        inline_permissions = (
+            "permissions: write-all",
+            "permissions: read-all",
+            "permissions: {contents: write}",
+        )
+        for declaration in inline_permissions:
+            with self.subTest(declaration=declaration):
+                self.assertIn(
+                    "workflow: job validate must not override top-level permissions",
+                    self.validate_text(
+                        VALID_WORKFLOW.replace(
+                            "  validate:\n",
+                            f"  validate:\n    {declaration}\n",
+                        )
+                    ),
+                )
+
+    def test_source_gate_requires_semantic_or_with_both_allowed_events(self):
+        condition = (
+            "github.event_name == 'schedule' || "
+            "github.event_name == 'workflow_dispatch'"
+        )
+        invalid = (
+            condition.replace(" || ", " && "),
+            "github.event_name == 'schedule'",
+            "github.event_name == 'workflow_dispatch'",
+        )
+        for gate in invalid:
+            with self.subTest(gate=gate):
+                self.assertIn(
+                    "workflow: source verification job must be gated to "
+                    "schedule and workflow_dispatch only",
+                    self.validate_text(VALID_WORKFLOW.replace(condition, gate)),
+                )
+
+        canonical = (
+            "${{ (github.event_name == \"workflow_dispatch\") || "
+            "(github.event_name == 'schedule') }}"
+        )
+        self.assertEqual(
+            self.validate_text(VALID_WORKFLOW.replace(condition, canonical)),
+            [],
         )
 
 
