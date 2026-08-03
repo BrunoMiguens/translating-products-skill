@@ -1,0 +1,33 @@
+scripts/validate_repo.py
+  s_51f69c54a42bb0::t_8922c9958d9f8f 365-369
+  s_51f69c54a42bb0::t_4aeb025090a20f 380,385-389,403
+  s_51f69c54a42bb0::t_63b898e1975ec4 14,497-500
+  s_51f69c54a42bb0::t_7be059dfb5671d 299,305-322
+  s_51f69c54a42bb0::t_e97879146afd2a 35-41,327-364,370-379,381-384,390-402,404-487,516-518
+scripts/render_catalog.py
+  s_51f69c54a42bb0::t_63b898e1975ec4 6,32-61,164,166,189-197
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_352c1b30c147d2 482-519,751
+  s_51f69c54a42bb0::t_1b799c831c3e1f 27-36,39,44,49,55
+  s_51f69c54a42bb0::t_35c18fd56df469 625-633,646-647,649-665
+  s_51f69c54a42bb0::t_5f1be8bb9e7a40 8-12,705-750
+  s_51f69c54a42bb0::t_91cb74f1e6bded 18,58-91,431,531-562,566-624,634-645,666
+  s_51f69c54a42bb0::t_59936001d73f3b 23-26,37-38,40-43,45-48,50-54,56-57,520-530,667-704
+  s_51f69c54a42bb0::t_8922c9958d9f8f 563-565,648
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "ddb3226dbdf5718fd2ce262f0d3e0af9f4252406",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
