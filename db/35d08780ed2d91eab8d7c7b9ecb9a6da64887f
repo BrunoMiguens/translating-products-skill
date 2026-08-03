@@ -1,0 +1,39 @@
+adapters/agrici-blog.md
+  s_51f69c54a42bb0::t_45afa6ccb2098a 1-82
+adapters/johnrogers-apple-localization.md
+  s_51f69c54a42bb0::t_45afa6ccb2098a 1-64
+adapters/vasily-software-localisation.md
+  s_51f69c54a42bb0::t_45afa6ccb2098a 1-65
+THIRD_PARTY_NOTICES.md
+  s_51f69c54a42bb0::t_6927e12e8b8e6f 30-39,47,62-63
+  s_51f69c54a42bb0::t_c3944d4dacc06b 3-6,8,10-29,40-46,48-61,64-88
+scripts/verify_sources.py
+  s_51f69c54a42bb0::t_244ccce3ef7d6a 1-91,95-130
+  s_51f69c54a42bb0::t_437fa774be2222 92-94
+adapters/flutter-localization.md
+  s_51f69c54a42bb0::t_45afa6ccb2098a 1-64
+adapters/eronred-app-store.md
+  s_51f69c54a42bb0::t_45afa6ccb2098a 1-66
+tests/test_source_lock.py
+  s_51f69c54a42bb0::t_4583b29188fbff 1-3,5-91,104,106-113,115-149
+  s_51f69c54a42bb0::t_091493852a6438 4,99,103
+  s_51f69c54a42bb0::t_486c16c7a5de4d 92-98,100-102,105,114
+adapters/kostja-translation.md
+  s_51f69c54a42bb0::t_45afa6ccb2098a 1-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "db35d08780ed2d91eab8d7c7b9ecb9a6da64887f",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
