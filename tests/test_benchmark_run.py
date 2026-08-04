@@ -318,6 +318,18 @@ print(json.dumps(envelope, sort_keys=True))
         manifest = json.loads((self.evidence / "run-manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["sandbox_probe"]["probe_version"], 1)
         self.assertEqual(manifest["sandbox_probe"]["snapshot_sha256"], manifest["input_snapshot"]["sha256"])
+        expected_policy_sha256 = sha256_bytes(canonical_bytes({
+            "schema_version": 1,
+            "tools": ["read-project"],
+            "network": "disabled",
+            "research": {"mode": "case-declared-only", "unresolved_question": None},
+        }))
+        self.assertTrue(all(
+            getattr(result, "expected_policy_sha256", None) == expected_policy_sha256
+            for result in results
+        ))
+        self.assertTrue(all(result.applied_policy_sha256 == expected_policy_sha256 for result in results))
+        self.assertTrue(all(getattr(result, "policy_integrity", None) == "verified" for result in results))
         adapter_log = self.write_adapter().with_suffix(".log").read_text(encoding="utf-8")
         self.assertNotIn("probe\n", adapter_log)
         execute_schedule(
@@ -398,6 +410,100 @@ print(json.dumps(envelope, sort_keys=True))
                 schedule[:1], CliRunner(valid["command"], sandbox_adapter=valid["sandbox_adapter"]),
                 poisoned, cases=cases, config=valid, templates=templates(),
             )
+
+    def test_cli_policy_mismatch_is_persisted_then_aborts_without_retry_or_progress(self):
+        """Break: an unbound malformed policy outcome could be retained while later runs proceed."""
+        case = one_translation_case()
+        schedule = [
+            RunSpec("policy-integrity-a", case["id"], "normal", 1),
+            RunSpec("policy-integrity-b", case["id"], "normal", 2),
+        ]
+        config = self.cli_config()
+        config["command"] = [*config["command"], "--adapter-outcome=policy-mismatch"]
+        runner = CliRunner(config["command"], sandbox_adapter=config["sandbox_adapter"])
+        expected_policy_sha256 = sha256_bytes(canonical_bytes({
+            "schema_version": 1,
+            "tools": ["read-project"],
+            "network": "disabled",
+            "research": {"mode": "case-declared-only", "unresolved_question": None},
+        }))
+
+        with self.assertRaisesRegex(BenchmarkError, "policy integrity"):
+            execute_schedule(
+                schedule, runner, self.evidence,
+                cases=[case], config=config, templates=templates(),
+            )
+
+        records = read_jsonl(self.evidence / "runs.jsonl")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["run_id"], "policy-integrity-a")
+        self.assertEqual(records[0]["status"], "model_outcome")
+        self.assertTrue(records[0]["malformed_output"])
+        self.assertEqual(records[0]["expected_policy_sha256"], expected_policy_sha256)
+        self.assertEqual(records[0]["applied_policy_sha256"], "f" * 64)
+        self.assertEqual(records[0]["policy_integrity"], "failed")
+        adapter_log = Path(config["sandbox_adapter"][1]).with_suffix(".log")
+        self.assertEqual(adapter_log.read_text(encoding="utf-8").splitlines(), ["run", "run"])
+
+        with self.assertRaisesRegex(BenchmarkError, "policy integrity"):
+            execute_schedule(
+                schedule, runner, self.evidence,
+                cases=[case], config=config, templates=templates(),
+            )
+        self.assertEqual(len(read_jsonl(self.evidence / "runs.jsonl")), 1)
+        self.assertEqual(
+            adapter_log.read_text(encoding="utf-8").splitlines(), ["run", "run", "run"]
+        )
+
+    def test_resume_refuses_literal_legacy_cli_records_without_exact_policy_binding(self):
+        """Break: legacy CLI records with absent or wrong policy proof could be skipped."""
+        case = one_translation_case()
+        schedule = [RunSpec("legacy-cli", case["id"], "normal", 1)]
+        config = self.cli_config()
+        runner = CliRunner(config["command"], sandbox_adapter=config["sandbox_adapter"])
+        expected_policy_sha256 = sha256_bytes(canonical_bytes({
+            "schema_version": 1,
+            "tools": ["read-project"],
+            "network": "disabled",
+            "research": {"mode": "case-declared-only", "unresolved_question": None},
+        }))
+        base_record = {
+            "schema_version": 1,
+            "run_id": "legacy-cli", "case_id": case["id"], "condition": "normal",
+            "attempt": 1, "runner_mode": "cli", "status": "completed",
+            "failure_class": "success", "process_started": True,
+            "started_at": "2026-08-03T00:00:00Z", "completed_at": "2026-08-03T00:00:01Z",
+            "exit_code": 0, "timed_out": False, "refused": False,
+            "malformed_output": False, "tool_misuse": False, "reason": None,
+            "output_sha256": "0" * 64, "raw_output_path": "raw/legacy.txt",
+            "stderr": "", "telemetry": {}, "usage": {}, "redacted": False,
+            "project_fingerprint": "legacy-project", "argv": ["adapter"], "shell": False,
+        }
+
+        variants = (
+            ("missing", {}),
+            ("mismatched", {
+                "expected_policy_sha256": expected_policy_sha256,
+                "applied_policy_sha256": "b" * 64,
+                "policy_integrity": "verified",
+            }),
+        )
+        for label, policy_binding in variants:
+            with self.subTest(label=label):
+                evidence = self.evidence / label
+                execute_schedule(
+                    schedule, runner, evidence,
+                    cases=[case], config=config, templates=templates(),
+                )
+                record = dict(base_record)
+                record.update(policy_binding)
+                (evidence / "runs.jsonl").write_bytes(canonical_bytes(record))
+
+                with self.assertRaisesRegex(BenchmarkError, "policy integrity"):
+                    execute_schedule(
+                        schedule, runner, evidence,
+                        cases=[case], config=config, templates=templates(),
+                    )
 
     def test_cli_refuses_scratch_inside_repository_and_failed_probe(self):
         """Break: an in-repository scratch root or unproved adapter could expose host files."""
@@ -562,8 +668,6 @@ print(json.dumps(envelope, sort_keys=True))
             ("refused", "refused"),
             ("malformed", "malformed_output"),
             ("tool-misuse", "tool_misuse"),
-            ("invalid-envelope", "malformed_output"),
-            ("policy-mismatch", "malformed_output"),
         )):
             config = self.cli_config()
             config["command"] = [*config["command"], f"--adapter-outcome={flag}"]

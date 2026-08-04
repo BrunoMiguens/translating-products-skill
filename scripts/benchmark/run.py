@@ -12,7 +12,7 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from .common import (
@@ -167,7 +167,9 @@ class Invocation:
     reason: str | None = None
     telemetry: object = None
     usage: object = None
+    expected_policy_sha256: str | None = None
     applied_policy_sha256: str | None = None
+    policy_integrity: str = "not_required"
 
     @classmethod
     def from_completed_process(
@@ -206,7 +208,9 @@ class RunResult:
     stderr: str
     telemetry: object
     usage: object
+    expected_policy_sha256: str | None
     applied_policy_sha256: str | None
+    policy_integrity: str
     redacted: bool
     project_fingerprint: str
     argv: tuple[str, ...]
@@ -224,7 +228,15 @@ class RunResult:
         if values.pop("schema_version", None) != SCHEMA_VERSION:
             raise BenchmarkError("existing run record schema version mismatch")
         values.setdefault("usage", {})
-        values.setdefault("applied_policy_sha256", None)
+        policy_fields = {
+            "expected_policy_sha256", "applied_policy_sha256", "policy_integrity",
+        }
+        if values.get("runner_mode") == "cli" and not policy_fields <= values.keys():
+            raise BenchmarkError("existing CLI run policy integrity binding is missing")
+        if values.get("runner_mode") != "cli":
+            values.setdefault("expected_policy_sha256", None)
+            values.setdefault("applied_policy_sha256", None)
+            values.setdefault("policy_integrity", "not_required")
         values["argv"] = tuple(values.get("argv", ()))
         try:
             return cls(**values)
@@ -356,6 +368,7 @@ class CliRunner:
         timeout_seconds: int,
     ) -> Invocation:
         agent = tuple(command)
+        expected_policy_hash = sha256_bytes(policy_path.read_bytes())
         argv = self.sandbox_adapter + (
             "run", "--project", str(project_dir), "--home", str(home_dir),
             "--policy", str(policy_path), "--",
@@ -366,24 +379,48 @@ class CliRunner:
             timeout_seconds=timeout_seconds,
         )
         if isinstance(completed, Invocation):
-            return completed
+            return replace(
+                completed,
+                expected_policy_sha256=expected_policy_hash,
+                policy_integrity="failed",
+            )
+        envelope = None
+        try:
+            envelope = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            pass
+        reported_policy_hash = (
+            envelope.get("applied_policy_sha256")
+            if isinstance(envelope, Mapping)
+            and isinstance(envelope.get("applied_policy_sha256"), str)
+            else None
+        )
+        policy_integrity = (
+            "verified" if reported_policy_hash == expected_policy_hash else "failed"
+        )
         if completed.returncode != 0:
             return Invocation(
                 argv, False, True, started_at, utc_now(), completed.returncode,
                 "", completed.stderr, malformed_output=True,
                 reason="sandbox_adapter_failed", telemetry={"adapter_stdout": completed.stdout},
+                expected_policy_sha256=expected_policy_hash,
+                applied_policy_sha256=reported_policy_hash,
+                policy_integrity=policy_integrity,
             )
         try:
-            envelope = json.loads(completed.stdout)
-            expected_policy_hash = sha256_bytes(policy_path.read_bytes())
+            if envelope is None:
+                raise BenchmarkError("adapter invocation envelope is not valid JSON")
             return _invocation_from_envelope(
                 envelope, argv, expected_policy_sha256=expected_policy_hash
             )
-        except (json.JSONDecodeError, BenchmarkError) as error:
+        except BenchmarkError as error:
             return Invocation(
                 argv, False, True, started_at, utc_now(), 0, "", completed.stderr,
                 malformed_output=True, reason=f"invalid_adapter_envelope: {error}",
                 telemetry={"adapter_stdout": completed.stdout},
+                expected_policy_sha256=expected_policy_hash,
+                applied_policy_sha256=reported_policy_hash,
+                policy_integrity=policy_integrity,
             )
 
     def _run_adapter(
@@ -487,7 +524,9 @@ def _invocation_from_envelope(
         reason=value["reason"],
         telemetry=value["telemetry"],
         usage=value["usage"],
+        expected_policy_sha256=expected_policy_sha256,
         applied_policy_sha256=value["applied_policy_sha256"],
+        policy_integrity="verified",
     )
 
 
@@ -890,7 +929,12 @@ def _ensure_run_manifest(
     atomic_write_json(target, manifest)
 
 
-def _existing_results(evidence_dir: Path, schedule: Sequence[RunSpec]) -> dict[str, RunResult]:
+def _existing_results(
+    evidence_dir: Path,
+    schedule: Sequence[RunSpec],
+    *,
+    expected_policy_sha256_by_run: Mapping[str, str] | None = None,
+) -> dict[str, RunResult]:
     path = evidence_dir / "runs.jsonl"
     if not path.exists():
         return {}
@@ -903,6 +947,21 @@ def _existing_results(evidence_dir: Path, schedule: Sequence[RunSpec]) -> dict[s
         if run_id in results:
             raise BenchmarkError(f"existing evidence has duplicate run id: {run_id}")
         result = RunResult.from_record(record)
+        if result.runner_mode == "cli":
+            expected_policy_sha256 = (
+                expected_policy_sha256_by_run.get(result.run_id)
+                if expected_policy_sha256_by_run is not None
+                else None
+            )
+            if (
+                expected_policy_sha256 is None
+                or result.expected_policy_sha256 != expected_policy_sha256
+                or result.applied_policy_sha256 != expected_policy_sha256
+                or result.policy_integrity != "verified"
+            ):
+                raise BenchmarkError(
+                    f"existing CLI run policy integrity is not verified: {result.run_id}"
+                )
         results[result.run_id] = result
     return results
 
@@ -1176,7 +1235,9 @@ def _result_from_invocation(
         "stderr": invocation.stderr,
         "telemetry": invocation.telemetry,
         "usage": invocation.usage,
+        "expected_policy_sha256": invocation.expected_policy_sha256,
         "applied_policy_sha256": invocation.applied_policy_sha256,
+        "policy_integrity": invocation.policy_integrity,
         "redacted": False,
         "project_fingerprint": project_fingerprint,
         "argv": list(invocation.argv),
@@ -1246,7 +1307,19 @@ def execute_schedule(
         evidence_dir, schedule, validated,
         input_snapshot=snapshot_manifest, sandbox_probe=probe_manifest,
     )
-    completed = _existing_results(evidence_dir, schedule)
+    expected_policy_sha256_by_run = None
+    if validated["mode"] == "cli":
+        expected_policy_sha256_by_run = {
+            spec.run_id: sha256_bytes(canonical_bytes(
+                _policy_for_case(validated, case_map[spec.case_id], spec.condition)
+            ))
+            for spec in schedule
+        }
+    completed = _existing_results(
+        evidence_dir,
+        schedule,
+        expected_policy_sha256_by_run=expected_policy_sha256_by_run,
+    )
     redactor = _redactor(validated)
     for spec in schedule:
         if spec.run_id in completed:
@@ -1288,6 +1361,10 @@ def execute_schedule(
             )
             append_jsonl_fsync(evidence_dir / "runs.jsonl", result.to_record())
             completed[spec.run_id] = result
+            if validated["mode"] == "cli" and result.policy_integrity != "verified":
+                raise BenchmarkError(
+                    f"CLI run policy integrity failed: {spec.run_id}; experiment aborted"
+                )
     return [completed[spec.run_id] for spec in schedule]
 
 
