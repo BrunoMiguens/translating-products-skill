@@ -1,0 +1,31 @@
+tests/test_benchmark_prompts.py
+  s_51f69c54a42bb0::t_813906b0a3f18f 3,68-75,133-134,137-163,166-178
+  s_51f69c54a42bb0::t_d9d0e2aa534a8f 164-165
+  s_d6a79b2782ba0c::t_2a5de719b6c5a3 179
+scripts/benchmark/prompts.py
+  s_51f69c54a42bb0::t_e6e6bc7aeec52b 94-98,132-133,138-139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "1ca41500b6fffb600e8441a7b0a15b39cd792f99",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    },
+    "s_d6a79b2782ba0c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc09-7cfd-7361-97f5-1d43ba9e2040",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
