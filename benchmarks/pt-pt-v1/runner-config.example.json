@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "agent": "deterministic-fake-agent",
+  "host_version": "1.0.0",
+  "model": "fixture-model-v1",
+  "mode": "fake",
+  "command": [],
+  "settings": {"temperature": 0, "research": "case-declared-only"},
+  "timeout_seconds": 120,
+  "suite_path": ".",
+  "scratch_root": ".benchmark-tmp"
+}
