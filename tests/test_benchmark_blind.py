@@ -379,6 +379,50 @@ class BlindingTests(unittest.TestCase):
             with self.subTest(encoded=encoded), self.assertRaises(BenchmarkError):
                 build_blind_bundle(complete_synthetic_runs(), changed_cases, SEED)
 
+    def test_builder_combines_each_surrogate_pair_despite_unrelated_malformed_text(self):
+        """Break: one lone surrogate must not hide a separate encoded private scalar."""
+        hidden = "Hidden 😀 value"
+        nested = json.dumps(json.dumps(r"Hidden \ud83d\ude00 value \ud800"))
+        bounded = r"Hidden \ud83d\ude00 value \ud800"
+        for _ in range(20):
+            bounded = bounded.replace("\\", r"\u005c")
+        reproducers = (
+            (hidden, r"\ud800 Hidden \ud83d\ude00 value"),
+            (hidden, r"Hidden \ud83d\ude00 value \ud800"),
+            (hidden, r"\udc00 Hidden \ud83d\ude00 value"),
+            (hidden, r"Hidden \ud83d\ude00 value \udc00"),
+            (
+                "Other 🚀 then Hidden 😀 value",
+                r"Other \ud83d\ude80 then Hidden \ud83d\ude00 value \ud800",
+            ),
+            (
+                "Literal café Hidden 😀 value",
+                "Literal café " + r"Hidden \ud83d\ude00 value \udc00",
+            ),
+            (hidden, r"Invalid \u12xz then Hidden \ud83d\ude00 value"),
+            (hidden, nested),
+            (hidden, bounded),
+        )
+        for private, encoded in reproducers:
+            changed_cases = [dict(case) for case in cases()]
+            changed_cases[0].update({"reviewer_secret": private, "context": encoded})
+            with self.subTest(encoded=encoded), self.assertRaises(BenchmarkError):
+                build_blind_bundle(complete_synthetic_runs(), changed_cases, SEED)
+
+        excessive = r"\u0068armless"
+        for _ in range(40):
+            excessive = excessive.replace("\\", r"\u005c")
+        over_budget_cases = [dict(case) for case in cases()]
+        over_budget_cases[0]["context"] = excessive
+        with self.assertRaises(BenchmarkError):
+            build_blind_bundle(complete_synthetic_runs(), over_budget_cases, SEED)
+
+        lone = r"before \ud800 middle \udc00 after"
+        self.assertEqual(
+            blind._unicode_unescape(lone),
+            "before \ud800 middle \udc00 after",
+        )
+
     def test_encoded_hidden_literals_remain_allowed_in_opaque_review_content(self):
         """Break: leak hardening must not scan source, candidate, or generated outputs."""
         changed_cases = cases()
@@ -555,6 +599,37 @@ class BlindingCliTests(unittest.TestCase):
             "input_snapshot": _snapshot_manifest(snapshot),
         })
         atomic_write_json(self.evidence / "run-manifest.json", manifest)
+
+    def _bind_dirty_suite(self, diff_artifact: Path) -> None:
+        dataset_manifest = build_dataset_manifest(
+            self.dataset,
+            suite_commit="abc123",
+            suite_dirty=True,
+            snapshot_id="fixture-dirty-snapshot",
+            diff_artifact=diff_artifact,
+        )
+        atomic_write_json(self.dataset / "dataset-manifest.json", dataset_manifest)
+        run_manifest_path = self.evidence / "run-manifest.json"
+        run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        run_manifest["dataset"] = {
+            "dataset_sha256": dataset_manifest["dataset_sha256"],
+            "manifest_sha256": sha256_bytes(canonical_bytes(dataset_manifest)),
+        }
+        run_manifest["suite"] = {
+            "commit": dataset_manifest["suite_commit"],
+            "dirty": True,
+            "snapshot_id": dataset_manifest["suite"]["snapshot_id"],
+            "diff_sha256": dataset_manifest["suite"]["diff_sha256"],
+        }
+        atomic_write_json(run_manifest_path, run_manifest)
+
+    def _dirty_diff(self, name: str, *, inside_dataset: bool = False) -> Path:
+        parent = self.dataset if inside_dataset else self.root / f"diff-parent-{name}"
+        parent.mkdir(exist_ok=True)
+        artifact = parent / f"{name}.diff"
+        artifact.write_text("diff --git a/input b/input\n+fixture\n", encoding="utf-8")
+        self._bind_dirty_suite(artifact)
+        return artifact
 
     def cli_args(self, review: Path, key: Path) -> list[str]:
         return [
@@ -833,6 +908,179 @@ class BlindingCliTests(unittest.TestCase):
             with (
                 self.subTest(target=target.relative_to(self.root)),
                 mock.patch.object(blind, "_atomic_create_pair", replace_then_publish),
+                mock.patch.object(blind.sys, "stdout", stdout),
+                mock.patch.object(blind.sys, "stderr", stderr),
+            ):
+                result = blind.main(self.cli_args(review, key))
+                self.assertEqual(result, 2)
+                self.assertFalse(review.exists())
+                self.assertFalse(key.exists())
+
+    def test_cli_accepts_bound_dirty_diff_paths_inside_and_outside_input_roots(self):
+        """Break: dirty provenance binding must support valid in-root and external files."""
+        for index, inside_dataset in enumerate((False, True)):
+            self._dirty_diff(f"valid-{index}", inside_dataset=inside_dataset)
+            public_dir = self.root / f"public-dirty-valid-{index}"
+            private_dir = self.root / f"private-dirty-valid-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+
+            completed = self.run_cli(
+                public_dir / "bundle.json", private_dir / "key.json"
+            )
+
+            with self.subTest(inside_dataset=inside_dataset):
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_cli_rejects_dirty_diff_symlink_and_parent_aliases(self):
+        """Break: dirty provenance must not follow an artifact or parent-directory symlink."""
+        real_parent = self.root / "real-diff-parent"
+        real_parent.mkdir()
+        real_diff = real_parent / "suite.diff"
+        real_diff.write_text("diff --git a/input b/input\n+fixture\n", encoding="utf-8")
+        artifact_alias = self.root / "artifact-alias.diff"
+        os.symlink(real_diff, artifact_alias)
+        parent_alias = self.root / "parent-alias"
+        os.symlink(real_parent, parent_alias)
+        for index, artifact in enumerate((artifact_alias, parent_alias / real_diff.name)):
+            self._bind_dirty_suite(artifact)
+            public_dir = self.root / f"public-dirty-alias-{index}"
+            private_dir = self.root / f"private-dirty-alias-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+
+            completed = self.run_cli(
+                public_dir / "bundle.json", private_dir / "key.json"
+            )
+
+            with self.subTest(artifact=artifact):
+                self.assertEqual(completed.returncode, 2, completed.stdout)
+                self.assertFalse((public_dir / "bundle.json").exists())
+                self.assertFalse((private_dir / "key.json").exists())
+
+    def test_cli_rolls_back_external_dirty_diff_identity_type_and_byte_mutations(self):
+        """Break: every externally loaded diff attribute must stay bound through publication."""
+        def replace_same_bytes(path: Path) -> None:
+            self._replace_with_same_bytes(path)
+
+        def delete(path: Path) -> None:
+            path.unlink()
+
+        def replace_with_directory(path: Path) -> None:
+            path.unlink()
+            path.mkdir()
+
+        def add_link(path: Path) -> None:
+            os.link(path, path.with_name(f"{path.name}.extra-link"))
+
+        def change_mode(path: Path) -> None:
+            path.chmod(0o600 if stat.S_IMODE(path.stat().st_mode) != 0o600 else 0o644)
+
+        def change_timestamp(path: Path) -> None:
+            before = path.stat()
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+
+        def replace_parent(path: Path) -> None:
+            parent = path.parent
+            displaced = parent.with_name(f"{parent.name}-displaced")
+            encoded = path.read_bytes()
+            parent.rename(displaced)
+            parent.mkdir()
+            (parent / path.name).write_bytes(encoded)
+
+        mutations = (
+            ("same-byte replacement", replace_same_bytes),
+            ("deletion", delete),
+            ("type change", replace_with_directory),
+            ("link count", add_link),
+            ("mode", change_mode),
+            ("timestamps", change_timestamp),
+            ("parent identity", replace_parent),
+        )
+        original_publish = blind._atomic_create_pair
+        for index, (name, mutate) in enumerate(mutations):
+            artifact = self._dirty_diff(f"mutation-{index}")
+            public_dir = self.root / f"public-dirty-mutation-{index}"
+            private_dir = self.root / f"private-dirty-mutation-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+            review = public_dir / "bundle.json"
+            key = private_dir / "key.json"
+
+            def mutate_then_publish(*args, _artifact=artifact, _mutate=mutate, **kwargs):
+                _mutate(_artifact)
+                return original_publish(*args, **kwargs)
+
+            stdout = mock.Mock(buffer=io.BytesIO())
+            stderr = io.StringIO()
+            with (
+                self.subTest(name=name),
+                mock.patch.object(blind, "_atomic_create_pair", mutate_then_publish),
+                mock.patch.object(blind.sys, "stdout", stdout),
+                mock.patch.object(blind.sys, "stderr", stderr),
+            ):
+                result = blind.main(self.cli_args(review, key))
+                self.assertEqual(result, 2)
+                self.assertFalse(review.exists())
+                self.assertFalse(key.exists())
+
+    def test_cli_checks_external_dirty_diff_before_after_and_at_final_acceptance(self):
+        """Break: a same-byte swap at any acceptance checkpoint must fail closed."""
+        for index, phase in enumerate(("prepublication", "postpublication", "final")):
+            artifact = self._dirty_diff(f"checkpoint-{index}")
+            public_dir = self.root / f"public-dirty-checkpoint-{index}"
+            private_dir = self.root / f"private-dirty-checkpoint-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+            review = public_dir / "bundle.json"
+            key = private_dir / "key.json"
+            patches = []
+            if phase == "prepublication":
+                original_validate = blind._validate_prepared_manifest
+                validations = 0
+
+                def validate_then_replace(*args, **kwargs):
+                    nonlocal validations
+                    result = original_validate(*args, **kwargs)
+                    validations += 1
+                    if validations == 2:
+                        self._replace_with_same_bytes(artifact)
+                    return result
+
+                patches.append(mock.patch.object(
+                    blind, "_validate_prepared_manifest", validate_then_replace
+                ))
+            elif phase == "postpublication":
+                original_publish = blind._atomic_create_pair
+
+                def publish_then_replace(*args, **kwargs):
+                    original_publish(*args, **kwargs)
+                    self._replace_with_same_bytes(artifact)
+
+                patches.append(mock.patch.object(
+                    blind, "_atomic_create_pair", publish_then_replace
+                ))
+            else:
+                original_read = blind._read_published
+                reads = 0
+
+                def read_then_replace(target):
+                    nonlocal reads
+                    encoded = original_read(target)
+                    reads += 1
+                    if reads == 4:
+                        self._replace_with_same_bytes(artifact)
+                    return encoded
+
+                patches.append(mock.patch.object(
+                    blind, "_read_published", read_then_replace
+                ))
+
+            stdout = mock.Mock(buffer=io.BytesIO())
+            stderr = io.StringIO()
+            with (
+                self.subTest(phase=phase),
+                patches[0],
                 mock.patch.object(blind.sys, "stdout", stdout),
                 mock.patch.object(blind.sys, "stderr", stderr),
             ):

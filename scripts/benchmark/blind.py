@@ -464,10 +464,20 @@ def _unicode_unescape(value: str) -> str:
         lambda match: chr(int(match.group(1), 16)),
         decoded,
     )
-    try:
-        return decoded.encode("utf-16-le", "surrogatepass").decode("utf-16-le")
-    except UnicodeDecodeError:
-        return decoded
+    combined: list[str] = []
+    index = 0
+    while index < len(decoded):
+        high = ord(decoded[index])
+        if 0xD800 <= high <= 0xDBFF and index + 1 < len(decoded):
+            low = ord(decoded[index + 1])
+            if 0xDC00 <= low <= 0xDFFF:
+                scalar = 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)
+                combined.append(chr(scalar))
+                index += 2
+                continue
+        combined.append(decoded[index])
+        index += 1
+    return "".join(combined)
 
 
 def _base64_scalar(value: str) -> str | None:
@@ -884,6 +894,21 @@ class _HeldInputTree:
         self.directory_fds.clear()
 
 
+@dataclass
+class _HeldDiffArtifact:
+    path: Path
+    parent: Path
+    name: str
+    directory_fd: int
+    directory_identity: tuple[int, int]
+    binding: _InputBinding
+
+    def close(self) -> None:
+        if self.directory_fd >= 0:
+            os.close(self.directory_fd)
+            self.directory_fd = -1
+
+
 def _capture_regular_input(directory_fd: int, location: str, name: str) -> _InputBinding:
     try:
         descriptor = os.open(
@@ -934,6 +959,84 @@ def _capture_regular_input(directory_fd: int, location: str, name: str) -> _Inpu
         sha256=sha256_bytes(encoded),
         encoded=encoded,
     )
+
+
+def _open_held_diff_artifact(dataset_manifest_bytes: bytes) -> _HeldDiffArtifact | None:
+    manifest = _parse_canonical_json(dataset_manifest_bytes, "dataset manifest")
+    if not isinstance(manifest, Mapping):
+        raise BenchmarkError("dataset manifest must be an object")
+    if manifest.get("suite_dirty") is not True:
+        return None
+    suite = manifest.get("suite")
+    if not isinstance(suite, Mapping):
+        raise BenchmarkError("dirty dataset suite provenance is malformed")
+    path_value = suite.get("diff_artifact")
+    if not isinstance(path_value, str) or not path_value:
+        raise BenchmarkError("dirty suite diff artifact path is malformed")
+    expected_sha256 = _require_sha256(
+        suite.get("diff_sha256"), "suite diff hash"
+    )
+    path = Path(path_value)
+    if path.name in {"", ".", ".."} or path.is_symlink():
+        raise BenchmarkError("refusing symlink or invalid suite diff artifact")
+    parent = path.parent
+    try:
+        directory_fd = os.open(parent, _directory_flags())
+    except OSError as error:
+        raise BenchmarkError(
+            f"cannot securely open suite diff artifact parent: {error}"
+        ) from error
+    try:
+        held_parent = os.fstat(directory_fd)
+        named_parent = os.stat(parent, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(held_parent.st_mode)
+            or not stat.S_ISDIR(named_parent.st_mode)
+            or _identity(held_parent) != _identity(named_parent)
+        ):
+            raise BenchmarkError("suite diff artifact parent identity changed while opening")
+        binding = _capture_regular_input(
+            directory_fd, "suite diff artifact", path.name
+        )
+        if binding.sha256 != expected_sha256:
+            raise BenchmarkError("suite diff artifact hash mismatch")
+        held = _HeldDiffArtifact(
+            path=path,
+            parent=parent,
+            name=path.name,
+            directory_fd=directory_fd,
+            directory_identity=_identity(held_parent),
+            binding=binding,
+        )
+        _verify_held_diff_artifact(held)
+        return held
+    except Exception:
+        os.close(directory_fd)
+        raise
+
+
+def _verify_held_diff_artifact(held: _HeldDiffArtifact | None) -> None:
+    if held is None:
+        return
+    try:
+        held_parent = os.fstat(held.directory_fd)
+        named_parent = os.stat(held.parent, follow_symlinks=False)
+    except OSError as error:
+        raise BenchmarkError(
+            f"suite diff artifact parent identity changed: {error}"
+        ) from error
+    if (
+        not stat.S_ISDIR(held_parent.st_mode)
+        or not stat.S_ISDIR(named_parent.st_mode)
+        or _identity(held_parent) != held.directory_identity
+        or _identity(named_parent) != held.directory_identity
+    ):
+        raise BenchmarkError("suite diff artifact parent identity changed")
+    current = _capture_regular_input(
+        held.directory_fd, "suite diff artifact", held.name
+    )
+    if current != held.binding:
+        raise BenchmarkError("suite diff artifact changed after loading")
 
 
 def _directory_snapshot(descriptor: int) -> tuple[tuple[str, str], ...]:
@@ -1614,6 +1717,7 @@ def main(argv: list[str] | None = None) -> int:
     evidence_inputs: _HeldEvidenceInputs | None = None
     dataset_inputs: _HeldInputTree | None = None
     snapshot_inputs: _HeldInputTree | None = None
+    diff_input: _HeldDiffArtifact | None = None
     try:
         review_target, key_target = _validate_output_targets(
             arguments.review_bundle,
@@ -1630,7 +1734,9 @@ def main(argv: list[str] | None = None) -> int:
             evidence_inputs, "evidence", "run-manifest.json", bind=True
         )
         dataset_manifest_bytes = dataset_inputs.bytes("dataset-manifest.json")
+        diff_input = _open_held_diff_artifact(dataset_manifest_bytes)
         verify_dataset_manifest(arguments.dataset)
+        _verify_held_diff_artifact(diff_input)
         run_manifest, prepared_provenance = _validate_prepared_manifest(
             arguments.dataset,
             arguments.evidence,
@@ -1666,11 +1772,13 @@ def main(argv: list[str] | None = None) -> int:
         _verify_evidence_inputs(evidence_inputs)
         _verify_input_tree(dataset_inputs)
         _verify_input_tree(snapshot_inputs)
+        _verify_held_diff_artifact(diff_input)
         _atomic_create_pair(review_target, bundle, key_target, key)
         try:
             _verify_evidence_inputs(evidence_inputs)
             _verify_input_tree(dataset_inputs)
             _verify_input_tree(snapshot_inputs)
+            _verify_held_diff_artifact(diff_input)
             verify_dataset_manifest(arguments.dataset)
             published_manifest, published_provenance = _validate_prepared_manifest(
                 arguments.dataset,
@@ -1706,6 +1814,7 @@ def main(argv: list[str] | None = None) -> int:
             _verify_evidence_inputs(evidence_inputs)
             _verify_input_tree(dataset_inputs)
             _verify_input_tree(snapshot_inputs)
+            _verify_held_diff_artifact(diff_input)
         except Exception as error:
             _rollback_targets((review_target, key_target))
             if isinstance(error, BenchmarkError):
@@ -1730,6 +1839,8 @@ def main(argv: list[str] | None = None) -> int:
             dataset_inputs.close()
         if snapshot_inputs is not None:
             snapshot_inputs.close()
+        if diff_input is not None:
+            diff_input.close()
 
 
 if __name__ == "__main__":
