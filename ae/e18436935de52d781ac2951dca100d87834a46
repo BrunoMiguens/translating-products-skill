@@ -1,0 +1,31 @@
+.superpowers/sdd/2026-08-03-pt-pt-translation-benchmark/task-5-report.md
+  s_51f69c54a42bb0::t_6a4372538e7aa5 1-154
+scripts/benchmark/blind.py
+  s_51f69c54a42bb0::t_c18e10e072517b 531-532
+  s_51f69c54a42bb0::t_c74107c60633e8 39,67,366,399-402
+  s_51f69c54a42bb0::t_9ca15f30e44a5b 132,136-141,153,158-164
+  s_51f69c54a42bb0::t_6e0f4ff41d0af3 1-38,40-66,68-131,133-135,142-152,154-157,165-177,180-248,253-309,314-365,367-398,403-530,533-638
+  s_51f69c54a42bb0::t_9a67a030315cfa 178-179,249-252,310-313
+tests/test_benchmark_blind.py
+  s_51f69c54a42bb0::t_cae52d9e6a2446 1-146,148-150,152-166,172-177,179-205,218-321,325-354
+  s_51f69c54a42bb0::t_23f43d9e268208 147,151
+  s_51f69c54a42bb0::t_beaccb6968341e 178
+  s_51f69c54a42bb0::t_c18e10e072517b 167-171,322-324
+  s_51f69c54a42bb0::t_5bbb98f160fadc 206-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "aee18436935de52d781ac2951dca100d87834a46",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
