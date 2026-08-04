@@ -328,7 +328,7 @@ class ValidatorTests(unittest.TestCase):
         valid = validate_output(case, candidate)
         malformed_candidate = validate_output(
             case,
-            "{count, plural, offset:.5 =0 {Nenhum} one {Um} other {Outros}}",
+            "{count, plural, offset:. =0 {Nenhum} one {Um} other {Outros}}",
         )
         non_pattern_source = validate_output(
             case_with_checks(
@@ -343,6 +343,55 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(malformed_candidate.status, "failed")
         self.assertEqual(malformed_candidate.validator_errors, ())
         self.assertEqual(non_pattern_source.status, "validator_error")
+
+    def test_icu_offsets_accept_double_forms_and_preserve_error_domains(self):
+        """Break: valid ICU Double offsets could fail or malformed offsets change domains."""
+        check = [{"type": "icu_topology", "severity": "critical"}]
+        for source_offset, candidate_offset in (
+            (" 1", "1.0"),
+            (".5", "0.50"),
+            ("+1", "1e0"),
+            ("1e2", "100"),
+            ("1E-1", ".1"),
+        ):
+            with self.subTest(source_offset=source_offset, candidate_offset=candidate_offset):
+                case = case_with_checks(
+                    source=(
+                        f"{{count, plural, offset:{source_offset} "
+                        "one {One} other {Other}}"
+                    ),
+                    checks=check,
+                )
+                result = validate_output(
+                    case,
+                    f"{{count, plural, offset:{candidate_offset} one {{Um}} other {{Outros}}}}",
+                )
+                self.assertEqual(result.status, "passed")
+                self.assertEqual(result.findings, ())
+
+        valid_case = case_with_checks(
+            source="{count, plural, offset:1 one {One} other {Other}}",
+            checks=check,
+        )
+        for malformed in (
+            "{count, plural, offset: one {Um} other {Outros}}",
+            "{count, plural, offset:nope one {Um} other {Outros}}",
+            "{count, plural, offset:1 offset:2 one {Um} other {Outros}}",
+            "{count, plural, one {Um} offset:1 other {Outros}}",
+        ):
+            with self.subTest(malformed=malformed):
+                result = validate_output(valid_case, malformed)
+                self.assertEqual(result.status, "failed")
+                self.assertEqual(result.validator_errors, ())
+
+        invalid_source = validate_output(
+            case_with_checks(
+                source="{count, plural, offset: one {One} other {Other}}",
+                checks=check,
+            ),
+            "{count, plural, offset:1 one {Um} other {Outros}}",
+        )
+        self.assertEqual(invalid_source.status, "validator_error")
 
     def test_html_optional_end_tags_preserve_implied_topology(self):
         """Break: valid HTML with implied li closures could be rejected as malformed."""
@@ -390,6 +439,41 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(equivalent.findings, ())
         self.assertEqual(corrupted.status, "failed")
 
+    def test_html_rows_and_consecutive_colgroups_imply_scoped_colgroup_ends(self):
+        """Break: valid omitted colgroup ends could alter table or nested-table topology."""
+        check = [{"type": "html_structure", "severity": "critical"}]
+        cases = (
+            (
+                "<table><colgroup><col><tr><td>A</table>",
+                "<table><colgroup><col></colgroup><tr><td>Um</table>",
+            ),
+            (
+                "<table><colgroup><col><colgroup><col><tbody><tr><td>A</table>",
+                "<table><colgroup><col></colgroup><colgroup><col>"
+                "</colgroup><tbody><tr><td>Um</table>",
+            ),
+            (
+                "<table><tbody><tr><td><table><colgroup><col><tr><td>Inner</table>"
+                "<td>Outer</table>",
+                "<table><tbody><tr><td><table><colgroup><col></colgroup>"
+                "<tr><td>Interior</table><td>Exterior</table>",
+            ),
+        )
+        for source, candidate in cases:
+            with self.subTest(source=source):
+                result = validate_output(
+                    case_with_checks(source=source, checks=check),
+                    candidate,
+                )
+                self.assertEqual(result.status, "passed")
+                self.assertEqual(result.findings, ())
+
+        corrupted = validate_output(
+            case_with_checks(source=cases[2][0], checks=check),
+            cases[2][1].replace("<td>Exterior", "<td>Extra<td>Exterior"),
+        )
+        self.assertEqual(corrupted.status, "failed")
+
     def test_markdown_reference_links_preserve_uses_definitions_and_destinations(self):
         """Break: reference-link destination corruption could be invisible to topology checks."""
         case = case_with_checks(
@@ -429,6 +513,36 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(equivalent.status, "passed")
         self.assertEqual(broken.status, "failed")
 
+    def test_markdown_shortcuts_respect_escapes_code_spans_and_definition_titles(self):
+        """Break: literal bracket text could be counted as a shortcut reference use."""
+        source = (
+            "Open [id], then inspect ``[id] with `tick``.\n\n"
+            "[id]: https://lume.example/docs \"title [id]\"\n"
+        )
+        case = case_with_checks(
+            source=source,
+            checks=[{"type": "markdown_structure", "severity": "critical"}],
+        )
+        equivalent = (
+            "Abra [ID], depois veja ``[changed] com `marca``.\n\n"
+            "[ id ]: https://lume.example/docs \"título [changed]\"\n"
+        )
+
+        valid = validate_output(case, equivalent)
+        escaped_real_use = validate_output(case, equivalent.replace("Abra [ID]", r"Abra \[ID]"))
+        even_escape_pair = validate_output(
+            case_with_checks(
+                source=r"Open \\[id]." + "\n\n[id]: https://lume.example/docs\n",
+                checks=[{"type": "markdown_structure", "severity": "critical"}],
+            ),
+            "Abra [id].\n\n[id]: https://lume.example/docs\n",
+        )
+
+        self.assertEqual(valid.status, "passed")
+        self.assertEqual(valid.findings, ())
+        self.assertEqual(escaped_real_use.status, "failed")
+        self.assertEqual(even_escape_pair.status, "passed")
+
     def test_markdown_definitions_ignore_literals_and_first_duplicate_wins(self):
         """Break: literal or later duplicate definitions could alter active link topology."""
         source = (
@@ -460,6 +574,38 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(valid.status, "passed")
         self.assertEqual(valid.findings, ())
         self.assertEqual(corrupted.status, "failed")
+
+    def test_markdown_fences_require_valid_closers_and_allow_tilde_backtick_info(self):
+        """Break: incorrect fence transitions could expose literals or reject valid Markdown."""
+        check = [{"type": "markdown_structure", "severity": "critical"}]
+        cases = (
+            (
+                "```text\n[id]: https://inside-one.example\n```not-a-close\n"
+                "[id]: https://inside-two.example\n```\n\n"
+                "[id]: https://active.example\nOpen [id].\n",
+                "```text\n[id]: https://changed-one.example\n```not-a-close\n"
+                "[id]: https://changed-two.example\n```\n\n"
+                "[id]: https://active.example\nAbra [id].\n",
+            ),
+            (
+                "~~~ language=`literal`\n[id]: https://inside.example\n~~~ \t\n\n"
+                "[id]: https://active.example\nOpen [id].\n",
+                "~~~ language=`literal`\n[id]: https://changed.example\n~~~\t\n\n"
+                "[id]: https://active.example\nAbra [id].\n",
+            ),
+            (
+                "```language=`not-a-fence`\n[id]: https://active.example\nOpen [id].\n",
+                "```language=`not-a-fence`\n[id]: https://active.example\nAbra [id].\n",
+            ),
+        )
+        for source, candidate in cases:
+            with self.subTest(source=source.splitlines()[0]):
+                result = validate_output(
+                    case_with_checks(source=source, checks=check),
+                    candidate,
+                )
+                self.assertEqual(result.status, "passed")
+                self.assertEqual(result.findings, ())
 
     def test_numeric_placeholders_and_multi_backtick_code_spans_are_protected(self):
         """Break: valid numeric and delimiter-aware scalar syntax could be changed silently."""

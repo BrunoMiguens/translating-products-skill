@@ -439,10 +439,11 @@ _IMPLIED_SIBLING_ENDS = {
     "rp": {"rt", "rp"},
     "option": {"option"},
     "optgroup": {"option", "optgroup"},
+    "colgroup": {"colgroup"},
     "thead": {"colgroup", "tbody", "tfoot"},
     "tbody": {"colgroup", "tbody", "tfoot", "thead"},
     "tfoot": {"colgroup", "tbody", "tfoot", "thead"},
-    "tr": {"tr"},
+    "tr": {"colgroup", "tr"},
     "td": {"td", "th"},
     "th": {"td", "th"},
 }
@@ -454,6 +455,7 @@ _IMPLIED_SCOPE_BLOCKERS = {
     "rp": {"ruby"},
     "option": {"datalist", "optgroup", "select"},
     "optgroup": {"select"},
+    "colgroup": {"table"},
     "thead": {"table"},
     "tbody": {"table"},
     "tfoot": {"table"},
@@ -532,7 +534,6 @@ def _parse_html_topology(text: str) -> object:
 
 _MARKDOWN_LINK = re.compile(r"(!?)\[[^\]\n]*\]\(([^\s)]+)(?:\s+[^)]*)?\)")
 _MARKDOWN_REFERENCE_USE = re.compile(r"(!?)\[([^\]\n]+)\]\[([^\]\n]*)\]")
-_MARKDOWN_SHORTCUT_REFERENCE = re.compile(r"(!?)\[([^\]\n]+)\](?![\[(])")
 _MARKDOWN_REFERENCE_DEFINITION = re.compile(
     r"^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))",
     re.MULTILINE,
@@ -540,7 +541,7 @@ _MARKDOWN_REFERENCE_DEFINITION = re.compile(
 _MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+")
 _MARKDOWN_LIST = re.compile(r"^(\s*)([-+*]|\d+[.)])\s+")
 _MARKDOWN_QUOTE = re.compile(r"^(\s*(?:>\s*)+)")
-_MARKDOWN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^`]*)$")
+_MARKDOWN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _parse_markdown_topology(text: str) -> object:
@@ -552,16 +553,24 @@ def _parse_markdown_topology(text: str) -> object:
     open_fence: tuple[str, int] | None = None
     for line in text.splitlines():
         fence = _MARKDOWN_FENCE.match(line)
+        if open_fence is not None:
+            if fence:
+                marker = fence.group(1)
+                remainder = fence.group(2)
+                if (
+                    marker[0] == open_fence[0]
+                    and len(marker) >= open_fence[1]
+                    and not remainder.strip(" \t")
+                ):
+                    open_fence = None
+            continue
         if fence:
             marker = fence.group(1)
-            if open_fence is None:
+            info = fence.group(2)
+            if marker[0] != "`" or "`" not in info:
                 open_fence = (marker[0], len(marker))
-                fences.append(fence.group(2).strip())
-            elif marker[0] == open_fence[0] and len(marker) >= open_fence[1]:
-                open_fence = None
-            continue
-        if open_fence is not None:
-            continue
+                fences.append(info.strip())
+                continue
         if line.startswith("\t") or line.startswith("    "):
             continue
         active_lines.append(line)
@@ -582,37 +591,51 @@ def _parse_markdown_topology(text: str) -> object:
     for match in _MARKDOWN_REFERENCE_DEFINITION.finditer(active_text):
         label = _markdown_label(match.group(1))
         definitions.setdefault(label, match.group(2) or match.group(3))
-        definition_spans.append(match.span())
+        line_end = active_text.find("\n", match.end())
+        definition_spans.append((
+            match.start(),
+            len(active_text) if line_end < 0 else line_end,
+        ))
     use_text = _blank_spans(active_text, definition_spans)
-    links = tuple(
-        ("image" if match.group(1) else "link", match.group(2))
-        for match in _MARKDOWN_LINK.finditer(use_text)
-    )
+    use_text = _blank_spans(use_text, _markdown_code_span_spans(use_text))
+    links: list[tuple[str, str]] = []
+    occupied_spans: list[tuple[int, int]] = []
+    for match in _MARKDOWN_LINK.finditer(use_text):
+        bracket = match.start() + (1 if match.group(1) else 0)
+        if _markdown_is_escaped(use_text, bracket):
+            continue
+        occupied_spans.append(match.span())
+        is_image = bool(match.group(1)) and not _markdown_is_escaped(
+            use_text, match.start()
+        )
+        links.append(("image" if is_image else "link", match.group(2)))
     reference_uses: list[tuple[str, str]] = []
-    reference_spans: list[tuple[int, int]] = []
     for match in _MARKDOWN_REFERENCE_USE.finditer(use_text):
-        reference_spans.append(match.span())
+        bracket = match.start() + (1 if match.group(1) else 0)
+        if (
+            _markdown_is_escaped(use_text, bracket)
+            or any(_spans_overlap(match.span(), span) for span in occupied_spans)
+        ):
+            continue
+        occupied_spans.append(match.span())
         label = _markdown_label(match.group(3) or match.group(2))
         if label in definitions:
+            is_image = bool(match.group(1)) and not _markdown_is_escaped(
+                use_text, match.start()
+            )
             reference_uses.append((
-                "image" if match.group(1) else "link",
+                "image" if is_image else "link",
                 definitions[label],
             ))
-    for match in _MARKDOWN_SHORTCUT_REFERENCE.finditer(use_text):
-        if any(_spans_overlap(match.span(), span) for span in reference_spans):
-            continue
-        label = _markdown_label(match.group(2))
-        if label in definitions:
-            reference_uses.append((
-                "image" if match.group(1) else "link",
-                definitions[label],
-            ))
+    reference_uses.extend(
+        _markdown_shortcut_uses(use_text, definitions, occupied_spans)
+    )
     return {
         "headings": tuple(headings),
         "lists": tuple(lists),
         "quotes": tuple(quotes),
         "fences": tuple(fences),
-        "links": links,
+        "links": tuple(links),
         "reference_uses": tuple(reference_uses),
         "reference_definitions": tuple(sorted(definitions.values())),
     }
@@ -631,6 +654,86 @@ def _blank_spans(text: str, spans: Sequence[tuple[int, int]]) -> str:
 
 def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
     return left[0] < right[1] and right[0] < left[1]
+
+
+def _markdown_is_escaped(text: str, position: int) -> bool:
+    backslashes = 0
+    position -= 1
+    while position >= 0 and text[position] == "\\":
+        backslashes += 1
+        position -= 1
+    return backslashes % 2 == 1
+
+
+def _markdown_code_span_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    position = 0
+    while position < len(text):
+        if text[position] != "`" or _markdown_is_escaped(text, position):
+            position += 1
+            continue
+        opening = position
+        while position < len(text) and text[position] == "`":
+            position += 1
+        width = position - opening
+        closing = position
+        while closing < len(text):
+            closing = text.find("`" * width, closing)
+            if closing < 0:
+                break
+            if (
+                (closing == 0 or text[closing - 1] != "`")
+                and (closing + width == len(text) or text[closing + width] != "`")
+            ):
+                spans.append((opening, closing + width))
+                position = closing + width
+                break
+            closing += width
+        if closing < 0:
+            position = opening + width
+    return spans
+
+
+def _markdown_shortcut_uses(
+    text: str,
+    definitions: Mapping[str, str],
+    occupied_spans: Sequence[tuple[int, int]],
+) -> list[tuple[str, str]]:
+    uses: list[tuple[str, str]] = []
+    position = 0
+    while position < len(text):
+        opening = text.find("[", position)
+        if opening < 0:
+            break
+        if _markdown_is_escaped(text, opening):
+            position = opening + 1
+            continue
+        closing = opening + 1
+        while closing < len(text) and text[closing] != "\n":
+            if text[closing] == "]" and not _markdown_is_escaped(text, closing):
+                break
+            closing += 1
+        if closing >= len(text) or text[closing] != "]":
+            position = opening + 1
+            continue
+        span = (opening, closing + 1)
+        if (
+            (closing + 1 < len(text) and text[closing + 1] in "[(")
+            or any(_spans_overlap(span, occupied) for occupied in occupied_spans)
+        ):
+            position = closing + 1
+            continue
+        label = _markdown_label(text[opening + 1:closing])
+        if label in definitions:
+            image_marker = opening - 1
+            is_image = (
+                image_marker >= 0
+                and text[image_marker] == "!"
+                and not _markdown_is_escaped(text, image_marker)
+            )
+            uses.append(("image" if is_image else "link", definitions[label]))
+        position = closing + 1
+    return uses
 
 
 def _csv_dialect(text: str, configured: object = None) -> str:
@@ -657,7 +760,9 @@ def _parse_csv_topology(text: str, delimiter: str) -> object:
 _ICU_PATTERN_WHITESPACE = frozenset(
     "\u0009\u000a\u000b\u000c\u000d\u0020\u0085\u200e\u200f\u2028\u2029"
 )
-_ICU_NUMBER = re.compile(r"(?:0|[1-9]\d*)(?:\.\d+)?")
+_ICU_NUMBER = re.compile(
+    r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?"
+)
 
 
 class _ICUParser:
@@ -753,10 +858,16 @@ class _ICUParser:
             if selector.startswith("offset:"):
                 if formatter == "select" or offset is not None or branches:
                     raise _CandidateStructureError("invalid ICU plural offset")
-                offset = selector.split(":", 1)[1]
-                if _ICU_NUMBER.fullmatch(offset) is None:
+                offset_text = selector.split(":", 1)[1]
+                if not offset_text:
+                    self._skip_space()
+                    offset_text = self._selector_token()
+                if _ICU_NUMBER.fullmatch(offset_text) is None:
                     raise _CandidateStructureError("invalid ICU plural offset")
-                offset = format(Decimal(offset).normalize(), "f")
+                numeric_offset = Decimal(offset_text)
+                if numeric_offset < 0:
+                    raise _CandidateStructureError("invalid ICU plural offset")
+                offset = "0" if numeric_offset == 0 else str(numeric_offset.normalize())
                 continue
             self._skip_space()
             if not selector or self._current() != "{":
