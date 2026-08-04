@@ -1,0 +1,26 @@
+scripts/benchmark/validate.py
+  s_51f69c54a42bb0::t_fa76317b1ac44f 551
+  s_51f69c54a42bb0::t_612fc278a3c927 601-609,669-676,679
+  s_51f69c54a42bb0::t_68939a38550027 599
+tests/test_benchmark_validate.py
+  s_51f69c54a42bb0::t_1af50b00575d9a 828-950,952-959,961-971
+  s_51f69c54a42bb0::t_7fe8f00e989777 951,960
+.superpowers/sdd/2026-08-03-pt-pt-translation-benchmark/task-4-report.md
+  s_51f69c54a42bb0::t_b95994c07dd033 297-358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "562c74d7dd948461aa23f07fb37854d18a72d77b",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
