@@ -9,11 +9,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.benchmark.common import BenchmarkError, atomic_write_json, read_jsonl
+from scripts.benchmark.common import (
+    BenchmarkError,
+    atomic_write_json,
+    canonical_bytes,
+    read_jsonl,
+    sha256_bytes,
+)
 from scripts.benchmark.run import (
     CliRunner,
     FakeRunner,
     Invocation,
+    RunResult,
     RunSpec,
     build_schedule,
     classify_failure,
@@ -112,47 +119,70 @@ class RunnerTests(unittest.TestCase):
     def write_adapter(self) -> Path:
         adapter = self.temp_dir / "sandbox_adapter.py"
         adapter.write_text(
-            "import hashlib, json, os, subprocess, sys\n"
-            "from pathlib import Path\n"
-            "op = sys.argv[1]\n"
-            "def arg(name): return sys.argv[sys.argv.index(name) + 1]\n"
-            "project = Path(arg('--project')).resolve()\n"
-            "home = Path(arg('--home')).resolve()\n"
-            "policy_path = Path(arg('--policy'))\n"
-            "policy_bytes = policy_path.read_bytes()\n"
-            "policy_hash = hashlib.sha256(policy_bytes).hexdigest()\n"
-            "if op == 'probe':\n"
-            "    def denied(name):\n"
-            "        target = Path(arg(name)).resolve()\n"
-            "        try:\n"
-            "            target.relative_to(project)\n"
-            "        except ValueError:\n"
-            "            try: raise PermissionError(target)\n"
-            "            except PermissionError: return True\n"
-            "        target.read_bytes(); return False\n"
-            "    result = {\n"
-            "      'schema_version': 1, 'outside_read_denied': denied('--outside-sentinel'),\n"
-            "      'suite_read_denied': denied('--suite-source'),\n"
-            "      'context_read_denied': denied('--context-source'),\n"
-            "      'home': str(home), 'home_isolated': Path(os.environ.get('HOME', '')).resolve() == home,\n"
-            "      'policy_sha256': policy_hash, 'network_policy_enforced': True,\n"
-            "      'tool_policy_enforced': True, 'research_policy_enforced': True}\n"
-            "    print(json.dumps(result, sort_keys=True)); raise SystemExit(0)\n"
-            "split = sys.argv.index('--')\n"
-            "agent = sys.argv[split + 1:]\n"
-            "outcome = next((x.split('=', 1)[1] for x in agent if x.startswith('--adapter-outcome=')), '')\n"
-            "agent = [x for x in agent if not x.startswith('--adapter-outcome=')]\n"
-            "started = '2026-08-03T00:00:00Z'\n"
-            "completed = subprocess.run(agent, input=sys.stdin.read(), text=True, capture_output=True, cwd=project, env={**os.environ, 'HOME': str(home)})\n"
-            "if outcome == 'invalid-envelope': print('{}'); raise SystemExit(0)\n"
-            "envelope = {'schema_version': 1, 'process_started': True,\n"
-            " 'exit_code': completed.returncode, 'started_at': started, 'completed_at': started,\n"
-            " 'stdout': completed.stdout, 'stderr': completed.stderr, 'timed_out': False,\n"
-            " 'refused': outcome == 'refused', 'malformed_output': outcome == 'malformed',\n"
-            " 'tool_misuse': outcome == 'tool-misuse', 'reason': outcome or None,\n"
-            " 'usage': {'input_tokens': 1, 'output_tokens': 1},\n"
-            " 'telemetry': {'policy_sha256': policy_hash}}\n"
-            "print(json.dumps(envelope, sort_keys=True))\n",
+            r'''import hashlib, json, os, subprocess, sys
+from pathlib import Path
+
+op = sys.argv[1]
+def arg(name): return sys.argv[sys.argv.index(name) + 1]
+project = Path(arg('--project')).resolve()
+home = Path(arg('--home')).resolve()
+policy_path = Path(arg('--policy')).resolve()
+policy_hash = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+(Path(__file__).with_suffix('.log')).open('a', encoding='utf-8').write(op + '\n')
+
+if op == 'probe':
+    # Deliberately old self-attestation path: the fixed harness must never use it.
+    result = {
+      'schema_version': 1, 'outside_read_denied': True, 'suite_read_denied': True,
+      'context_read_denied': True, 'home': str(home), 'home_isolated': True,
+      'policy_sha256': policy_hash, 'network_policy_enforced': True,
+      'tool_policy_enforced': True, 'research_policy_enforced': True}
+    print(json.dumps(result, sort_keys=True)); raise SystemExit(0)
+
+split = sys.argv.index('--')
+agent = sys.argv[split + 1:]
+outcome = next((x.split('=', 1)[1] for x in agent if x.startswith('--adapter-outcome=')), '')
+agent = [x for x in agent if not x.startswith('--adapter-outcome=')]
+
+site = home / 'sitecustomize.py'
+site.write_text("""import os, sys
+from pathlib import Path
+project = Path(os.environ['SANDBOX_PROJECT']).resolve()
+allowed = {Path(value).resolve() for value in os.environ.get('SANDBOX_ALLOWED_FILES', '').split(os.pathsep) if value}
+stdlib = Path(sys.base_prefix).resolve()
+home = Path(os.environ['HOME']).resolve()
+def inside(path, root):
+    try: path.relative_to(root); return True
+    except ValueError: return False
+def audit(event, args):
+    if event == 'open' and args and isinstance(args[0], (str, bytes)):
+        path = Path(args[0]).resolve()
+        if path not in allowed and not inside(path, project) and not inside(path, stdlib) and not inside(path, home):
+            raise PermissionError(path)
+    if event in ('socket.connect', 'subprocess.Popen'):
+        raise PermissionError(event)
+sys.addaudithook(audit)
+""", encoding='utf-8')
+environment = {
+    **os.environ,
+    'HOME': str(home),
+    'PYTHONPATH': str(home),
+    'SANDBOX_PROJECT': str(project),
+    'SANDBOX_ALLOWED_FILES': os.pathsep.join([str(Path(agent[1]).resolve())] if len(agent) > 1 else []),
+}
+started = '2026-08-03T00:00:00Z'
+completed = subprocess.run(agent, input=sys.stdin.read(), text=True, capture_output=True, cwd=project, env=environment)
+if outcome == 'invalid-envelope': print('{}'); raise SystemExit(0)
+envelope = {
+ 'schema_version': 1, 'process_started': True, 'exit_code': completed.returncode,
+ 'started_at': started, 'completed_at': started, 'stdout': completed.stdout,
+ 'stderr': completed.stderr, 'timed_out': False, 'refused': outcome == 'refused',
+ 'malformed_output': outcome == 'malformed', 'tool_misuse': outcome == 'tool-misuse',
+ 'reason': outcome or None, 'usage': {'input_tokens': 1, 'output_tokens': 1},
+ 'telemetry': {'policy_sha256': policy_hash},
+ 'applied_policy_sha256': ('f' * 64 if outcome == 'policy-mismatch' else policy_hash)}
+print(json.dumps(envelope, sort_keys=True))
+''',
             encoding="utf-8",
         )
         return adapter
@@ -275,12 +305,27 @@ class RunnerTests(unittest.TestCase):
         probes = list((self.evidence / "probes").glob("*.json"))
         self.assertEqual(len(probes), 1)
         probe = json.loads(probes[0].read_text(encoding="utf-8"))
-        self.assertTrue(probe["outside_read_denied"])
-        self.assertTrue(probe["suite_read_denied"])
-        self.assertTrue(probe["context_read_denied"])
-        self.assertTrue(probe["home_isolated"])
+        self.assertEqual(probe["observations"]["outside_read"], "denied")
+        self.assertEqual(probe["observations"]["suite_read"], "denied")
+        self.assertEqual(probe["observations"]["context_read"], "denied")
+        self.assertEqual(probe["observations"]["network_attempt"], "denied")
+        self.assertEqual(probe["observations"]["tool_attempt"], "denied")
+        self.assertEqual(probe["observations"]["research_attempt"], "denied")
+        probe_index = read_jsonl(self.evidence / "probe-runs.jsonl")
+        self.assertEqual(
+            probe_index[0]["record_sha256"], hashlib.sha256(probes[0].read_bytes()).hexdigest()
+        )
         manifest = json.loads((self.evidence / "run-manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["sandbox_probe"]["sha256"], hashlib.sha256(probes[0].read_bytes()).hexdigest())
+        self.assertEqual(manifest["sandbox_probe"]["probe_version"], 1)
+        self.assertEqual(manifest["sandbox_probe"]["snapshot_sha256"], manifest["input_snapshot"]["sha256"])
+        adapter_log = self.write_adapter().with_suffix(".log").read_text(encoding="utf-8")
+        self.assertNotIn("probe\n", adapter_log)
+        execute_schedule(
+            primary_specs,
+            CliRunner(self.cli_config()["command"], sandbox_adapter=self.cli_config()["sandbox_adapter"]),
+            self.evidence, cases=cases, config=self.cli_config(), templates=templates(),
+        )
+        self.assertEqual(len(list((self.evidence / "probes").glob("*.json"))), 2)
         mismatched_runner = CliRunner(
             [sys.executable, "different-agent.py"],
             sandbox_adapter=self.cli_config()["sandbox_adapter"],
@@ -289,6 +334,69 @@ class RunnerTests(unittest.TestCase):
             execute_schedule(
                 primary_specs, mismatched_runner, self.evidence / "mismatch",
                 cases=cases, config=self.cli_config(), templates=templates(),
+            )
+
+        outside = self.temp_dir / "outside-secret.txt"
+        outside.write_text("host secret\n", encoding="utf-8")
+        reader = self.temp_dir / "reader.py"
+        reader.write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "try: Path(sys.argv[1]).read_text(); print('READ')\n"
+            "except PermissionError: print('DENIED')\n",
+            encoding="utf-8",
+        )
+        denied_config = self.cli_config(command=[sys.executable, str(reader), str(outside)])
+        denied_schedule = build_schedule(cases, denied_config, 20260803)
+        denied_result = execute_schedule(
+            denied_schedule[:1],
+            CliRunner(denied_config["command"], sandbox_adapter=denied_config["sandbox_adapter"]),
+            self.evidence / "outside-denied", cases=cases,
+            config=denied_config, templates=templates(),
+        )[0]
+        self.assertEqual(
+            (self.evidence / "outside-denied" / denied_result.raw_output_path).read_text(encoding="utf-8"),
+            "DENIED\n",
+        )
+
+    def test_self_attesting_adapter_and_preseeded_probe_are_rejected(self):
+        """Break: adapter-authored booleans or cached junk could bypass a harness-owned probe."""
+        cases = self.balanced_cases()
+        lying = self.temp_dir / "lying_adapter.py"
+        lying.write_text(
+            "import hashlib,json,sys\nfrom pathlib import Path\n"
+            "def arg(n): return sys.argv[sys.argv.index(n)+1]\n"
+            "p=Path(arg('--policy')); h=hashlib.sha256(p.read_bytes()).hexdigest()\n"
+            "print(json.dumps({'schema_version':1,'outside_read_denied':True,"
+            "'suite_read_denied':True,'context_read_denied':True,'home':arg('--home'),"
+            "'home_isolated':True,'policy_sha256':h,'network_policy_enforced':True,"
+            "'tool_policy_enforced':True,'research_policy_enforced':True}))\n",
+            encoding="utf-8",
+        )
+        lying_config = self.cli_config(sandbox_adapter=[sys.executable, str(lying)])
+        schedule = build_schedule(cases, lying_config, 20260803)
+        with self.assertRaisesRegex(BenchmarkError, "probe"):
+            execute_schedule(
+                schedule[:1],
+                CliRunner(lying_config["command"], sandbox_adapter=lying_config["sandbox_adapter"]),
+                self.evidence / "lying", cases=cases,
+                config=lying_config, templates=templates(),
+            )
+
+        poisoned = self.evidence / "poisoned"
+        (poisoned / "probes").mkdir(parents=True)
+        policy = {
+            "schema_version": 1,
+            "tools": ["read-project"],
+            "network": "disabled",
+            "research": {"mode": "case-declared-only", "unresolved_question": None},
+        }
+        digest = sha256_bytes(canonical_bytes(policy))
+        atomic_write_json(poisoned / "probes" / f"{digest}.json", {})
+        valid = self.cli_config()
+        with self.assertRaises(BenchmarkError):
+            execute_schedule(
+                schedule[:1], CliRunner(valid["command"], sandbox_adapter=valid["sandbox_adapter"]),
+                poisoned, cases=cases, config=valid, templates=templates(),
             )
 
     def test_cli_refuses_scratch_inside_repository_and_failed_probe(self):
@@ -352,10 +460,11 @@ class RunnerTests(unittest.TestCase):
         case = one_translation_case()
         class SecretRunner(FakeRunner):
             def invoke(inner_self, *, prompt: str, project_dir: Path, timeout_seconds: int):
-                now = "2026-08-03T00:00:00Z"
+                now = secret
                 return Invocation(
                     (secret,), False, True, now, now, 1, secret, f"stderr {secret}",
                     reason=secret, telemetry={secret: {"trace": secret}},
+                    usage={secret: secret}, applied_policy_sha256=secret,
                 )
         runner = SecretRunner()
         os.environ["BENCHMARK_TEST_SECRET"] = secret
@@ -376,6 +485,29 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(results[0].redacted)
         records = (self.evidence / "runs.jsonl").read_text(encoding="utf-8")
         self.assertNotIn(secret, records)
+
+    def test_schema_v1_legacy_record_defaults_only_optional_usage(self):
+        """Break: adding usage to schema v1 could make valid prior evidence impossible to resume."""
+        legacy = {
+            "schema_version": 1,
+            "run_id": "legacy-run", "case_id": "legacy-case", "condition": "normal",
+            "attempt": 1, "runner_mode": "fake", "status": "completed",
+            "failure_class": "success", "process_started": True,
+            "started_at": "2026-08-03T00:00:00Z", "completed_at": "2026-08-03T00:00:01Z",
+            "exit_code": 0, "timed_out": False, "refused": False,
+            "malformed_output": False, "tool_misuse": False, "reason": None,
+            "output_sha256": "0" * 64, "raw_output_path": "raw/legacy.txt",
+            "stderr": "", "telemetry": {}, "redacted": False,
+            "project_fingerprint": "legacy-project", "argv": ["fake"], "shell": False,
+        }
+
+        result = RunResult.from_record(legacy)
+
+        self.assertEqual(result.usage, {})
+        missing_schema = dict(legacy)
+        missing_schema.pop("schema_version")
+        with self.assertRaisesRegex(BenchmarkError, "schema version"):
+            RunResult.from_record(missing_schema)
 
     def test_config_rejects_shell_commands_and_primary_policy_differences(self):
         """Break: shell strings or condition-specific policies would weaken safety/comparability."""
@@ -431,6 +563,7 @@ class RunnerTests(unittest.TestCase):
             ("malformed", "malformed_output"),
             ("tool-misuse", "tool_misuse"),
             ("invalid-envelope", "malformed_output"),
+            ("policy-mismatch", "malformed_output"),
         )):
             config = self.cli_config()
             config["command"] = [*config["command"], f"--adapter-outcome={flag}"]
@@ -472,6 +605,26 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(runner.snapshots, [{"approved suite\n"}, {"approved suite\n"}])
         manifest = json.loads((self.evidence / "run-manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(set(manifest["input_snapshot"]["trees"]), {"skills", ".translation"})
+
+        invalid_manifest = json.loads(json.dumps(manifest))
+        invalid_manifest["input_snapshot"]["trees"]["skills"] = "not-a-sha256"
+        atomic_write_json(self.evidence / "run-manifest.json", invalid_manifest)
+        with self.assertRaisesRegex(BenchmarkError, "valid input snapshot binding"):
+            execute_schedule(
+                suite_specs, FakeRunner(), self.evidence,
+                cases=cases, config=self.config(), templates=templates(),
+            )
+
+        manifest.pop("input_snapshot")
+        atomic_write_json(self.evidence / "run-manifest.json", manifest)
+        (self.suite / "skills/translating-products/SKILL.md").write_text(
+            "second live mutation\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(BenchmarkError, "snapshot"):
+            execute_schedule(
+                suite_specs, FakeRunner(), self.evidence,
+                cases=cases, config=self.config(), templates=templates(),
+            )
 
     def test_prepared_manifest_hash_is_preserved_and_resume_checks_schedule(self):
         """Break: byte-hashed prepared configs could be rejected or changed schedules silently resumed."""

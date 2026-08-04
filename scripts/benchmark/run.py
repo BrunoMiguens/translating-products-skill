@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -57,16 +58,78 @@ _APPROVAL_FIELDS = {
     "status", "approved_by", "approved_at", "context_sha256", "approved_empty",
 }
 _PROBE_FIELDS = {
-    "schema_version", "outside_read_denied", "suite_read_denied",
-    "context_read_denied", "home", "home_isolated", "policy_sha256",
-    "network_policy_enforced", "tool_policy_enforced", "research_policy_enforced",
+    "schema_version", "probe_version", "nonce", "outside_read", "suite_read",
+    "context_read", "home", "network_attempt", "tool_attempt", "research_attempt",
 }
 _ENVELOPE_FIELDS = {
     "schema_version", "process_started", "exit_code", "started_at", "completed_at",
     "stdout", "stderr", "timed_out", "refused", "malformed_output", "tool_misuse",
-    "reason", "usage", "telemetry",
+    "reason", "usage", "telemetry", "applied_policy_sha256",
 }
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PROBE_VERSION = 1
+_PROBE_PROGRAM = r'''from __future__ import annotations
+import argparse
+import json
+import os
+import socket
+import subprocess
+from pathlib import Path
+
+def read_observation(path: str) -> str:
+    try:
+        Path(path).read_bytes()
+        return "readable"
+    except PermissionError:
+        return "denied"
+    except Exception as error:
+        return f"not-denied:{type(error).__name__}"
+
+def network_observation() -> str:
+    try:
+        connection = socket.socket()
+        try:
+            connection.settimeout(0.1)
+            connection.connect(("203.0.113.1", 9))
+        finally:
+            connection.close()
+        return "allowed"
+    except PermissionError:
+        return "denied"
+    except Exception as error:
+        return f"not-denied:{type(error).__name__}"
+
+def tool_observation() -> str:
+    try:
+        subprocess.run(["true"], check=False, capture_output=True)
+        return "allowed"
+    except PermissionError:
+        return "denied"
+    except Exception as error:
+        return f"not-denied:{type(error).__name__}"
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--nonce", required=True)
+parser.add_argument("--outside", required=True)
+parser.add_argument("--suite", required=True)
+parser.add_argument("--context", required=True)
+arguments = parser.parse_args()
+result = {
+    "schema_version": 1,
+    "probe_version": 1,
+    "nonce": arguments.nonce,
+    "outside_read": read_observation(arguments.outside),
+    "suite_read": read_observation(arguments.suite),
+    "context_read": read_observation(arguments.context),
+    "home": str(Path(os.environ.get("HOME", "")).resolve()),
+    "network_attempt": network_observation(),
+    "tool_attempt": tool_observation(),
+    "research_attempt": network_observation(),
+}
+print(json.dumps(result, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+'''
+_PROBE_PROGRAM_BYTES = _PROBE_PROGRAM.encode("utf-8")
+_PROBE_PROGRAM_SHA256 = sha256_bytes(_PROBE_PROGRAM_BYTES)
 
 
 @dataclass(frozen=True)
@@ -104,6 +167,7 @@ class Invocation:
     reason: str | None = None
     telemetry: object = None
     usage: object = None
+    applied_policy_sha256: str | None = None
 
     @classmethod
     def from_completed_process(
@@ -142,6 +206,7 @@ class RunResult:
     stderr: str
     telemetry: object
     usage: object
+    applied_policy_sha256: str | None
     redacted: bool
     project_fingerprint: str
     argv: tuple[str, ...]
@@ -156,7 +221,10 @@ class RunResult:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> "RunResult":
         values = dict(record)
-        values.pop("schema_version", None)
+        if values.pop("schema_version", None) != SCHEMA_VERSION:
+            raise BenchmarkError("existing run record schema version mismatch")
+        values.setdefault("usage", {})
+        values.setdefault("applied_policy_sha256", None)
         values["argv"] = tuple(values.get("argv", ()))
         try:
             return cls(**values)
@@ -258,37 +326,6 @@ class CliRunner:
             }
         self.safe_environment = dict(environment)
 
-    def probe(
-        self,
-        *,
-        project_dir: Path,
-        home_dir: Path,
-        policy_path: Path,
-        outside_sentinel: Path,
-        suite_source: Path,
-        context_source: Path,
-        timeout_seconds: int,
-    ) -> tuple[dict, tuple[str, ...]]:
-        argv = self.sandbox_adapter + (
-            "probe", "--project", str(project_dir), "--home", str(home_dir),
-            "--policy", str(policy_path), "--outside-sentinel", str(outside_sentinel),
-            "--suite-source", str(suite_source), "--context-source", str(context_source),
-        )
-        completed = self._run_adapter(
-            argv, input_text="", project_dir=project_dir, home_dir=home_dir,
-            timeout_seconds=timeout_seconds,
-        )
-        if isinstance(completed, Invocation):
-            raise BenchmarkError(f"sandbox probe failed before proof: {completed.reason}")
-        if completed.returncode != 0:
-            raise BenchmarkError(f"sandbox probe exited {completed.returncode}: {completed.stderr}")
-        try:
-            value = json.loads(completed.stdout)
-        except json.JSONDecodeError as error:
-            raise BenchmarkError(f"sandbox probe returned malformed JSON: {error}") from error
-        _validate_probe(value, home_dir=home_dir, policy_path=policy_path)
-        return value, argv
-
     def invoke(
         self,
         *,
@@ -299,6 +336,26 @@ class CliRunner:
         timeout_seconds: int,
     ) -> Invocation:
         agent = tuple(_replace_trusted_token(arg, project_dir) for arg in self.command)
+        return self.invoke_command(
+            agent,
+            prompt=prompt,
+            project_dir=project_dir,
+            home_dir=home_dir,
+            policy_path=policy_path,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def invoke_command(
+        self,
+        command: Sequence[str],
+        *,
+        prompt: str,
+        project_dir: Path,
+        home_dir: Path,
+        policy_path: Path,
+        timeout_seconds: int,
+    ) -> Invocation:
+        agent = tuple(command)
         argv = self.sandbox_adapter + (
             "run", "--project", str(project_dir), "--home", str(home_dir),
             "--policy", str(policy_path), "--",
@@ -318,7 +375,10 @@ class CliRunner:
             )
         try:
             envelope = json.loads(completed.stdout)
-            return _invocation_from_envelope(envelope, argv)
+            expected_policy_hash = sha256_bytes(policy_path.read_bytes())
+            return _invocation_from_envelope(
+                envelope, argv, expected_policy_sha256=expected_policy_hash
+            )
         except (json.JSONDecodeError, BenchmarkError) as error:
             return Invocation(
                 argv, False, True, started_at, utc_now(), 0, "", completed.stderr,
@@ -365,26 +425,30 @@ def _replace_trusted_token(argument: str, project_dir: Path) -> str:
     return argument.replace("{project_dir}", str(project_dir))
 
 
-def _validate_probe(value: object, *, home_dir: Path, policy_path: Path) -> None:
+def _validate_probe(value: object, *, home_dir: Path, nonce: str) -> dict:
     if not isinstance(value, dict) or set(value) != _PROBE_FIELDS:
         raise BenchmarkError("sandbox probe has malformed fields")
-    if value["schema_version"] != SCHEMA_VERSION:
-        raise BenchmarkError("sandbox probe schema version mismatch")
-    required_true = (
-        "outside_read_denied", "suite_read_denied", "context_read_denied",
-        "home_isolated", "network_policy_enforced", "tool_policy_enforced",
-        "research_policy_enforced",
-    )
-    if any(value[field] is not True for field in required_true):
-        raise BenchmarkError("sandbox probe did not prove required isolation and policy")
+    if value["schema_version"] != SCHEMA_VERSION or value["probe_version"] != _PROBE_VERSION:
+        raise BenchmarkError("sandbox probe version mismatch")
+    if value["nonce"] != nonce:
+        raise BenchmarkError("sandbox probe challenge nonce mismatch")
+    for field in (
+        "outside_read", "suite_read", "context_read", "network_attempt",
+        "tool_attempt", "research_attempt",
+    ):
+        if value[field] != "denied":
+            raise BenchmarkError(f"sandbox probe observation did not prove denial: {field}")
     if value["home"] != str(home_dir.resolve()):
         raise BenchmarkError("sandbox probe did not use the isolated HOME")
-    expected_hash = sha256_bytes(policy_path.read_bytes())
-    if value["policy_sha256"] != expected_hash:
-        raise BenchmarkError("sandbox probe applied policy hash mismatch")
+    return value
 
 
-def _invocation_from_envelope(value: object, argv: tuple[str, ...]) -> Invocation:
+def _invocation_from_envelope(
+    value: object,
+    argv: tuple[str, ...],
+    *,
+    expected_policy_sha256: str,
+) -> Invocation:
     if not isinstance(value, dict) or set(value) != _ENVELOPE_FIELDS:
         raise BenchmarkError("adapter invocation envelope has malformed fields")
     if value["schema_version"] != SCHEMA_VERSION:
@@ -403,6 +467,8 @@ def _invocation_from_envelope(value: object, argv: tuple[str, ...]) -> Invocatio
         raise BenchmarkError("adapter invocation envelope reason must be text or null")
     if not isinstance(value["usage"], Mapping) or not isinstance(value["telemetry"], Mapping):
         raise BenchmarkError("adapter invocation envelope usage and telemetry must be objects")
+    if value["applied_policy_sha256"] != expected_policy_sha256:
+        raise BenchmarkError("adapter invocation envelope applied policy hash mismatch")
     if value["process_started"] and value["exit_code"] is None and not value["timed_out"]:
         raise BenchmarkError("started adapter invocation requires exit_code unless timed out")
     return Invocation(
@@ -421,6 +487,7 @@ def _invocation_from_envelope(value: object, argv: tuple[str, ...]) -> Invocatio
         reason=value["reason"],
         telemetry=value["telemetry"],
         usage=value["usage"],
+        applied_policy_sha256=value["applied_policy_sha256"],
     )
 
 
@@ -942,42 +1009,137 @@ def _preflight_cli(
     probes_dir = evidence_dir / "probes"
     probes_dir.mkdir(parents=True, exist_ok=True)
     records = []
+    suite_root = Path(str(config["suite_path"])).resolve()
+    suite_source = _first_regular_file(suite_root / "skills")
+    context_source = _first_regular_file(suite_root / ".translation")
     for policy_digest, policy in sorted(policies.items()):
-        record_path = probes_dir / f"{policy_digest}.json"
-        if record_path.exists():
-            record = read_json(record_path)
-            if not isinstance(record, dict):
-                raise BenchmarkError("saved sandbox probe record is malformed")
-        else:
-            with tempfile.TemporaryDirectory(prefix="benchmark-probe-", dir=scratch_root) as temporary:
-                attempt = Path(temporary)
-                project = attempt / "project"
-                home = attempt / "home"
-                project.mkdir()
-                home.mkdir()
-                policy_path = attempt / "policy.json"
-                _write_private_policy(policy_path, policy)
-                sentinel = attempt / "outside-sentinel.txt"
-                sentinel.write_text("sandbox must deny this\n", encoding="utf-8")
-                record, _ = runner.probe(
-                    project_dir=project,
-                    home_dir=home,
-                    policy_path=policy_path,
-                    outside_sentinel=sentinel,
-                    suite_source=snapshot_path / "skills",
-                    context_source=snapshot_path / ".translation",
-                    timeout_seconds=config["timeout_seconds"],
+        with tempfile.TemporaryDirectory(prefix="benchmark-probe-", dir=scratch_root) as temporary:
+            attempt = Path(temporary)
+            project = attempt / "project"
+            home = attempt / "home"
+            project.mkdir()
+            home.mkdir()
+            policy_path = attempt / "policy.json"
+            _write_private_policy(policy_path, policy)
+            sentinel = attempt / "outside-sentinel.txt"
+            sentinel.write_text("sandbox must deny this\n", encoding="utf-8")
+            probe_program = project / "harness-probe-v1.py"
+            descriptor = os.open(
+                probe_program, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o500
+            )
+            with os.fdopen(descriptor, "wb") as target:
+                target.write(_PROBE_PROGRAM_BYTES)
+            nonce = secrets.token_hex(32)
+            probe_command = (
+                sys.executable, str(probe_program), "--nonce", nonce,
+                "--outside", str(sentinel), "--suite", str(suite_source),
+                "--context", str(context_source),
+            )
+            invocation = runner.invoke_command(
+                probe_command,
+                prompt="",
+                project_dir=project,
+                home_dir=home,
+                policy_path=policy_path,
+                timeout_seconds=config["timeout_seconds"],
+            )
+            if classify_failure(asdict(invocation)) != "success":
+                raise BenchmarkError(
+                    f"sandbox probe invocation failed: {invocation.reason or invocation.stderr}"
                 )
-                atomic_write_json(record_path, record)
-        record_hash = sha256_bytes(record_path.read_bytes())
-        records.append({
-            "policy_sha256": policy_digest,
-            "path": record_path.relative_to(evidence_dir).as_posix(),
-            "record_sha256": record_hash,
-        })
-    if len(records) == 1:
-        return {**records[0], "sha256": records[0]["record_sha256"]}
-    return {"records": records, "sha256": sha256_bytes(canonical_bytes(records))}
+            try:
+                observation = json.loads(invocation.stdout)
+            except json.JSONDecodeError as error:
+                raise BenchmarkError(f"sandbox probe returned malformed observations: {error}") from error
+            observation = _validate_probe(observation, home_dir=home, nonce=nonce)
+            record = {
+                "schema_version": SCHEMA_VERSION,
+                "probe_version": _PROBE_VERSION,
+                "nonce": nonce,
+                "observations": observation,
+                "bindings": {
+                    "adapter_command_sha256": sha256_bytes(canonical_bytes(list(runner.sandbox_adapter))),
+                    "probe_program_sha256": _PROBE_PROGRAM_SHA256,
+                    "policy_sha256": policy_digest,
+                    "snapshot_sha256": _snapshot_hash(snapshot_path),
+                },
+                "invocation": {
+                    "exit_code": invocation.exit_code,
+                    "applied_policy_sha256": invocation.applied_policy_sha256,
+                },
+            }
+            record, _ = _redactor(config).value(record)
+            if not isinstance(record, dict):
+                raise AssertionError("redacted probe record must remain a mapping")
+            record_path = probes_dir / f"{policy_digest}-{nonce}.json"
+            atomic_write_json(record_path, record)
+            record_hash = sha256_bytes(record_path.read_bytes())
+            index_entry = {
+                "policy_sha256": policy_digest,
+                "path": record_path.relative_to(evidence_dir).as_posix(),
+                "record_sha256": record_hash,
+            }
+            append_jsonl_fsync(evidence_dir / "probe-runs.jsonl", index_entry)
+            records.append(index_entry)
+    binding = {
+        "schema_version": SCHEMA_VERSION,
+        "probe_version": _PROBE_VERSION,
+        "adapter_command_sha256": sha256_bytes(canonical_bytes(list(runner.sandbox_adapter))),
+        "probe_program_sha256": _PROBE_PROGRAM_SHA256,
+        "policy_sha256": sorted(policies),
+        "snapshot_sha256": _snapshot_hash(snapshot_path),
+    }
+    return {**binding, "sha256": sha256_bytes(canonical_bytes(binding))}
+
+
+def _first_regular_file(root: Path) -> Path:
+    for path in sorted(root.rglob("*"), key=lambda value: value.relative_to(root).as_posix()):
+        if path.is_file() and not path.is_symlink():
+            return path.resolve()
+    raise BenchmarkError(f"sandbox probe source tree has no regular file: {root}")
+
+
+def _snapshot_hash(snapshot_path: Path) -> str:
+    trees = {
+        "skills": _tree_hash(snapshot_path / "skills"),
+        ".translation": _tree_hash(snapshot_path / ".translation"),
+    }
+    return sha256_bytes(canonical_bytes(trees))
+
+
+def _require_snapshot_bound_resume(evidence_dir: Path, *, required: bool) -> None:
+    if not required:
+        return
+    artifacts = any(
+        path.exists()
+        for path in (
+            evidence_dir / "runs.jsonl",
+            evidence_dir / "raw",
+            evidence_dir / "probes",
+            evidence_dir / "probe-runs.jsonl",
+            evidence_dir / "input-snapshot",
+        )
+    )
+    if not artifacts:
+        return
+    manifest_path = evidence_dir / "run-manifest.json"
+    if not manifest_path.is_file():
+        raise BenchmarkError("existing evidence has no input snapshot manifest binding")
+    manifest = read_json(manifest_path)
+    binding = manifest.get("input_snapshot") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != {"trees", "sha256"}
+        or not isinstance(binding.get("trees"), dict)
+        or set(binding["trees"]) != {"skills", ".translation"}
+        or any(
+            not isinstance(digest, str) or not _SHA256.fullmatch(digest)
+            for digest in binding["trees"].values()
+        )
+        or not isinstance(binding.get("sha256"), str)
+        or not _SHA256.fullmatch(binding["sha256"])
+    ):
+        raise BenchmarkError("existing evidence has no valid input snapshot binding")
 
 
 def _result_from_invocation(
@@ -989,25 +1151,48 @@ def _result_from_invocation(
     project_fingerprint: str,
     redactor: LiteralSecretRedactor,
 ) -> RunResult:
-    stdout, stdout_changed = redactor.text(invocation.stdout)
-    stderr, stderr_changed = redactor.text(invocation.stderr)
-    reason, reason_changed = redactor.value(invocation.reason)
-    telemetry, telemetry_changed = redactor.value(invocation.telemetry)
-    usage, usage_changed = redactor.value(invocation.usage)
-    argv, argv_changed = redactor.value(invocation.argv)
-    digest, raw_path = _store_raw(evidence_dir, stdout)
     failure_class = classify_failure(asdict(invocation))
-    return RunResult(
-        spec.run_id, spec.case_id, spec.condition, spec.attempt, runner_mode,
-        "completed" if failure_class == "success" else failure_class,
-        failure_class, invocation.process_started, invocation.started_at,
-        invocation.completed_at, invocation.exit_code, invocation.timed_out,
-        invocation.refused, invocation.malformed_output, invocation.tool_misuse,
-        reason, digest, raw_path, stderr, telemetry, usage,
-        stdout_changed or stderr_changed or reason_changed or telemetry_changed
-        or usage_changed or argv_changed,
-        project_fingerprint, tuple(argv), invocation.shell,
-    )
+    complete_record = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": spec.run_id,
+        "case_id": spec.case_id,
+        "condition": spec.condition,
+        "attempt": spec.attempt,
+        "runner_mode": runner_mode,
+        "status": "completed" if failure_class == "success" else failure_class,
+        "failure_class": failure_class,
+        "process_started": invocation.process_started,
+        "started_at": invocation.started_at,
+        "completed_at": invocation.completed_at,
+        "exit_code": invocation.exit_code,
+        "timed_out": invocation.timed_out,
+        "refused": invocation.refused,
+        "malformed_output": invocation.malformed_output,
+        "tool_misuse": invocation.tool_misuse,
+        "reason": invocation.reason,
+        "stdout": invocation.stdout,
+        "output_sha256": "",
+        "raw_output_path": "",
+        "stderr": invocation.stderr,
+        "telemetry": invocation.telemetry,
+        "usage": invocation.usage,
+        "applied_policy_sha256": invocation.applied_policy_sha256,
+        "redacted": False,
+        "project_fingerprint": project_fingerprint,
+        "argv": list(invocation.argv),
+        "shell": invocation.shell,
+    }
+    redacted_record, changed = redactor.value(complete_record)
+    if not isinstance(redacted_record, dict):
+        raise AssertionError("redacted run record must remain a mapping")
+    stdout = redacted_record.pop("stdout")
+    if not isinstance(stdout, str):
+        raise AssertionError("redacted stdout must remain text")
+    digest, raw_path = _store_raw(evidence_dir, stdout)
+    redacted_record["output_sha256"] = digest
+    redacted_record["raw_output_path"] = raw_path
+    redacted_record["redacted"] = changed
+    return RunResult.from_record(redacted_record)
 
 
 def execute_schedule(
@@ -1050,6 +1235,7 @@ def execute_schedule(
     snapshot_required = validated["mode"] == "cli" or any(
         spec.condition == "suite" for spec in schedule
     )
+    _require_snapshot_bound_resume(evidence_dir, required=snapshot_required)
     snapshot_path, snapshot_manifest = _freeze_input_snapshot(
         evidence_dir, validated, required=snapshot_required
     )
