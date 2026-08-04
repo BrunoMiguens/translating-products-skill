@@ -4,6 +4,7 @@ import argparse
 import csv
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -533,15 +534,23 @@ def _parse_html_topology(text: str) -> object:
 
 
 _MARKDOWN_LINK = re.compile(r"(!?)\[[^\]\n]*\]\(([^\s)]+)(?:\s+[^)]*)?\)")
-_MARKDOWN_REFERENCE_USE = re.compile(r"(!?)\[([^\]\n]+)\]\[([^\]\n]*)\]")
 _MARKDOWN_REFERENCE_DEFINITION = re.compile(
-    r"^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))",
+    r"^ {0,3}\[((?:\\[^\n]|[^\\\]\n])+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))",
     re.MULTILINE,
+)
+_MARKDOWN_REFERENCE_TITLE = re.compile(
+    r'''^ {0,3}(?:"(?:\\[^\n]|[^\\"\n])*"|'''
+    r"'(?:\\[^\n]|[^\\'\n])*'|"
+    r"\((?:\\[^\n]|[^\\)\n])*\))[ \t]*$"
 )
 _MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+")
 _MARKDOWN_LIST = re.compile(r"^(\s*)([-+*]|\d+[.)])\s+")
 _MARKDOWN_QUOTE = re.compile(r"^(\s*(?:>\s*)+)")
 _MARKDOWN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_MARKDOWN_CONTAINER_LIST = re.compile(
+    r"^ {0,3}(?:[-+*]|\d{1,9}[.)])([ \t]{1,4})"
+)
+_MARKDOWN_CONTAINER_QUOTE = re.compile(r"^ {0,3}>[ \t]?")
 
 
 def _parse_markdown_topology(text: str) -> object:
@@ -550,10 +559,13 @@ def _parse_markdown_topology(text: str) -> object:
     quotes: list[int] = []
     fences: list[str] = []
     active_lines: list[str] = []
-    open_fence: tuple[str, int] | None = None
+    open_fence: tuple[str, int, tuple[tuple[str, int], ...]] | None = None
     for line in text.splitlines():
-        fence = _MARKDOWN_FENCE.match(line)
         if open_fence is not None:
+            fence_line = _markdown_fence_content(line, open_fence[2])
+            fence = (
+                None if fence_line is None else _MARKDOWN_FENCE.match(fence_line)
+            )
             if fence:
                 marker = fence.group(1)
                 remainder = fence.group(2)
@@ -563,15 +575,29 @@ def _parse_markdown_topology(text: str) -> object:
                     and not remainder.strip(" \t")
                 ):
                     open_fence = None
+            active_lines.append("")
             continue
+        fence_line, containers = _markdown_container_content(line)
+        fence = _MARKDOWN_FENCE.match(fence_line)
         if fence:
             marker = fence.group(1)
             info = fence.group(2)
             if marker[0] != "`" or "`" not in info:
-                open_fence = (marker[0], len(marker))
+                open_fence = (marker[0], len(marker), containers)
                 fences.append(info.strip())
+                item = _MARKDOWN_LIST.match(line)
+                if item:
+                    lists.append((
+                        len(item.group(1).expandtabs(4)),
+                        "ordered" if item.group(2)[0].isdigit() else "unordered",
+                    ))
+                quote = _MARKDOWN_QUOTE.match(line)
+                if quote:
+                    quotes.append(quote.group(1).count(">"))
+                active_lines.append("")
                 continue
         if line.startswith("\t") or line.startswith("    "):
+            active_lines.append("")
             continue
         active_lines.append(line)
         heading = _MARKDOWN_HEADING.match(line)
@@ -586,16 +612,7 @@ def _parse_markdown_topology(text: str) -> object:
     if open_fence is not None:
         raise _CandidateStructureError("unclosed Markdown code fence")
     active_text = "\n".join(active_lines)
-    definitions: dict[str, str] = {}
-    definition_spans: list[tuple[int, int]] = []
-    for match in _MARKDOWN_REFERENCE_DEFINITION.finditer(active_text):
-        label = _markdown_label(match.group(1))
-        definitions.setdefault(label, match.group(2) or match.group(3))
-        line_end = active_text.find("\n", match.end())
-        definition_spans.append((
-            match.start(),
-            len(active_text) if line_end < 0 else line_end,
-        ))
+    definitions, definition_spans = _markdown_reference_definitions(active_text)
     use_text = _blank_spans(active_text, definition_spans)
     use_text = _blank_spans(use_text, _markdown_code_span_spans(use_text))
     links: list[tuple[str, str]] = []
@@ -610,23 +627,9 @@ def _parse_markdown_topology(text: str) -> object:
         )
         links.append(("image" if is_image else "link", match.group(2)))
     reference_uses: list[tuple[str, str]] = []
-    for match in _MARKDOWN_REFERENCE_USE.finditer(use_text):
-        bracket = match.start() + (1 if match.group(1) else 0)
-        if (
-            _markdown_is_escaped(use_text, bracket)
-            or any(_spans_overlap(match.span(), span) for span in occupied_spans)
-        ):
-            continue
-        occupied_spans.append(match.span())
-        label = _markdown_label(match.group(3) or match.group(2))
-        if label in definitions:
-            is_image = bool(match.group(1)) and not _markdown_is_escaped(
-                use_text, match.start()
-            )
-            reference_uses.append((
-                "image" if is_image else "link",
-                definitions[label],
-            ))
+    reference_uses.extend(
+        _markdown_full_reference_uses(use_text, definitions, occupied_spans)
+    )
     reference_uses.extend(
         _markdown_shortcut_uses(use_text, definitions, occupied_spans)
     )
@@ -639,6 +642,81 @@ def _parse_markdown_topology(text: str) -> object:
         "reference_uses": tuple(reference_uses),
         "reference_definitions": tuple(sorted(definitions.values())),
     }
+
+
+def _markdown_container_content(
+    line: str,
+) -> tuple[str, tuple[tuple[str, int], ...]]:
+    content = line
+    containers: list[tuple[str, int]] = []
+    while True:
+        quote = _MARKDOWN_CONTAINER_QUOTE.match(content)
+        if quote:
+            containers.append(("quote", 0))
+            content = content[quote.end():]
+            continue
+        item = _MARKDOWN_CONTAINER_LIST.match(content)
+        if item:
+            containers.append((
+                "list",
+                len(content[:item.end()].expandtabs(4)),
+            ))
+            content = content[item.end():]
+            continue
+        return content, tuple(containers)
+
+
+def _markdown_fence_content(
+    line: str,
+    containers: Sequence[tuple[str, int]],
+) -> str | None:
+    content = line
+    for kind, width in containers:
+        if kind == "quote":
+            quote = _MARKDOWN_CONTAINER_QUOTE.match(content)
+            if quote is None:
+                return None
+            content = content[quote.end():]
+            continue
+        position = 0
+        column = 0
+        while position < len(content) and column < width:
+            if content[position] == " ":
+                column += 1
+            elif content[position] == "\t":
+                column += 4 - (column % 4)
+            else:
+                return None
+            position += 1
+        if column < width:
+            return None
+        content = content[position:]
+    return content
+
+
+def _markdown_reference_definitions(
+    text: str,
+) -> tuple[dict[str, str], list[tuple[int, int]]]:
+    definitions: dict[str, str] = {}
+    spans: list[tuple[int, int]] = []
+    for match in _MARKDOWN_REFERENCE_DEFINITION.finditer(text):
+        definitions.setdefault(
+            _markdown_label(match.group(1)),
+            match.group(2) or match.group(3),
+        )
+        line_end = text.find("\n", match.end())
+        span_end = len(text) if line_end < 0 else line_end
+        if line_end >= 0 and not text[match.end():line_end].strip(" \t"):
+            next_line_start = line_end + 1
+            next_line_end = text.find("\n", next_line_start)
+            if next_line_end < 0:
+                next_line_end = len(text)
+            if _MARKDOWN_REFERENCE_TITLE.fullmatch(
+                text[next_line_start:next_line_end]
+            ):
+                span_end = next_line_end
+        spans.append((match.start(), span_end))
+    return definitions, spans
 
 
 def _markdown_label(value: str) -> str:
@@ -694,6 +772,60 @@ def _markdown_code_span_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+def _markdown_closing_bracket(text: str, opening: int) -> int | None:
+    position = opening + 1
+    while position < len(text) and text[position] != "\n":
+        if text[position] == "]" and not _markdown_is_escaped(text, position):
+            return position
+        position += 1
+    return None
+
+
+def _markdown_full_reference_uses(
+    text: str,
+    definitions: Mapping[str, str],
+    occupied_spans: list[tuple[int, int]],
+) -> list[tuple[str, str]]:
+    uses: list[tuple[str, str]] = []
+    position = 0
+    while position < len(text):
+        opening = text.find("[", position)
+        if opening < 0:
+            break
+        if _markdown_is_escaped(text, opening):
+            position = opening + 1
+            continue
+        closing = _markdown_closing_bracket(text, opening)
+        if closing is None or closing + 1 >= len(text) or text[closing + 1] != "[":
+            position = opening + 1
+            continue
+        label_opening = closing + 1
+        label_closing = _markdown_closing_bracket(text, label_opening)
+        if label_closing is None:
+            position = label_opening + 1
+            continue
+        image_marker = opening - 1
+        is_image = (
+            image_marker >= 0
+            and text[image_marker] == "!"
+            and not _markdown_is_escaped(text, image_marker)
+        )
+        span = (image_marker if is_image else opening, label_closing + 1)
+        if not any(_spans_overlap(span, occupied) for occupied in occupied_spans):
+            occupied_spans.append(span)
+            label_text = text[label_opening + 1:label_closing]
+            label = _markdown_label(
+                label_text or text[opening + 1:closing]
+            )
+            if label in definitions:
+                uses.append((
+                    "image" if is_image else "link",
+                    definitions[label],
+                ))
+        position = label_closing + 1
+    return uses
+
+
 def _markdown_shortcut_uses(
     text: str,
     definitions: Mapping[str, str],
@@ -708,12 +840,8 @@ def _markdown_shortcut_uses(
         if _markdown_is_escaped(text, opening):
             position = opening + 1
             continue
-        closing = opening + 1
-        while closing < len(text) and text[closing] != "\n":
-            if text[closing] == "]" and not _markdown_is_escaped(text, closing):
-                break
-            closing += 1
-        if closing >= len(text) or text[closing] != "]":
+        closing = _markdown_closing_bracket(text, opening)
+        if closing is None:
             position = opening + 1
             continue
         span = (opening, closing + 1)
@@ -761,7 +889,8 @@ _ICU_PATTERN_WHITESPACE = frozenset(
     "\u0009\u000a\u000b\u000c\u000d\u0020\u0085\u200e\u200f\u2028\u2029"
 )
 _ICU_NUMBER = re.compile(
-    r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?"
+    r"[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?)|(?:\.[0-9]+))"
+    r"(?:[eE][+-]?[0-9]+)?"
 )
 
 
@@ -864,8 +993,12 @@ class _ICUParser:
                     offset_text = self._selector_token()
                 if _ICU_NUMBER.fullmatch(offset_text) is None:
                     raise _CandidateStructureError("invalid ICU plural offset")
-                numeric_offset = Decimal(offset_text)
-                if numeric_offset < 0:
+                try:
+                    numeric_offset = Decimal(offset_text)
+                    double_offset = float(offset_text)
+                except (InvalidOperation, OverflowError, ValueError):
+                    raise _CandidateStructureError("invalid ICU plural offset") from None
+                if numeric_offset < 0 or not math.isfinite(double_offset):
                     raise _CandidateStructureError("invalid ICU plural offset")
                 offset = "0" if numeric_offset == 0 else str(numeric_offset.normalize())
                 continue
