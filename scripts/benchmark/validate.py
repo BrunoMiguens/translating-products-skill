@@ -17,18 +17,21 @@ from uuid import uuid4
 from xml.etree import ElementTree
 
 from .common import BenchmarkError, canonical_bytes, read_json, read_jsonl, sha256_bytes
+from .run import RunResult
 from .schema import SCHEMA_VERSION
 
 
 _SEVERITIES = {"critical", "major", "minor", "neutral"}
-_PLACEHOLDER = re.compile(r"\{\{\s*[A-Za-z_][\w.-]*\s*\}\}|\{\s*[A-Za-z_][\w.-]*\s*\}")
+_PLACEHOLDER_NAME = r"(?:[A-Za-z_][\w.-]*|\d+)"
+_PLACEHOLDER = re.compile(
+    rf"\{{\{{\s*{_PLACEHOLDER_NAME}\s*\}}\}}|\{{\s*{_PLACEHOLDER_NAME}\s*\}}"
+)
 _FORMAT_SPECIFIER = re.compile(
     r"%%|%(?:\d+\$)?[-+0 #']*(?:\d+|\*)?(?:\.(?:\d+|\*))?"
     r"(?:hh|h|ll|l|L|z|j|t|q)?[diuoxXfFeEgGaAcsp@]"
 )
 _URL = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![\w.-])")
-_CODE_SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 _NUMBER = re.compile(
     r"(?<![\w])[-+]?(?:\d{1,3}(?:[.,\s]\d{3})+|\d+)(?:[.,]\d+)?(?:\s?%)?(?![\w])"
 )
@@ -194,16 +197,56 @@ def check_emails(case: Mapping[str, object], output: str, check: Mapping[str, ob
 
 
 def check_code_spans(case: Mapping[str, object], output: str, check: Mapping[str, object]) -> tuple[Finding, ...]:
-    extract = lambda text: [match.group(1) for match in _CODE_SPAN.finditer(text)]
-    return _multiset_finding("code_span_multiset", _severity(check), extract(_source(case)), extract(output), output)
+    return _multiset_finding(
+        "code_span_multiset", _severity(check),
+        _extract_code_spans(_source(case)), _extract_code_spans(output), output,
+    )
+
+
+def _extract_code_spans(text: str) -> list[str]:
+    spans: list[str] = []
+    position = 0
+    while position < len(text):
+        if text[position] != "`":
+            position += 1
+            continue
+        opening = position
+        while position < len(text) and text[position] == "`":
+            position += 1
+        width = position - opening
+        closing = position
+        while closing < len(text):
+            closing = text.find("`" * width, closing)
+            if closing < 0:
+                break
+            if (
+                (closing == 0 or text[closing - 1] != "`")
+                and (closing + width == len(text) or text[closing + width] != "`")
+            ):
+                content = text[position:closing].replace("\n", " ")
+                if (
+                    len(content) >= 2
+                    and content.startswith(" ")
+                    and content.endswith(" ")
+                    and content.strip(" ")
+                ):
+                    content = content[1:-1]
+                spans.append(content)
+                position = closing + width
+                break
+            closing += width
+        else:
+            continue
+        if closing < 0:
+            position = opening + width
+    return spans
 
 
 def check_commands(case: Mapping[str, object], output: str, check: Mapping[str, object]) -> tuple[Finding, ...]:
     values = _configured_values(check, keys=("values", "commands"))
     if values is None:
-        extract = lambda text: [match.group(1) for match in _CODE_SPAN.finditer(text)]
-        expected_values = extract(_source(case))
-        observed_values = extract(output)
+        expected_values = _extract_code_spans(_source(case))
+        observed_values = _extract_code_spans(output)
     else:
         expected_values = _literal_occurrences(_source(case), values)
         observed_values = _literal_occurrences(output, values)
@@ -245,11 +288,34 @@ def check_protected_terms(case: Mapping[str, object], output: str, check: Mappin
 
 
 def check_numbers(case: Mapping[str, object], output: str, check: Mapping[str, object]) -> tuple[Finding, ...]:
-    extract = lambda text: [_normalize_number(match.group(0)) for match in _NUMBER.finditer(text)]
-    return _multiset_finding("number_multiset", _severity(check), extract(_source(case)), extract(output), output)
+    source_locale = _locale(case, "source_locale")
+    target_locale = _locale(case, "target_locale")
+    source_values = [
+        _normalize_number(match.group(0), source_locale)
+        for match in _NUMBER.finditer(_source(case))
+    ]
+    output_values = [
+        _normalize_number(match.group(0), target_locale)
+        for match in _NUMBER.finditer(output)
+    ]
+    return _multiset_finding(
+        "number_multiset", _severity(check), source_values, output_values, output,
+    )
 
 
-def _normalize_number(value: str) -> str:
+def _locale(case: Mapping[str, object], field: str) -> str:
+    value = case.get(field)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"case {field} must be non-empty text")
+    normalized = value.replace("_", "-").lower()
+    if normalized == "pt" or normalized.startswith("pt-"):
+        return "pt"
+    if normalized == "en" or normalized.startswith("en-"):
+        return "en"
+    raise ValueError(f"unsupported numeric locale: {value}")
+
+
+def _normalize_number(value: str, locale: str) -> str:
     compact = re.sub(r"\s+", "", value)
     suffix = "%" if compact.endswith("%") else ""
     if suffix:
@@ -257,19 +323,21 @@ def _normalize_number(value: str) -> str:
     sign = ""
     if compact[:1] in {"+", "-"}:
         sign, compact = compact[0], compact[1:]
-    separators = [separator for separator in (",", ".") if separator in compact]
-    if len(separators) == 2:
-        decimal_separator = max(separators, key=compact.rfind)
-        grouping_separator = "," if decimal_separator == "." else "."
-        compact = compact.replace(grouping_separator, "").replace(decimal_separator, ".")
-    elif separators:
-        separator = separators[0]
-        parts = compact.split(separator)
-        grouping = len(parts) > 2 and all(len(part) == 3 for part in parts[1:])
-        grouping = grouping or (
-            len(parts) == 2 and len(parts[1]) == 3 and 1 <= len(parts[0]) <= 3
-        )
-        compact = "".join(parts) if grouping else compact.replace(separator, ".")
+    decimal_separator, grouping_separator = (",", ".") if locale == "pt" else (".", ",")
+    if compact.count(decimal_separator) > 1:
+        return f"invalid:{locale}:{value}"
+    integer, separator, fraction = compact.partition(decimal_separator)
+    groups = integer.split(grouping_separator)
+    if len(groups) > 1 and not (
+        1 <= len(groups[0]) <= 3
+        and all(len(group) == 3 and group.isdigit() for group in groups[1:])
+    ):
+        return f"invalid:{locale}:{value}"
+    if not all(group.isdigit() for group in groups):
+        return f"invalid:{locale}:{value}"
+    if separator and (not fraction or not fraction.isdigit() or grouping_separator in fraction):
+        return f"invalid:{locale}:{value}"
+    compact = "".join(groups) + (("." + fraction) if separator else "")
     try:
         normalized = format(Decimal(f"{sign}{compact}").normalize(), "f")
     except InvalidOperation:
@@ -352,6 +420,46 @@ _VOID_HTML_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
     "meta", "param", "source", "track", "wbr",
 }
+_OPTIONAL_HTML_END_TAGS = {
+    "colgroup", "dd", "dt", "li", "optgroup", "option", "p", "rb", "rp",
+    "rt", "rtc", "tbody", "td", "tfoot", "th", "thead", "tr",
+}
+_P_CLOSING_START_TAGS = {
+    "address", "article", "aside", "blockquote", "details", "dialog", "div",
+    "dl", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2",
+    "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "main", "menu",
+    "nav", "ol", "p", "pre", "search", "section", "table", "ul",
+}
+_IMPLIED_SIBLING_ENDS = {
+    "li": {"li"},
+    "dt": {"dt", "dd"},
+    "dd": {"dt", "dd"},
+    "rt": {"rt", "rp"},
+    "rp": {"rt", "rp"},
+    "option": {"option"},
+    "optgroup": {"option", "optgroup"},
+    "thead": {"tbody", "tfoot"},
+    "tbody": {"tbody", "tfoot", "thead"},
+    "tfoot": {"tbody", "tfoot", "thead"},
+    "tr": {"tr"},
+    "td": {"td", "th"},
+    "th": {"td", "th"},
+}
+_IMPLIED_SCOPE_BLOCKERS = {
+    "li": {"ol", "ul", "menu"},
+    "dt": {"dl"},
+    "dd": {"dl"},
+    "rt": {"ruby"},
+    "rp": {"ruby"},
+    "option": {"datalist", "optgroup", "select"},
+    "optgroup": {"select"},
+    "thead": {"table"},
+    "tbody": {"table"},
+    "tfoot": {"table"},
+    "tr": {"table", "tbody", "tfoot", "thead"},
+    "td": {"table", "tr"},
+    "th": {"table", "tr"},
+}
 
 
 class _TopologyHTMLParser(HTMLParser):
@@ -361,6 +469,17 @@ class _TopologyHTMLParser(HTMLParser):
         self.stack: list[tuple[str, list[object]]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        closable = set(_IMPLIED_SIBLING_ENDS.get(tag, ()))
+        if tag in _P_CLOSING_START_TAGS:
+            closable.add("p")
+        blockers = _IMPLIED_SCOPE_BLOCKERS.get(tag, set())
+        for index in range(len(self.stack) - 1, -1, -1):
+            open_tag = self.stack[index][0]
+            if open_tag in closable:
+                del self.stack[index:]
+                break
+            if open_tag in blockers:
+                break
         children: list[object] = []
         node = (tag, tuple(sorted(name for name, _ in attrs)), children)
         (self.stack[-1][1] if self.stack else self.root).append(node)
@@ -372,13 +491,21 @@ class _TopologyHTMLParser(HTMLParser):
         (self.stack[-1][1] if self.stack else self.root).append(node)
 
     def handle_endtag(self, tag: str) -> None:
-        if not self.stack or self.stack[-1][0] != tag:
+        matching = next(
+            (index for index in range(len(self.stack) - 1, -1, -1) if self.stack[index][0] == tag),
+            None,
+        )
+        if matching is None or any(
+            open_tag not in _OPTIONAL_HTML_END_TAGS
+            for open_tag, _ in self.stack[matching + 1:]
+        ):
             raise _CandidateStructureError(f"unexpected closing HTML tag: {tag}")
-        self.stack.pop()
+        del self.stack[matching:]
 
     def topology(self) -> object:
-        if self.stack:
+        if any(tag not in _OPTIONAL_HTML_END_TAGS for tag, _ in self.stack):
             raise _CandidateStructureError(f"unclosed HTML tag: {self.stack[-1][0]}")
+        self.stack.clear()
         return _freeze_lists(self.root)
 
 
@@ -403,6 +530,11 @@ def _parse_html_topology(text: str) -> object:
 
 
 _MARKDOWN_LINK = re.compile(r"(!?)\[[^\]\n]*\]\(([^\s)]+)(?:\s+[^)]*)?\)")
+_MARKDOWN_REFERENCE_USE = re.compile(r"(!?)\[([^\]\n]+)\]\[([^\]\n]*)\]")
+_MARKDOWN_REFERENCE_DEFINITION = re.compile(
+    r"^\s{0,3}\[([^\]\n]+)\]:\s*(?:<([^>\n]+)>|(\S+))",
+    re.MULTILINE,
+)
 _MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+")
 _MARKDOWN_LIST = re.compile(r"^(\s*)([-+*]|\d+[.)])\s+")
 _MARKDOWN_QUOTE = re.compile(r"^(\s*(?:>\s*)+)")
@@ -438,17 +570,37 @@ def _parse_markdown_topology(text: str) -> object:
             quotes.append(quote.group(1).count(">"))
     if open_fence is not None:
         raise _CandidateStructureError("unclosed Markdown code fence")
+    definitions: dict[str, str] = {}
+    for match in _MARKDOWN_REFERENCE_DEFINITION.finditer(text):
+        label = _markdown_label(match.group(1))
+        if label in definitions:
+            raise _CandidateStructureError(f"duplicate Markdown reference definition: {label}")
+        definitions[label] = match.group(2) or match.group(3)
     links = tuple(
         ("image" if match.group(1) else "link", match.group(2))
         for match in _MARKDOWN_LINK.finditer(text)
     )
+    reference_uses = []
+    for match in _MARKDOWN_REFERENCE_USE.finditer(text):
+        label = _markdown_label(match.group(3) or match.group(2))
+        if label in definitions:
+            reference_uses.append((
+                "image" if match.group(1) else "link",
+                definitions[label],
+            ))
     return {
         "headings": tuple(headings),
         "lists": tuple(lists),
         "quotes": tuple(quotes),
         "fences": tuple(fences),
         "links": links,
+        "reference_uses": tuple(reference_uses),
+        "reference_definitions": tuple(sorted(definitions.values())),
     }
+
+
+def _markdown_label(value: str) -> str:
+    return " ".join(value.split()).casefold()
 
 
 def _csv_dialect(text: str, configured: object = None) -> str:
@@ -535,6 +687,10 @@ class _ICUParser:
             raise _CandidateStructureError(f"ICU argument {name} has no formatter")
         delimiter = self._current()
         if delimiter == "}":
+            if formatter in {"plural", "selectordinal", "select"}:
+                raise _CandidateStructureError(
+                    f"ICU {formatter} argument {name} requires selectors"
+                )
             self.position += 1
             return name, formatter, (), ()
         self.position += 1
@@ -552,10 +708,14 @@ class _ICUParser:
                 self.position += 1
                 if not branches:
                     raise _CandidateStructureError(f"ICU {formatter} argument has no selectors")
+                if "other" not in branches:
+                    raise _CandidateStructureError(
+                        f"ICU {formatter} argument requires an other selector"
+                    )
                 return name, formatter, (() if offset is None else (("offset", offset),)), tuple(sorted(branches.items()))
             selector = self._token({"{", "}", " "})
             if selector.startswith("offset:"):
-                if formatter == "select" or offset is not None:
+                if formatter == "select" or offset is not None or branches:
                     raise _CandidateStructureError("invalid ICU plural offset")
                 offset = selector.split(":", 1)[1]
                 if not offset.isdigit():
@@ -564,10 +724,23 @@ class _ICUParser:
             self._skip_space()
             if not selector or self._current() != "{":
                 raise _CandidateStructureError(f"invalid ICU selector in {name}")
+            if not self._valid_selector(formatter, selector):
+                raise _CandidateStructureError(
+                    f"invalid ICU {formatter} selector: {selector}"
+                )
             if selector in branches:
                 raise _CandidateStructureError(f"duplicate ICU selector: {selector}")
             self.position += 1
             branches[selector] = self._message(stop=True)
+
+    @staticmethod
+    def _valid_selector(formatter: str, selector: str) -> bool:
+        if formatter == "select":
+            return re.fullmatch(r"[A-Za-z_][\w.-]*", selector) is not None
+        return (
+            selector in {"zero", "one", "two", "few", "many", "other"}
+            or re.fullmatch(r"=-?(?:0|[1-9]\d*)(?:\.\d+)?", selector) is not None
+        )
 
     def _consume_formatter_style(self) -> None:
         depth = 0
@@ -774,7 +947,9 @@ def _manifest_run_ids(evidence_dir: Path) -> list[str]:
         raise BenchmarkError("run manifest schedule has duplicate run ids")
     digest = schedule.get("sha256")
     expected_digest = sha256_bytes(canonical_bytes(run_ids))
-    if digest is not None and digest != expected_digest:
+    if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+        raise BenchmarkError("run manifest schedule hash is required")
+    if digest != expected_digest:
         raise BenchmarkError("run manifest schedule hash mismatch")
     return run_ids
 
@@ -792,16 +967,17 @@ def _cases_by_id(dataset_dir: Path) -> dict[str, dict]:
     return result
 
 
-def _runs_by_id(evidence_dir: Path, expected_ids: Sequence[str]) -> dict[str, dict]:
+def _runs_by_id(evidence_dir: Path, expected_ids: Sequence[str]) -> dict[str, RunResult]:
     records = read_jsonl(evidence_dir / "runs.jsonl")
-    result: dict[str, dict] = {}
+    result: dict[str, RunResult] = {}
     for record in records:
-        run_id = record.get("run_id")
+        run = RunResult.from_record(record)
+        run_id = run.run_id
         if not isinstance(run_id, str) or not run_id:
             raise BenchmarkError("run record id must be non-empty text")
         if run_id in result:
             raise BenchmarkError(f"duplicate run id: {run_id}")
-        result[run_id] = record
+        result[run_id] = run
     expected = set(expected_ids)
     actual = set(result)
     if actual != expected:
@@ -813,9 +989,9 @@ def _runs_by_id(evidence_dir: Path, expected_ids: Sequence[str]) -> dict[str, di
     return result
 
 
-def _raw_output(evidence_dir: Path, record: Mapping[str, object]) -> str:
-    relative = record.get("raw_output_path")
-    digest = record.get("output_sha256")
+def _raw_output(evidence_dir: Path, record: RunResult) -> str:
+    relative = record.raw_output_path
+    digest = record.output_sha256
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
         raise BenchmarkError("run record has invalid raw output path")
     if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
@@ -851,6 +1027,21 @@ def _refuse_raw_destination(evidence_dir: Path, destination: Path) -> None:
     except ValueError:
         return
     raise BenchmarkError("validation output must not be written inside raw evidence")
+
+
+def _refuse_input_destination(destination: Path, inputs: Sequence[Path]) -> None:
+    destination = Path(destination)
+    destination_resolved = destination.resolve()
+    for input_path in inputs:
+        input_path = Path(input_path)
+        try:
+            aliases = destination_resolved == input_path.resolve()
+            if not aliases and destination.exists() and input_path.exists():
+                aliases = os.path.samefile(destination, input_path)
+        except OSError as error:
+            raise BenchmarkError(f"cannot compare validation output with input {input_path}: {error}") from error
+        if aliases:
+            raise BenchmarkError(f"validation output aliases consumed input: {input_path}")
 
 
 def _atomic_write_jsonl(path: Path, records: Sequence[Mapping[str, object]]) -> None:
@@ -898,14 +1089,31 @@ def validate_runs(
     destination = Path(output_path) if output_path is not None else evidence_dir / "validation.jsonl"
     if evidence_dir.is_symlink():
         raise BenchmarkError(f"refusing symlink evidence directory: {evidence_dir}")
+    manifest_path = evidence_dir / "run-manifest.json"
+    runs_path = evidence_dir / "runs.jsonl"
+    cases_path = dataset_dir / "cases.jsonl"
+    _refuse_input_destination(destination, (manifest_path, runs_path, cases_path))
     _refuse_raw_destination(evidence_dir, destination)
     run_ids = _manifest_run_ids(evidence_dir)
     cases = _cases_by_id(dataset_dir)
     runs = _runs_by_id(evidence_dir, run_ids)
+    raw_inputs: list[Path] = []
+    for run in runs.values():
+        if (
+            not isinstance(run.raw_output_path, str)
+            or not run.raw_output_path
+            or Path(run.raw_output_path).is_absolute()
+        ):
+            raise BenchmarkError("run record has invalid raw output path")
+        raw_inputs.append(evidence_dir / run.raw_output_path)
+    _refuse_input_destination(
+        destination,
+        raw_inputs,
+    )
     results: list[ValidationResult] = []
     for run_id in run_ids:
         run = runs[run_id]
-        case_id = run.get("case_id")
+        case_id = run.case_id
         if not isinstance(case_id, str) or case_id not in cases:
             raise BenchmarkError(f"run {run_id} has unknown case id: {case_id!r}")
         output = _raw_output(evidence_dir, run)

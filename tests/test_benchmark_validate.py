@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.benchmark.common import BenchmarkError, canonical_bytes, sha256_bytes
+from scripts.benchmark.run import RunResult
 from scripts.benchmark.validate import CHECKS, validate_output, validate_runs
 
 
@@ -19,9 +20,46 @@ def case_with_checks(*, source: str, checks: list[dict], **overrides: object) ->
         "source": source,
         "automatic_checks": checks,
         "protected_terms": [],
+        "source_locale": "en-GB",
+        "target_locale": "pt-PT",
     }
     case.update(overrides)
     return case
+
+
+def complete_run_record(
+    *, run_id: str, case_id: str, digest: str, raw_output_path: str
+) -> dict:
+    return RunResult(
+        run_id=run_id,
+        case_id=case_id,
+        condition="normal",
+        attempt=1,
+        runner_mode="fake",
+        status="completed",
+        failure_class="success",
+        process_started=True,
+        started_at="2026-08-03T00:00:00Z",
+        completed_at="2026-08-03T00:00:01Z",
+        exit_code=0,
+        timed_out=False,
+        refused=False,
+        malformed_output=False,
+        tool_misuse=False,
+        reason=None,
+        output_sha256=digest,
+        raw_output_path=raw_output_path,
+        stderr="",
+        telemetry={},
+        usage={},
+        expected_policy_sha256=None,
+        applied_policy_sha256=None,
+        policy_integrity="not_required",
+        redacted=False,
+        project_fingerprint=f"project-{run_id}",
+        argv=("deterministic-fake-agent",),
+        shell=False,
+    ).to_record()
 
 
 @dataclass(frozen=True)
@@ -181,6 +219,22 @@ class ValidatorTests(unittest.TestCase):
 
         self.assertEqual(result.findings, ())
 
+    def test_ambiguous_number_separators_follow_each_declared_locale(self):
+        """Break: identical punctuation could hide different locale-specific numeric values."""
+        case = case_with_checks(
+            source="Value: 1,234",
+            checks=[{"type": "number_multiset", "severity": "critical"}],
+            source_locale="en-US",
+            target_locale="pt-PT",
+        )
+
+        corrupted = validate_output(case, "Valor: 1,234")
+        equivalent = validate_output(case, "Valor: 1.234")
+
+        self.assertEqual(corrupted.status, "failed")
+        self.assertEqual({finding.invariant for finding in corrupted.findings}, {"number_multiset"})
+        self.assertEqual(equivalent.findings, ())
+
     def test_icu_sibling_arguments_may_reorder_without_changing_topology(self):
         """Break: natural target-language argument order could be rejected as structural damage."""
         case = case_with_checks(
@@ -202,6 +256,124 @@ class ValidatorTests(unittest.TestCase):
         result = validate_output(case, "Está a ver {count, number} ficheiros")
 
         self.assertEqual(result.findings, ())
+
+    def test_icu_selector_formatters_require_valid_selectors_and_other(self):
+        """Break: malformed selector grammar could pass or be blamed on candidate output."""
+        check = [{"type": "icu_topology", "severity": "critical"}]
+        malformed_sources = (
+            "{gender, select, male {He}}",
+            "{count, plural}",
+            "{count, plural, banana {Wrong} other {Other}}",
+        )
+        for source in malformed_sources:
+            with self.subTest(source=source):
+                result = validate_output(case_with_checks(source=source, checks=check), source)
+                self.assertEqual(result.status, "validator_error")
+                self.assertEqual(result.findings, ())
+
+        valid_case = case_with_checks(
+            source="{count, plural, one {One} other {Other}}",
+            checks=check,
+        )
+        for candidate in (
+            "{count, plural}",
+            "{count, plural, one {Um}}",
+            "{count, plural, banana {Errado} other {Outro}}",
+        ):
+            with self.subTest(candidate=candidate):
+                result = validate_output(valid_case, candidate)
+                self.assertEqual(result.status, "failed")
+                self.assertEqual(result.validator_errors, ())
+                self.assertEqual(result.findings[0].invariant, "icu_topology")
+
+    def test_icu_selector_grammar_accepts_multiline_offset_and_categories(self):
+        """Break: legal selector whitespace could be folded into a token and rejected."""
+        source = (
+            "{count, plural,\n"
+            " offset:1\n"
+            " =0 {None}\n"
+            " one {One}\n"
+            " other {Other}}"
+        )
+        candidate = (
+            "{count, plural,\n"
+            " offset:1\n"
+            " =0 {Nenhum}\n"
+            " one {Um}\n"
+            " other {Outros}}"
+        )
+        case = case_with_checks(
+            source=source,
+            checks=[{"type": "icu_topology", "severity": "critical"}],
+        )
+
+        result = validate_output(case, candidate)
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.findings, ())
+
+    def test_html_optional_end_tags_preserve_implied_topology(self):
+        """Break: valid HTML with implied li closures could be rejected as malformed."""
+        case = case_with_checks(
+            source="<ul><li>One<li>Two</ul>",
+            checks=[{"type": "html_structure", "severity": "critical"}],
+        )
+
+        valid = validate_output(case, "<ul><li>Um<li>Dois</ul>")
+        corrupted = validate_output(case, "<ul><li>Um<li>Dois<li>Três</ul>")
+
+        self.assertEqual(valid.findings, ())
+        self.assertEqual(valid.status, "passed")
+        self.assertEqual(corrupted.status, "failed")
+
+    def test_html_block_start_implies_p_end_through_inline_descendants(self):
+        """Break: optional p closure could fail when inline elements remain open."""
+        case = case_with_checks(
+            source="<p><em>One<div>Two</div>",
+            checks=[{"type": "html_structure", "severity": "critical"}],
+        )
+
+        result = validate_output(case, "<p><em>Um<div>Dois</div>")
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.findings, ())
+
+    def test_markdown_reference_links_preserve_uses_definitions_and_destinations(self):
+        """Break: reference-link destination corruption could be invisible to topology checks."""
+        case = case_with_checks(
+            source="Read [the docs][help].\n\n[help]: https://lume.example/docs\n",
+            checks=[{"type": "markdown_structure", "severity": "critical"}],
+        )
+
+        valid = validate_output(
+            case,
+            "Leia [a documentação][help].\n\n[help]: https://lume.example/docs\n",
+        )
+        corrupted = validate_output(
+            case,
+            "Leia [a documentação][help].\n\n[help]: https://evil.example\n",
+        )
+
+        self.assertEqual(valid.findings, ())
+        self.assertEqual(corrupted.status, "failed")
+        self.assertEqual(corrupted.findings[0].invariant, "markdown_structure")
+
+    def test_numeric_placeholders_and_multi_backtick_code_spans_are_protected(self):
+        """Break: valid numeric and delimiter-aware scalar syntax could be changed silently."""
+        placeholder_case = case_with_checks(
+            source="Hello {0}",
+            checks=[{"type": "placeholder_multiset", "severity": "critical"}],
+        )
+        code_case = case_with_checks(
+            source="Use ``a`b`` now",
+            checks=[{"type": "code_span_multiset", "severity": "critical"}],
+        )
+
+        placeholder_result = validate_output(placeholder_case, "Olá {1}")
+        code_result = validate_output(code_case, "Use ``changed`` agora")
+
+        self.assertEqual({item.invariant for item in placeholder_result.findings}, {"placeholder_multiset"})
+        self.assertEqual({item.invariant for item in code_result.findings}, {"code_span_multiset"})
 
     def test_json_xml_html_markdown_csv_and_icu_are_semantically_checked(self):
         """Break: merely parseable output with changed declared topology could pass."""
@@ -291,13 +463,12 @@ class BatchValidationTests(unittest.TestCase):
             digest = sha256_bytes(encoded)
             raw_path = self.evidence / "raw" / f"{digest}.txt"
             raw_path.write_bytes(encoded)
-            records.append({
-                "schema_version": 1,
-                "run_id": run_id,
-                "case_id": case_id,
-                "output_sha256": digest,
-                "raw_output_path": f"raw/{digest}.txt",
-            })
+            records.append(complete_run_record(
+                run_id=run_id,
+                case_id=case_id,
+                digest=digest,
+                raw_output_path=f"raw/{digest}.txt",
+            ))
         (self.evidence / "runs.jsonl").write_bytes(
             b"".join(canonical_bytes(record) for record in records)
         )
@@ -360,6 +531,64 @@ class BatchValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(BenchmarkError, "symlink raw"):
             validate_runs(self.dataset, alternate, alternate / "validation.jsonl")
+
+    def test_batch_requires_canonical_schedule_hash_and_shared_run_record_schema(self):
+        """Break: non-canonical or malformed runner evidence could be published as validated."""
+        destination = self.evidence / "validation.jsonl"
+        original_manifest = (self.evidence / "run-manifest.json").read_bytes()
+        original_runs = (self.evidence / "runs.jsonl").read_bytes()
+
+        manifest = json.loads(original_manifest)
+        manifest["schedule"].pop("sha256")
+        (self.evidence / "run-manifest.json").write_bytes(canonical_bytes(manifest))
+        with self.assertRaisesRegex(BenchmarkError, "schedule hash"):
+            validate_runs(self.dataset, self.evidence, destination)
+
+        (self.evidence / "run-manifest.json").write_bytes(original_manifest)
+        malformed = [json.loads(line) for line in original_runs.splitlines()]
+        malformed[0]["schema_version"] = 999
+        (self.evidence / "runs.jsonl").write_bytes(
+            b"".join(canonical_bytes(record) for record in malformed)
+        )
+        with self.assertRaisesRegex(BenchmarkError, "schema version"):
+            validate_runs(self.dataset, self.evidence, destination)
+
+        malformed = [json.loads(line) for line in original_runs.splitlines()]
+        malformed[0].pop("condition")
+        (self.evidence / "runs.jsonl").write_bytes(
+            b"".join(canonical_bytes(record) for record in malformed)
+        )
+        with self.assertRaisesRegex(BenchmarkError, "malformed existing run record"):
+            validate_runs(self.dataset, self.evidence, destination)
+
+        malformed = [json.loads(line) for line in original_runs.splitlines()]
+        malformed[0]["raw_output_path"] = ["raw", "not-text"]
+        (self.evidence / "runs.jsonl").write_bytes(
+            b"".join(canonical_bytes(record) for record in malformed)
+        )
+        with self.assertRaisesRegex(BenchmarkError, "invalid raw output path"):
+            validate_runs(self.dataset, self.evidence, destination)
+        self.assertFalse(destination.exists())
+
+    def test_batch_refuses_output_aliases_to_every_consumed_input(self):
+        """Break: atomic publication could replace the manifest, run index, or dataset cases."""
+        consumed = (
+            self.evidence / "run-manifest.json",
+            self.evidence / "runs.jsonl",
+            self.dataset / "cases.jsonl",
+        )
+        before = {path: path.read_bytes() for path in consumed}
+
+        for destination in consumed:
+            with self.subTest(destination=destination):
+                try:
+                    with self.assertRaisesRegex(BenchmarkError, "input"):
+                        validate_runs(self.dataset, self.evidence, destination)
+                finally:
+                    for path, content in before.items():
+                        path.write_bytes(content)
+
+        self.assertEqual({path: path.read_bytes() for path in consumed}, before)
 
     def test_module_cli_validates_complete_evidence(self):
         """Break: the documented module entry point could diverge from the batch API."""
