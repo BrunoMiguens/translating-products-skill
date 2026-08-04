@@ -1,0 +1,37 @@
+tests/benchmark_helpers.py
+  s_51f69c54a42bb0::t_d3770f67b1ae8f 1-86
+scripts/benchmark/schema.py
+  s_51f69c54a42bb0::t_ce886cc5e85e70 1-28,34-40,80-124
+  s_51f69c54a42bb0::t_585510d0ba1adb 29-33,41-79,125
+tests/test_benchmark_prepare.py
+  s_51f69c54a42bb0::t_2c9c5c87ca3bb6 4-6,144-169,172-176,179-198
+  s_51f69c54a42bb0::t_b753a47493ab36 3,7,9,11-21,36-46,65,75-98
+  s_51f69c54a42bb0::t_d3770f67b1ae8f 1-2,8,10,22,33-35,47-64
+  s_51f69c54a42bb0::t_de8f26d4dcc5c9 23-32,99-143
+  s_51f69c54a42bb0::t_494e3f4dd2c8ce 170-171,177-178,199
+  s_51f69c54a42bb0::t_ed9825faceb70d 66-74
+scripts/benchmark/prepare.py
+  s_51f69c54a42bb0::t_5c1874b72d891f 1-2,6-8,18-157
+  s_51f69c54a42bb0::t_9aeb978656732d 3-5,9-17,158-235
+scripts/benchmark/__init__.py
+  s_51f69c54a42bb0::t_ce886cc5e85e70 1
+scripts/benchmark/common.py
+  s_51f69c54a42bb0::t_7c65ca8835094c 5-8,29-121
+  s_51f69c54a42bb0::t_ce886cc5e85e70 1-4,9-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "d12e768e3cc334eb3427b18cf0ad8404f03f87e7",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
