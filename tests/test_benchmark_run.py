@@ -455,6 +455,35 @@ print(json.dumps(envelope, sort_keys=True))
             adapter_log.read_text(encoding="utf-8").splitlines(), ["run", "run", "run"]
         )
 
+    def test_cli_rejects_secret_equal_to_policy_hash_before_invocation_or_persistence(self):
+        """Break: redaction could erase the exact policy provenance required by a CLI run."""
+        case = one_translation_case()
+        schedule = [RunSpec("policy-secret-collision", case["id"], "normal", 1)]
+        config = self.cli_config()
+        policy_sha256 = hashlib.sha256(
+            b'{"network":"disabled","research":{"mode":"case-declared-only",'
+            b'"unresolved_question":null},"schema_version":1,"tools":["read-project"]}\n'
+        ).hexdigest()
+        os.environ["BENCHMARK_POLICY_DIGEST_SECRET"] = policy_sha256
+        self.addCleanup(os.environ.pop, "BENCHMARK_POLICY_DIGEST_SECRET", None)
+        config["secret_env"] = ["BENCHMARK_POLICY_DIGEST_SECRET"]
+        runner = CliRunner(config["command"], sandbox_adapter=config["sandbox_adapter"])
+        adapter_log = Path(config["sandbox_adapter"][1]).with_suffix(".log")
+
+        with self.assertRaisesRegex(BenchmarkError, "secret.*integrity digest"):
+            execute_schedule(
+                schedule, runner, self.evidence,
+                cases=[case], config=config, templates=templates(),
+            )
+
+        self.assertFalse(adapter_log.exists())
+        self.assertFalse((self.evidence / "runs.jsonl").exists())
+        persisted = b"".join(
+            path.read_bytes() for path in self.evidence.rglob("*") if path.is_file()
+        ) if self.evidence.exists() else b""
+        self.assertNotIn(policy_sha256.encode("ascii"), persisted)
+        self.assertNotIn(b"[REDACTED]", persisted)
+
     def test_resume_refuses_literal_legacy_cli_records_without_exact_policy_binding(self):
         """Break: legacy CLI records with absent or wrong policy proof could be skipped."""
         case = one_translation_case()

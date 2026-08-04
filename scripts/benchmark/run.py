@@ -852,10 +852,23 @@ def _freeze_input_snapshot(
     }
 
 
-def _redactor(config: Mapping[str, object]) -> LiteralSecretRedactor:
-    return LiteralSecretRedactor(
-        [os.environ[name] for name in config.get("secret_env", []) if os.environ.get(name)]
+def _configured_literal_secrets(config: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        os.environ[name] for name in config.get("secret_env", []) if os.environ.get(name)
     )
+
+
+def _redactor(config: Mapping[str, object]) -> LiteralSecretRedactor:
+    return LiteralSecretRedactor(_configured_literal_secrets(config))
+
+
+def _reject_secret_integrity_collisions(
+    config: Mapping[str, object], digests: Sequence[str]
+) -> None:
+    if set(_configured_literal_secrets(config)).intersection(digests):
+        raise BenchmarkError(
+            "configured literal secret conflicts with required immutable integrity digest"
+        )
 
 
 def _store_raw(evidence_dir: Path, output: str) -> tuple[str, str]:
@@ -1273,6 +1286,25 @@ def execute_schedule(
             raise BenchmarkError("CliRunner command does not match configured command")
         if runner.sandbox_adapter != tuple(validated["sandbox_adapter"]):
             raise BenchmarkError("CliRunner adapter does not match configured sandbox_adapter")
+    case_map = _cases_by_id(cases)
+    expected_policy_sha256_by_run = None
+    required_integrity_digests = [
+        _schedule_manifest(schedule)["sha256"],
+        sha256_bytes(canonical_bytes(dict(validated))),
+    ]
+    if validated["mode"] == "cli":
+        expected_policy_sha256_by_run = {
+            spec.run_id: sha256_bytes(canonical_bytes(
+                _policy_for_case(validated, case_map[spec.case_id], spec.condition)
+            ))
+            for spec in schedule
+        }
+        required_integrity_digests.extend(expected_policy_sha256_by_run.values())
+        required_integrity_digests.extend((
+            sha256_bytes(canonical_bytes(list(runner.sandbox_adapter))),
+            _PROBE_PROGRAM_SHA256,
+        ))
+    _reject_secret_integrity_collisions(validated, required_integrity_digests)
     evidence_dir = Path(evidence_dir)
     if evidence_dir.is_symlink():
         raise BenchmarkError(f"refusing symlink evidence directory: {evidence_dir}")
@@ -1292,7 +1324,6 @@ def execute_schedule(
                 f"CLI scratch_root must resolve outside repository/suite root: {protected_root}"
             )
     scratch_root.mkdir(parents=True, exist_ok=True)
-    case_map = _cases_by_id(cases)
     snapshot_required = validated["mode"] == "cli" or any(
         spec.condition == "suite" for spec in schedule
     )
@@ -1300,6 +1331,11 @@ def execute_schedule(
     snapshot_path, snapshot_manifest = _freeze_input_snapshot(
         evidence_dir, validated, required=snapshot_required
     )
+    if snapshot_manifest is not None:
+        _reject_secret_integrity_collisions(
+            validated,
+            [snapshot_manifest["sha256"], *snapshot_manifest["trees"].values()],
+        )
     probe_manifest = _preflight_cli(
         runner, schedule, case_map, validated, evidence_dir, scratch_root, snapshot_path
     )
@@ -1307,14 +1343,6 @@ def execute_schedule(
         evidence_dir, schedule, validated,
         input_snapshot=snapshot_manifest, sandbox_probe=probe_manifest,
     )
-    expected_policy_sha256_by_run = None
-    if validated["mode"] == "cli":
-        expected_policy_sha256_by_run = {
-            spec.run_id: sha256_bytes(canonical_bytes(
-                _policy_for_case(validated, case_map[spec.case_id], spec.condition)
-            ))
-            for spec in schedule
-        }
     completed = _existing_results(
         evidence_dir,
         schedule,
