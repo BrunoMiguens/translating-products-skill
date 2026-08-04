@@ -301,3 +301,44 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("severity", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+    def test_prepare_run_returns_two_for_a_non_string_dirty_diff_artifact(self):
+        """Break: malformed manifest provenance could escape CLI data-error handling."""
+        dataset = write_synthetic_dataset(self.temp_dir)
+        write_reviewer_signoff(
+            dataset,
+            reviewer="pt-PT-reviewer",
+            approved_at="2026-08-03T12:00:00Z",
+        )
+        diff_path = self.temp_dir / "valid.diff"
+        diff_path.write_text("recorded dirty snapshot\n", encoding="utf-8")
+        manifest = build_dataset_manifest(
+            dataset,
+            suite_commit="abc123",
+            suite_dirty=True,
+            snapshot_id="valid-snapshot",
+            diff_artifact=diff_path,
+        )
+        manifest["suite"]["diff_artifact"] = {"path": "not-a-path"}
+        atomic_write_json(dataset / "dataset-manifest.json", manifest)
+        config = self.temp_dir / "runner.json"
+        atomic_write_json(config, {"runner": "fake"})
+        run_diff = self.temp_dir / "run.diff"
+        run_diff.write_text("recorded run snapshot\n", encoding="utf-8")
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "scripts.benchmark.prepare", "run",
+                "--dataset", str(dataset), "--config", str(config),
+                "--evidence", str(self.temp_dir / "evidence"),
+                "--schedule-seed", "20260803", "--bootstrap-seed", "20260804",
+                "--snapshot-id", "run-snapshot", "--diff-artifact", str(run_diff),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("diff artifact", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)

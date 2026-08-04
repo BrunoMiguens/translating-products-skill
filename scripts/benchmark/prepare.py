@@ -21,6 +21,15 @@ from .schema import DATASET_VERSION, SCHEMA_VERSION, validate_cases
 _MANIFEST_NAME = "dataset-manifest.json"
 
 
+def _diff_artifact_path(value: object) -> Path:
+    if not isinstance(value, (str, Path)) or not str(value):
+        raise BenchmarkError("dirty suite tree requires a non-empty diff artifact path")
+    path = Path(value)
+    if not path.is_file():
+        raise BenchmarkError("dirty suite tree requires a diff artifact")
+    return path
+
+
 def dataset_files(dataset_dir: Path) -> list[Path]:
     dataset_dir = Path(dataset_dir)
     if not dataset_dir.is_dir():
@@ -73,8 +82,7 @@ def build_dataset_manifest(
     if suite_dirty:
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise BenchmarkError("dirty suite tree requires an explicit snapshot id")
-        if diff_artifact is None or not Path(diff_artifact).is_file():
-            raise BenchmarkError("dirty suite tree requires a diff artifact")
+        diff_path = _diff_artifact_path(diff_artifact)
     dataset_dir = Path(dataset_dir)
     cases = read_jsonl(dataset_dir / "cases.jsonl")
     seeded = read_json(dataset_dir / "seeded-errors.json")
@@ -102,8 +110,8 @@ def build_dataset_manifest(
     if suite_dirty:
         manifest["suite"] = {
             "snapshot_id": snapshot_id,
-            "diff_artifact": str(diff_artifact),
-            "diff_sha256": sha256_file(Path(diff_artifact)),
+            "diff_artifact": str(diff_path),
+            "diff_sha256": sha256_file(diff_path),
         }
     return manifest
 
