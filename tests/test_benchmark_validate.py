@@ -312,6 +312,38 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(result.status, "passed")
         self.assertEqual(result.findings, ())
 
+    def test_icu_pattern_whitespace_and_decimal_offsets_follow_grammar(self):
+        """Break: valid ICU whitespace/offset numbers could fail while non-pattern spaces pass."""
+        source = (
+            "{count, plural, offset:1.50\u200e=0 {None}\u2028one {One} other {Other}}"
+        )
+        candidate = (
+            "{count, plural,\toffset:1.5\r\n=0 {Nenhum}\vone {Um}\fother {Outros}}"
+        )
+        case = case_with_checks(
+            source=source,
+            checks=[{"type": "icu_topology", "severity": "critical"}],
+        )
+
+        valid = validate_output(case, candidate)
+        malformed_candidate = validate_output(
+            case,
+            "{count, plural, offset:.5 =0 {Nenhum} one {Um} other {Outros}}",
+        )
+        non_pattern_source = validate_output(
+            case_with_checks(
+                source="{count, plural, offset:1\u00a0one {One} other {Other}}",
+                checks=[{"type": "icu_topology", "severity": "critical"}],
+            ),
+            "{count, plural, offset:1 one {Um} other {Outros}}",
+        )
+
+        self.assertEqual(valid.status, "passed")
+        self.assertEqual(valid.findings, ())
+        self.assertEqual(malformed_candidate.status, "failed")
+        self.assertEqual(malformed_candidate.validator_errors, ())
+        self.assertEqual(non_pattern_source.status, "validator_error")
+
     def test_html_optional_end_tags_preserve_implied_topology(self):
         """Break: valid HTML with implied li closures could be rejected as malformed."""
         case = case_with_checks(
@@ -338,6 +370,26 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(result.status, "passed")
         self.assertEqual(result.findings, ())
 
+    def test_html_table_section_implies_colgroup_end_without_unrelated_closure(self):
+        """Break: implicit colgroup closure could differ from equivalent explicit HTML."""
+        case = case_with_checks(
+            source="<table><colgroup><col><tbody><tr><td>A</table>",
+            checks=[{"type": "html_structure", "severity": "critical"}],
+        )
+
+        equivalent = validate_output(
+            case,
+            "<table><colgroup><col></colgroup><tbody><tr><td>Um</table>",
+        )
+        corrupted = validate_output(
+            case,
+            "<table><colgroup><col></colgroup><tbody><tr><td>Um<td>Extra</table>",
+        )
+
+        self.assertEqual(equivalent.status, "passed")
+        self.assertEqual(equivalent.findings, ())
+        self.assertEqual(corrupted.status, "failed")
+
     def test_markdown_reference_links_preserve_uses_definitions_and_destinations(self):
         """Break: reference-link destination corruption could be invisible to topology checks."""
         case = case_with_checks(
@@ -358,6 +410,57 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(corrupted.status, "failed")
         self.assertEqual(corrupted.findings[0].invariant, "markdown_structure")
 
+    def test_markdown_shortcut_references_resolve_normalized_labels(self):
+        """Break: changing a shortcut use could leave a definition falsely counted as sufficient."""
+        case = case_with_checks(
+            source="Read [Docs].\n\n[  docs ]: https://lume.example/docs\n",
+            checks=[{"type": "markdown_structure", "severity": "critical"}],
+        )
+
+        equivalent = validate_output(
+            case,
+            "Leia [DOCS].\n\n[docs]: https://lume.example/docs\n",
+        )
+        broken = validate_output(
+            case,
+            "Leia [documentação].\n\n[docs]: https://lume.example/docs\n",
+        )
+
+        self.assertEqual(equivalent.status, "passed")
+        self.assertEqual(broken.status, "failed")
+
+    def test_markdown_definitions_ignore_literals_and_first_duplicate_wins(self):
+        """Break: literal or later duplicate definitions could alter active link topology."""
+        source = (
+            "```text\n[id]: https://inside-source.example\n```\n\n"
+            "    [id]: https://indented-source.example\n\n"
+            "[id]: https://first.example\n"
+            "[ID]: https://ignored-source.example\n\n"
+            "Open [id].\n"
+        )
+        case = case_with_checks(
+            source=source,
+            checks=[{"type": "markdown_structure", "severity": "critical"}],
+        )
+        equivalent = (
+            "```text\n[id]: https://inside-candidate.example\n```\n\n"
+            "    [id]: https://indented-candidate.example\n\n"
+            "[ ID ]: https://first.example\n"
+            "[id]: https://ignored-candidate.example\n\n"
+            "Abra [id].\n"
+        )
+        changed_first = equivalent.replace(
+            "[ ID ]: https://first.example",
+            "[ ID ]: https://changed.example",
+        )
+
+        valid = validate_output(case, equivalent)
+        corrupted = validate_output(case, changed_first)
+
+        self.assertEqual(valid.status, "passed")
+        self.assertEqual(valid.findings, ())
+        self.assertEqual(corrupted.status, "failed")
+
     def test_numeric_placeholders_and_multi_backtick_code_spans_are_protected(self):
         """Break: valid numeric and delimiter-aware scalar syntax could be changed silently."""
         placeholder_case = case_with_checks(
@@ -374,6 +477,20 @@ class ValidatorTests(unittest.TestCase):
 
         self.assertEqual({item.invariant for item in placeholder_result.findings}, {"placeholder_multiset"})
         self.assertEqual({item.invariant for item in code_result.findings}, {"code_span_multiset"})
+
+    def test_code_spans_normalize_crlf_cr_and_lf_before_content_comparison(self):
+        """Break: platform line endings could make identical CommonMark code spans differ."""
+        case = case_with_checks(
+            source="Use ``a\r\nb\rc`` now",
+            checks=[{"type": "code_span_multiset", "severity": "critical"}],
+        )
+
+        equivalent = validate_output(case, "Use ``a\nb\nc`` agora")
+        corrupted = validate_output(case, "Use ``a\nb\nchanged`` agora")
+
+        self.assertEqual(equivalent.status, "passed")
+        self.assertEqual(equivalent.findings, ())
+        self.assertEqual(corrupted.status, "failed")
 
     def test_json_xml_html_markdown_csv_and_icu_are_semantically_checked(self):
         """Break: merely parseable output with changed declared topology could pass."""
