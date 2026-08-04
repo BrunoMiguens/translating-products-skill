@@ -484,6 +484,38 @@ print(json.dumps(envelope, sort_keys=True))
         self.assertNotIn(policy_sha256.encode("ascii"), persisted)
         self.assertNotIn(b"[REDACTED]", persisted)
 
+    def test_cli_rejects_snapshot_digest_secrets_before_evidence_publication(self):
+        """Break: a snapshot digest collision could publish evidence before rejection."""
+        case = one_translation_case()
+        schedule = [RunSpec("snapshot-secret-collision", case["id"], "normal", 1)]
+        digest_cases = {
+            # Hand-derived from the canonical fixture snapshot bytes, independent of
+            # the snapshot hashing helpers under test.
+            "combined": "5b14e2c002ea5c93727586952fedff278631dae77977120c75084f6c7cf39a25",
+            "skills-tree": "66c9b53b652cba6a77aba5d3302d33ab66cb3817c339fd62ff9a0b91d667442f",
+        }
+        secret_name = "BENCHMARK_SNAPSHOT_DIGEST_SECRET"
+        self.addCleanup(os.environ.pop, secret_name, None)
+
+        for label, snapshot_digest in digest_cases.items():
+            with self.subTest(digest=label):
+                evidence = self.temp_dir / f"evidence-{label}"
+                config = self.cli_config(secret_env=[secret_name])
+                runner = CliRunner(
+                    config["command"], sandbox_adapter=config["sandbox_adapter"]
+                )
+                adapter_log = Path(config["sandbox_adapter"][1]).with_suffix(".log")
+                os.environ[secret_name] = snapshot_digest
+
+                with self.assertRaisesRegex(BenchmarkError, "secret.*integrity digest"):
+                    execute_schedule(
+                        schedule, runner, evidence,
+                        cases=[case], config=config, templates=templates(),
+                    )
+
+                self.assertFalse(adapter_log.exists())
+                self.assertFalse(evidence.exists())
+
     def test_resume_refuses_literal_legacy_cli_records_without_exact_policy_binding(self):
         """Break: legacy CLI records with absent or wrong policy proof could be skipped."""
         case = one_translation_case()

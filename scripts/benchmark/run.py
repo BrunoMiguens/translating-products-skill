@@ -808,16 +808,61 @@ def _validate_signed_context(translation: Path) -> None:
             raise BenchmarkError(f"project context approval hash mismatch: {name}")
 
 
+def _snapshot_manifest(snapshot_path: Path) -> dict:
+    if not snapshot_path.is_dir() or snapshot_path.is_symlink():
+        raise BenchmarkError("frozen input snapshot is unsafe")
+    _validate_signed_context(snapshot_path / ".translation")
+    trees = {
+        "skills": _tree_hash(snapshot_path / "skills"),
+        ".translation": _tree_hash(snapshot_path / ".translation"),
+    }
+    return {
+        "trees": trees,
+        "sha256": sha256_bytes(canonical_bytes(trees)),
+    }
+
+
+def _set_snapshot_permissions(snapshot_path: Path, *, readonly: bool) -> None:
+    directory_mode, file_mode = ((0o555, 0o444) if readonly else (0o700, 0o600))
+    for path in sorted(snapshot_path.rglob("*"), reverse=True):
+        path.chmod(directory_mode if path.is_dir() else file_mode)
+    snapshot_path.chmod(directory_mode)
+
+
+def _sandbox_probe_manifest(
+    adapter_command: Sequence[str],
+    policy_sha256: Sequence[str],
+    snapshot_sha256: str,
+) -> dict:
+    binding = {
+        "schema_version": SCHEMA_VERSION,
+        "probe_version": _PROBE_VERSION,
+        "adapter_command_sha256": sha256_bytes(canonical_bytes(list(adapter_command))),
+        "probe_program_sha256": _PROBE_PROGRAM_SHA256,
+        "policy_sha256": sorted(set(policy_sha256)),
+        "snapshot_sha256": snapshot_sha256,
+    }
+    return {**binding, "sha256": sha256_bytes(canonical_bytes(binding))}
+
+
 def _freeze_input_snapshot(
     evidence_dir: Path,
     config: Mapping[str, object],
     *,
     required: bool,
+    required_integrity_digests: Sequence[str],
+    probe_policy_sha256: Sequence[str] = (),
 ) -> tuple[Path | None, dict | None]:
     if not required:
+        _reject_secret_integrity_collisions(config, required_integrity_digests)
         return None, None
     target = evidence_dir / "input-snapshot"
-    if not target.exists():
+    target_preexists = target.exists()
+    if target_preexists:
+        _snapshot_manifest(target)
+        skills = target / "skills"
+        translation = target / ".translation"
+    else:
         suite_path = Path(str(config["suite_path"])).resolve()
         skills = suite_path / "skills"
         translation = suite_path / ".translation"
@@ -827,29 +872,52 @@ def _freeze_input_snapshot(
             raise BenchmarkError("suite runs require signed .translation project context")
         _refuse_symlinks(skills)
         _validate_signed_context(translation)
-        with tempfile.TemporaryDirectory(prefix=".snapshot-", dir=evidence_dir) as temporary:
-            staged = Path(temporary) / "input-snapshot"
-            staged.mkdir()
-            shutil.copytree(skills, staged / "skills")
-            staged_translation = staged / ".translation"
-            staged_translation.mkdir()
-            for name in (*_CONTEXT_FILES, "setup-approval.json"):
-                shutil.copy2(translation / name, staged_translation / name)
+    evidence_parent = evidence_dir.parent
+    evidence_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=f".{evidence_dir.name}-snapshot-", dir=evidence_parent
+    ) as temporary:
+        staged_evidence = Path(temporary) / "evidence"
+        staged_evidence.mkdir(mode=0o700)
+        staged = staged_evidence / "input-snapshot"
+        staged.mkdir(mode=0o700)
+        shutil.copytree(skills, staged / "skills")
+        staged_translation = staged / ".translation"
+        staged_translation.mkdir(mode=0o700)
+        for name in (*_CONTEXT_FILES, "setup-approval.json"):
+            shutil.copy2(translation / name, staged_translation / name)
+        _set_snapshot_permissions(staged, readonly=False)
+        snapshot_manifest = _snapshot_manifest(staged)
+        integrity_digests = [
+            *required_integrity_digests,
+            snapshot_manifest["sha256"],
+            *snapshot_manifest["trees"].values(),
+        ]
+        if config["mode"] == "cli":
+            probe_manifest = _sandbox_probe_manifest(
+                config["sandbox_adapter"],
+                probe_policy_sha256,
+                snapshot_manifest["sha256"],
+            )
+            integrity_digests.append(probe_manifest["sha256"])
+        _reject_secret_integrity_collisions(config, integrity_digests)
+
+        if target_preexists:
+            if _snapshot_manifest(target) != snapshot_manifest:
+                raise BenchmarkError("frozen input snapshot changed during private staging")
+            return target, snapshot_manifest
+        if target.exists():
+            raise BenchmarkError("frozen input snapshot appeared during private staging")
+        _set_snapshot_permissions(staged, readonly=True)
+        if evidence_dir.exists():
+            if not evidence_dir.is_dir():
+                raise BenchmarkError(f"evidence path is not a directory: {evidence_dir}")
             os.replace(staged, target)
-        for path in sorted(target.rglob("*"), reverse=True):
-            path.chmod(0o555 if path.is_dir() else 0o444)
-        target.chmod(0o555)
-    if not target.is_dir() or target.is_symlink():
-        raise BenchmarkError("frozen input snapshot is unsafe")
-    _validate_signed_context(target / ".translation")
-    trees = {
-        "skills": _tree_hash(target / "skills"),
-        ".translation": _tree_hash(target / ".translation"),
-    }
-    return target, {
-        "trees": trees,
-        "sha256": sha256_bytes(canonical_bytes(trees)),
-    }
+        else:
+            os.replace(staged_evidence, evidence_dir)
+        if _snapshot_manifest(target) != snapshot_manifest:
+            raise BenchmarkError("published input snapshot does not match private staging")
+        return target, snapshot_manifest
 
 
 def _configured_literal_secrets(config: Mapping[str, object]) -> tuple[str, ...]:
@@ -1153,15 +1221,11 @@ def _preflight_cli(
             }
             append_jsonl_fsync(evidence_dir / "probe-runs.jsonl", index_entry)
             records.append(index_entry)
-    binding = {
-        "schema_version": SCHEMA_VERSION,
-        "probe_version": _PROBE_VERSION,
-        "adapter_command_sha256": sha256_bytes(canonical_bytes(list(runner.sandbox_adapter))),
-        "probe_program_sha256": _PROBE_PROGRAM_SHA256,
-        "policy_sha256": sorted(policies),
-        "snapshot_sha256": _snapshot_hash(snapshot_path),
-    }
-    return {**binding, "sha256": sha256_bytes(canonical_bytes(binding))}
+    return _sandbox_probe_manifest(
+        runner.sandbox_adapter,
+        list(policies),
+        _snapshot_hash(snapshot_path),
+    )
 
 
 def _first_regular_file(root: Path) -> Path:
@@ -1172,11 +1236,7 @@ def _first_regular_file(root: Path) -> Path:
 
 
 def _snapshot_hash(snapshot_path: Path) -> str:
-    trees = {
-        "skills": _tree_hash(snapshot_path / "skills"),
-        ".translation": _tree_hash(snapshot_path / ".translation"),
-    }
-    return sha256_bytes(canonical_bytes(trees))
+    return _snapshot_manifest(snapshot_path)["sha256"]
 
 
 def _require_snapshot_bound_resume(evidence_dir: Path, *, required: bool) -> None:
@@ -1308,7 +1368,6 @@ def execute_schedule(
     evidence_dir = Path(evidence_dir)
     if evidence_dir.is_symlink():
         raise BenchmarkError(f"refusing symlink evidence directory: {evidence_dir}")
-    evidence_dir.mkdir(parents=True, exist_ok=True)
     scratch_root = Path(str(validated["scratch_root"]))
     if scratch_root.is_symlink():
         raise BenchmarkError(f"refusing symlink scratch root: {scratch_root}")
@@ -1323,19 +1382,23 @@ def execute_schedule(
             raise BenchmarkError(
                 f"CLI scratch_root must resolve outside repository/suite root: {protected_root}"
             )
-    scratch_root.mkdir(parents=True, exist_ok=True)
     snapshot_required = validated["mode"] == "cli" or any(
         spec.condition == "suite" for spec in schedule
     )
     _require_snapshot_bound_resume(evidence_dir, required=snapshot_required)
     snapshot_path, snapshot_manifest = _freeze_input_snapshot(
-        evidence_dir, validated, required=snapshot_required
+        evidence_dir,
+        validated,
+        required=snapshot_required,
+        required_integrity_digests=required_integrity_digests,
+        probe_policy_sha256=(
+            tuple(expected_policy_sha256_by_run.values())
+            if expected_policy_sha256_by_run is not None
+            else ()
+        ),
     )
-    if snapshot_manifest is not None:
-        _reject_secret_integrity_collisions(
-            validated,
-            [snapshot_manifest["sha256"], *snapshot_manifest["trees"].values()],
-        )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    scratch_root.mkdir(parents=True, exist_ok=True)
     probe_manifest = _preflight_cli(
         runner, schedule, case_map, validated, evidence_dir, scratch_root, snapshot_path
     )
