@@ -1,0 +1,48 @@
+.superpowers/sdd/2026-08-03-pt-pt-translation-benchmark/task-5-report.md
+  s_51f69c54a42bb0::t_f2ee65a6cb616c 155-194,198-217
+  s_51f69c54a42bb0::t_7a72ccd49d57a1 195-197
+scripts/benchmark/blind.py
+  s_51f69c54a42bb0::t_2f38a96c18b27c 137-146,148-178,181-184,200-209,221,229,247-248
+  s_51f69c54a42bb0::t_b644907297a2e3 750
+  s_51f69c54a42bb0::t_20ccf81c920c1b 29
+  s_51f69c54a42bb0::t_d1a2162b755eca 147,179,185-199
+  s_51f69c54a42bb0::t_064825a3a7cdef 180
+  s_51f69c54a42bb0::t_ffeded80a24801 572,675,687-691,693-708
+  s_51f69c54a42bb0::t_d74d54b898c754 430-436,448-459,479-483,485-493,532
+  s_51f69c54a42bb0::t_9980897b4d14c1 564-570,578,580,588-674,676-686,692,709-724
+  s_51f69c54a42bb0::t_7397b956b51664 47,56-58,74-79
+  s_51f69c54a42bb0::t_91c39f32f30194 350-351,392-405,408-412
+  s_51f69c54a42bb0::t_d43cc109d6dd4f 11
+  s_51f69c54a42bb0::t_8dc8cc308f12f5 16,774-847,853-864,871-887,889,892,894-896,899-916,918-927,932-941,943-953,956-958,964-993
+  s_51f69c54a42bb0::t_d8c3e261dbf63e 996-1096
+  s_51f69c54a42bb0::t_105fd5a4e3cbf8 1109-1110,1112,1119-1121,1123-1130,1135-1143,1145-1178,1180-1181,1187-1191
+  s_51f69c54a42bb0::t_7a22492efd18cd 848-852
+  s_51f69c54a42bb0::t_493e3c804e7a63 725-726
+  s_51f69c54a42bb0::t_0a4b704340cfb1 994-995
+tests/test_benchmark_blind.py
+  s_51f69c54a42bb0::t_20ec5ac7f8e01d 5,400-407,421,452-599
+  s_51f69c54a42bb0::t_b78e1988d36e97 251-254,256-262,264-301
+  s_51f69c54a42bb0::t_37fa86d40b96e0 255,263
+  s_51f69c54a42bb0::t_c8ca2b2ca8994b 325-349,382-391,396,398,409-415,427
+  s_51f69c54a42bb0::t_fb4d498ceed63a 211
+  s_51f69c54a42bb0::t_1c4dfca743f3b0 4,14,16,25-26,47,50,58-69,72-78
+  s_51f69c54a42bb0::t_d6663baef9c173 175-183
+  s_51f69c54a42bb0::t_4eb47e5991038b 399
+  s_51f69c54a42bb0::t_dc5b68aa5ed9d1 600
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "65c11647c4d79141ef8e678a2d49baeaecb0d382",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
