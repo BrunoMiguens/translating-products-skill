@@ -22,7 +22,6 @@ from .common import (
     BenchmarkError,
     canonical_bytes,
     read_json,
-    read_jsonl,
     sha256_bytes,
 )
 from .prepare import verify_dataset_manifest
@@ -202,6 +201,26 @@ def _validate_run_record(run: Mapping[str, object]) -> None:
         raise BenchmarkError(f"run {run_id!r} has unexpected policy binding")
     if run["shell"] is not False:
         raise BenchmarkError(f"run {run_id!r} must record shell=false")
+    if run["runner_mode"] == "manual":
+        if (
+            run["status"] != "completed"
+            or run["failure_class"] != "success"
+            or run["process_started"] is not False
+            or run["started_at"] != run["completed_at"]
+            or run["exit_code"] != 0
+            or run["timed_out"] is not False
+            or run["refused"] is not False
+            or run["malformed_output"] is not False
+            or run["tool_misuse"] is not False
+            or run["reason"] != "manual_import"
+            or run["stderr"] != ""
+            or run["telemetry"] != {}
+            or run["usage"] is not None
+            or run["project_fingerprint"] != "manual"
+            or run["argv"] != []
+        ):
+            raise BenchmarkError(f"run {run_id!r} manual import contract is inconsistent")
+        return
     derived_failure = classify_failure(run)
     if derived_failure == "infrastructure":
         raise BenchmarkError(f"run {run_id!r} is an infrastructure failure")
@@ -440,19 +459,26 @@ def _unicode_unescape(value: str) -> str:
         lambda match: chr(int(match.group(1), 16)),
         value,
     )
-    return re.sub(
+    decoded = re.sub(
         r"\\x([0-9a-fA-F]{2})",
         lambda match: chr(int(match.group(1), 16)),
         decoded,
     )
+    try:
+        return decoded.encode("utf-16-le", "surrogatepass").decode("utf-16-le")
+    except UnicodeDecodeError:
+        return decoded
 
 
 def _base64_scalar(value: str) -> str | None:
-    stripped = value.strip()
-    if len(stripped) < 8 or any(character.isspace() for character in stripped):
+    compact = "".join(
+        character for character in value
+        if character not in " \t\r\n\f\v"
+    )
+    if len(compact) < 8:
         return None
     try:
-        encoded = stripped.encode("ascii")
+        encoded = compact.encode("ascii")
         encoded += b"=" * (-len(encoded) % 4)
         decoded = base64.b64decode(
             encoded, altchars=b"-_", validate=True
@@ -622,12 +648,30 @@ def _validate_schedule_manifest(manifest: Mapping[str, object]) -> list[str]:
     return run_ids
 
 
-def _validate_prepared_manifest(dataset_dir: Path, evidence_dir: Path) -> tuple[dict, dict]:
+def _validate_prepared_manifest(
+    dataset_dir: Path,
+    evidence_dir: Path,
+    *,
+    run_manifest_bytes: bytes | None = None,
+    dataset_manifest_bytes: bytes | None = None,
+) -> tuple[dict, dict]:
     dataset_dir = Path(dataset_dir)
     evidence_dir = Path(evidence_dir)
     manifest_path = evidence_dir / "run-manifest.json"
-    manifest = read_json(manifest_path)
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != SCHEMA_VERSION:
+    if run_manifest_bytes is None:
+        manifest = read_json(manifest_path)
+        try:
+            manifest_bytes = manifest_path.read_bytes()
+        except OSError as error:
+            raise BenchmarkError(f"cannot read run manifest bytes: {error}") from error
+    else:
+        manifest_bytes = run_manifest_bytes
+        manifest = _parse_canonical_json(manifest_bytes, "run manifest")
+    if (
+        not isinstance(manifest, dict)
+        or type(manifest.get("schema_version")) is not int
+        or manifest.get("schema_version") != SCHEMA_VERSION
+    ):
         raise BenchmarkError("run manifest schema version mismatch")
     required = {
         "schema_version", "dataset", "suite", "runner_config_sha256",
@@ -641,22 +685,28 @@ def _validate_prepared_manifest(dataset_dir: Path, evidence_dir: Path) -> tuple[
         raise BenchmarkError(
             f"run manifest provenance fields mismatch: missing={missing!r}, unknown={unknown!r}"
         )
-    try:
-        manifest_bytes = manifest_path.read_bytes()
-    except OSError as error:
-        raise BenchmarkError(f"cannot read run manifest bytes: {error}") from error
     if manifest_bytes != canonical_bytes(manifest):
         raise BenchmarkError("run manifest must use canonical JSON bytes")
 
     dataset_manifest_path = dataset_dir / "dataset-manifest.json"
-    dataset_manifest = read_json(dataset_manifest_path)
+    if dataset_manifest_bytes is None:
+        dataset_manifest = read_json(dataset_manifest_path)
+        try:
+            encoded_dataset_manifest = dataset_manifest_path.read_bytes()
+        except OSError as error:
+            raise BenchmarkError(f"cannot read dataset manifest bytes: {error}") from error
+    else:
+        encoded_dataset_manifest = dataset_manifest_bytes
+        dataset_manifest = _parse_canonical_json(
+            encoded_dataset_manifest, "dataset manifest"
+        )
     if not isinstance(dataset_manifest, dict):
         raise BenchmarkError("dataset manifest must be an object")
-    try:
-        dataset_manifest_bytes = dataset_manifest_path.read_bytes()
-    except OSError as error:
-        raise BenchmarkError(f"cannot read dataset manifest bytes: {error}") from error
-    if dataset_manifest_bytes != canonical_bytes(dataset_manifest):
+    if type(dataset_manifest.get("schema_version")) is not int:
+        raise BenchmarkError("dataset manifest schema version must be an integer")
+    if type(dataset_manifest.get("dataset_version")) is not str:
+        raise BenchmarkError("dataset manifest dataset version must be text")
+    if encoded_dataset_manifest != canonical_bytes(dataset_manifest):
         raise BenchmarkError("dataset manifest must use canonical JSON bytes")
 
     dataset_binding = manifest.get("dataset")
@@ -669,7 +719,7 @@ def _validate_prepared_manifest(dataset_dir: Path, evidence_dir: Path) -> tuple[
     )
     if dataset_binding.get("dataset_sha256") != expected_dataset_hash:
         raise BenchmarkError("run manifest dataset hash mismatch")
-    expected_manifest_hash = sha256_bytes(dataset_manifest_bytes)
+    expected_manifest_hash = sha256_bytes(encoded_dataset_manifest)
     if dataset_binding.get("manifest_sha256") != expected_manifest_hash:
         raise BenchmarkError("run manifest dataset-manifest hash mismatch")
 
@@ -719,8 +769,8 @@ def _validate_prepared_manifest(dataset_dir: Path, evidence_dir: Path) -> tuple[
     actual_snapshot = _snapshot_manifest(evidence_dir / "input-snapshot")
     if input_snapshot != actual_snapshot:
         raise BenchmarkError("run manifest input snapshot mismatch")
-    sandbox_probe = manifest.get("sandbox_probe")
-    if sandbox_probe is not None:
+    if "sandbox_probe" in manifest:
+        sandbox_probe = manifest["sandbox_probe"]
         probe_fields = {
             "schema_version", "probe_version", "adapter_command_sha256",
             "probe_program_sha256", "policy_sha256", "snapshot_sha256", "sha256",
@@ -728,7 +778,9 @@ def _validate_prepared_manifest(dataset_dir: Path, evidence_dir: Path) -> tuple[
         if not isinstance(sandbox_probe, dict) or set(sandbox_probe) != probe_fields:
             raise BenchmarkError("run manifest sandbox probe is malformed")
         if (
-            sandbox_probe.get("schema_version") != SCHEMA_VERSION
+            type(sandbox_probe.get("schema_version")) is not int
+            or type(sandbox_probe.get("probe_version")) is not int
+            or sandbox_probe.get("schema_version") != SCHEMA_VERSION
             or sandbox_probe.get("probe_version") != 1
         ):
             raise BenchmarkError("run manifest sandbox probe version mismatch")
@@ -770,6 +822,7 @@ class _InputBinding:
     links: int
     modified_ns: int
     changed_ns: int
+    mode: int
     sha256: str
     encoded: bytes
 
@@ -790,6 +843,242 @@ class _HeldEvidenceInputs:
         if self.directory_fd >= 0:
             os.close(self.directory_fd)
             self.directory_fd = -1
+
+
+@dataclass(frozen=True)
+class _DirectoryBinding:
+    relative: str
+    parent: str | None
+    name: str
+    identity: tuple[int, int]
+    links: int
+    modified_ns: int
+    changed_ns: int
+    mode: int
+    entries: tuple[tuple[str, str], ...]
+
+
+@dataclass
+class _HeldInputTree:
+    label: str
+    path: Path
+    directory_fds: dict[str, int]
+    directories: dict[str, _DirectoryBinding]
+    files: dict[str, _InputBinding]
+
+    def bytes(self, relative: str) -> bytes:
+        try:
+            return self.files[relative].encoded
+        except KeyError as error:
+            raise BenchmarkError(
+                f"immutable {self.label} input is missing: {relative}"
+            ) from error
+
+    def close(self) -> None:
+        for relative in sorted(
+            self.directory_fds, key=lambda value: value.count("/"), reverse=True
+        ):
+            descriptor = self.directory_fds[relative]
+            if descriptor >= 0:
+                os.close(descriptor)
+        self.directory_fds.clear()
+
+
+def _capture_regular_input(directory_fd: int, location: str, name: str) -> _InputBinding:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+    except OSError as error:
+        raise BenchmarkError(
+            f"cannot securely open consumed input {location}/{name}: {error}"
+        ) from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise BenchmarkError(f"consumed input is not a regular file: {location}/{name}")
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        encoded = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            _identity(after) != _identity(before)
+            or after.st_size != before.st_size
+            or after.st_nlink != before.st_nlink
+            or after.st_mtime_ns != before.st_mtime_ns
+            or after.st_ctime_ns != before.st_ctime_ns
+            or stat.S_IMODE(after.st_mode) != stat.S_IMODE(before.st_mode)
+        ):
+            raise BenchmarkError(f"consumed input changed while reading: {location}/{name}")
+    except OSError as error:
+        raise BenchmarkError(
+            f"cannot read consumed input {location}/{name}: {error}"
+        ) from error
+    finally:
+        os.close(descriptor)
+    return _InputBinding(
+        location=location,
+        name=name,
+        identity=_identity(after),
+        size=after.st_size,
+        links=after.st_nlink,
+        modified_ns=after.st_mtime_ns,
+        changed_ns=after.st_ctime_ns,
+        mode=stat.S_IMODE(after.st_mode),
+        sha256=sha256_bytes(encoded),
+        encoded=encoded,
+    )
+
+
+def _directory_snapshot(descriptor: int) -> tuple[tuple[str, str], ...]:
+    try:
+        with os.scandir(descriptor) as iterator:
+            entries = list(iterator)
+    except OSError as error:
+        raise BenchmarkError(f"cannot enumerate immutable input tree: {error}") from error
+    result: list[tuple[str, str]] = []
+    for entry in entries:
+        if entry.is_symlink():
+            raise BenchmarkError(f"immutable input tree contains symlink: {entry.name}")
+        if entry.is_dir(follow_symlinks=False):
+            kind = "directory"
+        elif entry.is_file(follow_symlinks=False):
+            kind = "file"
+        else:
+            raise BenchmarkError(f"immutable input tree contains unsafe entry: {entry.name}")
+        result.append((entry.name, kind))
+    return tuple(sorted(result))
+
+
+def _directory_binding(
+    relative: str,
+    parent: str | None,
+    name: str,
+    descriptor: int,
+) -> _DirectoryBinding:
+    before = os.fstat(descriptor)
+    if not stat.S_ISDIR(before.st_mode):
+        raise BenchmarkError(f"immutable input is not a directory: {relative or '.'}")
+    entries = _directory_snapshot(descriptor)
+    value = os.fstat(descriptor)
+    if (
+        _identity(value) != _identity(before)
+        or value.st_nlink != before.st_nlink
+        or value.st_mtime_ns != before.st_mtime_ns
+        or value.st_ctime_ns != before.st_ctime_ns
+        or stat.S_IMODE(value.st_mode) != stat.S_IMODE(before.st_mode)
+    ):
+        raise BenchmarkError(
+            f"immutable input directory changed while reading: {relative or '.'}"
+        )
+    return _DirectoryBinding(
+        relative=relative,
+        parent=parent,
+        name=name,
+        identity=_identity(value),
+        links=value.st_nlink,
+        modified_ns=value.st_mtime_ns,
+        changed_ns=value.st_ctime_ns,
+        mode=stat.S_IMODE(value.st_mode),
+        entries=entries,
+    )
+
+
+def _open_held_input_tree(path: Path, label: str) -> _HeldInputTree:
+    root = Path(path)
+    if root.is_symlink():
+        raise BenchmarkError(f"refusing symlink {label} input tree")
+    try:
+        root_fd = os.open(root, _directory_flags())
+    except OSError as error:
+        raise BenchmarkError(f"cannot securely open {label} input tree: {error}") from error
+    held = _HeldInputTree(label, root, {"": root_fd}, {}, {})
+    try:
+        root_binding = _directory_binding("", None, root.name, root_fd)
+        named_root = os.stat(root, follow_symlinks=False)
+        if _identity(named_root) != root_binding.identity:
+            raise BenchmarkError(f"{label} input tree identity changed while opening")
+        held.directories[""] = root_binding
+        pending = [""]
+        while pending:
+            relative = pending.pop()
+            directory_fd = held.directory_fds[relative]
+            for name, kind in held.directories[relative].entries:
+                child = f"{relative}/{name}" if relative else name
+                if kind == "directory":
+                    child_fd = os.open(name, _directory_flags(), dir_fd=directory_fd)
+                    try:
+                        named = os.stat(
+                            name, dir_fd=directory_fd, follow_symlinks=False
+                        )
+                        binding = _directory_binding(
+                            child, relative, name, child_fd
+                        )
+                        if _identity(named) != binding.identity:
+                            raise BenchmarkError(
+                                f"{label} input directory identity changed: {child}"
+                            )
+                    except Exception:
+                        os.close(child_fd)
+                        raise
+                    held.directory_fds[child] = child_fd
+                    held.directories[child] = binding
+                    pending.append(child)
+                else:
+                    held.files[child] = _capture_regular_input(
+                        directory_fd, label, name
+                    )
+        _verify_input_tree(held)
+        return held
+    except (OSError, BenchmarkError) as error:
+        held.close()
+        if isinstance(error, BenchmarkError):
+            raise
+        raise BenchmarkError(f"cannot bind {label} input tree: {error}") from error
+
+
+def _verify_input_tree(held: _HeldInputTree) -> None:
+    for relative, expected in held.directories.items():
+        descriptor = held.directory_fds[relative]
+        current = _directory_binding(
+            relative, expected.parent, expected.name, descriptor
+        )
+        if relative == "":
+            try:
+                named = os.stat(held.path, follow_symlinks=False)
+            except OSError as error:
+                raise BenchmarkError(
+                    f"{held.label} input tree identity changed: {error}"
+                ) from error
+        else:
+            parent_fd = held.directory_fds[expected.parent or ""]
+            try:
+                named = os.stat(
+                    expected.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+            except OSError as error:
+                raise BenchmarkError(
+                    f"{held.label} input directory changed: {relative}: {error}"
+                ) from error
+        if _identity(named) != expected.identity or current != expected:
+            raise BenchmarkError(
+                f"{held.label} input directory changed after loading: {relative or '.'}"
+            )
+    for relative, expected in held.files.items():
+        parent, _, name = relative.rpartition("/")
+        current = _capture_regular_input(
+            held.directory_fds[parent], held.label, name
+        )
+        if current != expected:
+            raise BenchmarkError(
+                f"{held.label} input file changed after loading: {relative}"
+            )
 
 
 def _open_held_evidence(evidence_dir: Path) -> _HeldEvidenceInputs:
@@ -865,49 +1154,7 @@ def _read_bound_input(
     bind: bool,
 ) -> bytes:
     directory_fd = held.directory_fd if location == "evidence" else held.raw_fd
-    try:
-        descriptor = os.open(
-            name,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=directory_fd,
-        )
-    except OSError as error:
-        raise BenchmarkError(
-            f"cannot securely open consumed input {location}/{name}: {error}"
-        ) from error
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise BenchmarkError(f"consumed input is not a regular file: {location}/{name}")
-        chunks: list[bytes] = []
-        while True:
-            block = os.read(descriptor, 1024 * 1024)
-            if not block:
-                break
-            chunks.append(block)
-        encoded = b"".join(chunks)
-        after = os.fstat(descriptor)
-        if (
-            _identity(after) != _identity(before)
-            or after.st_size != before.st_size
-            or after.st_nlink != before.st_nlink
-            or after.st_mtime_ns != before.st_mtime_ns
-            or after.st_ctime_ns != before.st_ctime_ns
-        ):
-            raise BenchmarkError(f"consumed input changed while reading: {location}/{name}")
-    finally:
-        os.close(descriptor)
-    current = _InputBinding(
-        location=location,
-        name=name,
-        identity=_identity(after),
-        size=after.st_size,
-        links=after.st_nlink,
-        modified_ns=after.st_mtime_ns,
-        changed_ns=after.st_ctime_ns,
-        sha256=sha256_bytes(encoded),
-        encoded=encoded,
-    )
+    current = _capture_regular_input(directory_fd, location, name)
     key = (location, name)
     expected = held.bindings.get(key)
     if bind:
@@ -917,7 +1164,7 @@ def _read_bound_input(
             raise BenchmarkError(f"consumed input changed between reads: {location}/{name}")
     elif expected is None or current != expected:
         raise BenchmarkError(f"consumed input changed after loading: {location}/{name}")
-    return encoded
+    return current.encoded
 
 
 def _verify_evidence_inputs(held: _HeldEvidenceInputs) -> None:
@@ -927,26 +1174,44 @@ def _verify_evidence_inputs(held: _HeldEvidenceInputs) -> None:
     _recheck_held_evidence(held)
 
 
-def _parse_canonical_runs(encoded: bytes) -> list[dict]:
+def _parse_canonical_json(encoded: bytes, description: str) -> object:
+    try:
+        value = json.loads(encoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BenchmarkError(f"invalid {description}: {error}") from error
+    if canonical_bytes(value) != encoded:
+        raise BenchmarkError(f"{description} must use canonical JSON bytes")
+    return value
+
+
+def _parse_canonical_jsonl(encoded: bytes, description: str) -> list[dict]:
     try:
         text = encoded.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise BenchmarkError(f"runs.jsonl is not UTF-8: {error}") from error
+        raise BenchmarkError(f"{description} is not UTF-8: {error}") from error
     lines = text.splitlines()
     if not lines or any(not line for line in lines):
-        raise BenchmarkError("runs.jsonl must contain non-empty canonical JSONL records")
+        raise BenchmarkError(
+            f"{description} must contain non-empty canonical JSONL records"
+        )
     records: list[dict] = []
     for line_number, line in enumerate(lines, start=1):
         try:
             record = json.loads(line)
         except json.JSONDecodeError as error:
-            raise BenchmarkError(f"invalid runs.jsonl line {line_number}: {error}") from error
+            raise BenchmarkError(
+                f"invalid {description} line {line_number}: {error}"
+            ) from error
         if not isinstance(record, dict):
-            raise BenchmarkError(f"runs.jsonl line {line_number} must be an object")
+            raise BenchmarkError(f"{description} line {line_number} must be an object")
         records.append(record)
     if b"".join(canonical_bytes(record) for record in records) != encoded:
-        raise BenchmarkError("runs.jsonl must use canonical JSONL bytes")
+        raise BenchmarkError(f"{description} must use canonical JSONL bytes")
     return records
+
+
+def _parse_canonical_runs(encoded: bytes) -> list[dict]:
+    return _parse_canonical_jsonl(encoded, "runs.jsonl")
 
 
 def _read_raw_output(held: _HeldEvidenceInputs, run: RunResult) -> str:
@@ -1347,6 +1612,8 @@ def main(argv: list[str] | None = None) -> int:
     review_target: _HeldTarget | None = None
     key_target: _HeldTarget | None = None
     evidence_inputs: _HeldEvidenceInputs | None = None
+    dataset_inputs: _HeldInputTree | None = None
+    snapshot_inputs: _HeldInputTree | None = None
     try:
         review_target, key_target = _validate_output_targets(
             arguments.review_bundle,
@@ -1354,13 +1621,24 @@ def main(argv: list[str] | None = None) -> int:
             dataset_dir=arguments.dataset,
             evidence_dir=arguments.evidence,
         )
+        evidence_inputs = _open_held_evidence(arguments.evidence)
+        dataset_inputs = _open_held_input_tree(arguments.dataset, "dataset")
+        snapshot_inputs = _open_held_input_tree(
+            arguments.evidence / "input-snapshot", "input snapshot"
+        )
+        run_manifest_bytes = _read_bound_input(
+            evidence_inputs, "evidence", "run-manifest.json", bind=True
+        )
+        dataset_manifest_bytes = dataset_inputs.bytes("dataset-manifest.json")
         verify_dataset_manifest(arguments.dataset)
         run_manifest, prepared_provenance = _validate_prepared_manifest(
-            arguments.dataset, arguments.evidence
+            arguments.dataset,
+            arguments.evidence,
+            run_manifest_bytes=run_manifest_bytes,
+            dataset_manifest_bytes=dataset_manifest_bytes,
         )
-        cases = read_jsonl(arguments.dataset / "cases.jsonl")
+        cases = _parse_canonical_jsonl(dataset_inputs.bytes("cases.jsonl"), "cases.jsonl")
         run_ids = _validate_schedule_manifest(run_manifest)
-        evidence_inputs = _open_held_evidence(arguments.evidence)
         runs = _load_complete_runs(evidence_inputs, run_ids)
         bundle, key = build_blind_bundle(
             runs,
@@ -1368,25 +1646,37 @@ def main(argv: list[str] | None = None) -> int:
             arguments.seed,
             prepared_provenance=prepared_provenance,
         )
-        seeded_errors = read_json(arguments.dataset / "seeded-errors.json")
+        seeded_errors = _parse_canonical_json(
+            dataset_inputs.bytes("seeded-errors.json"), "seeded-errors.json"
+        )
         hidden_values = _hidden_values(cases, runs)
         hidden_values.update(_flatten_hidden_strings(seeded_errors, excluded_keys=frozenset()))
         scan_visible_bundle(bundle, _hidden_values=hidden_values)
 
         verify_dataset_manifest(arguments.dataset)
         current_manifest, current_provenance = _validate_prepared_manifest(
-            arguments.dataset, arguments.evidence
+            arguments.dataset,
+            arguments.evidence,
+            run_manifest_bytes=run_manifest_bytes,
+            dataset_manifest_bytes=dataset_manifest_bytes,
         )
         if current_manifest != run_manifest or current_provenance != prepared_provenance:
             raise BenchmarkError("blinding inputs changed before publication")
 
         _verify_evidence_inputs(evidence_inputs)
+        _verify_input_tree(dataset_inputs)
+        _verify_input_tree(snapshot_inputs)
         _atomic_create_pair(review_target, bundle, key_target, key)
         try:
             _verify_evidence_inputs(evidence_inputs)
+            _verify_input_tree(dataset_inputs)
+            _verify_input_tree(snapshot_inputs)
             verify_dataset_manifest(arguments.dataset)
             published_manifest, published_provenance = _validate_prepared_manifest(
-                arguments.dataset, arguments.evidence
+                arguments.dataset,
+                arguments.evidence,
+                run_manifest_bytes=run_manifest_bytes,
+                dataset_manifest_bytes=dataset_manifest_bytes,
             )
             if (
                 published_manifest != run_manifest
@@ -1414,6 +1704,8 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise BenchmarkError("published blinded artifacts changed after validation")
             _verify_evidence_inputs(evidence_inputs)
+            _verify_input_tree(dataset_inputs)
+            _verify_input_tree(snapshot_inputs)
         except Exception as error:
             _rollback_targets((review_target, key_target))
             if isinstance(error, BenchmarkError):
@@ -1434,6 +1726,10 @@ def main(argv: list[str] | None = None) -> int:
             key_target.close()
         if evidence_inputs is not None:
             evidence_inputs.close()
+        if dataset_inputs is not None:
+            dataset_inputs.close()
+        if snapshot_inputs is not None:
+            snapshot_inputs.close()
 
 
 if __name__ == "__main__":

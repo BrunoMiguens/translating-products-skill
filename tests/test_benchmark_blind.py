@@ -84,6 +84,32 @@ def cases() -> list[dict]:
     return synthetic_balanced_cases()[0]
 
 
+def as_manual(run: dict) -> dict:
+    return {
+        **run,
+        "runner_mode": "manual",
+        "status": "completed",
+        "failure_class": "success",
+        "process_started": False,
+        "completed_at": run["started_at"],
+        "exit_code": 0,
+        "timed_out": False,
+        "refused": False,
+        "malformed_output": False,
+        "tool_misuse": False,
+        "reason": "manual_import",
+        "stderr": "",
+        "telemetry": {},
+        "usage": None,
+        "expected_policy_sha256": None,
+        "applied_policy_sha256": None,
+        "policy_integrity": "not_required",
+        "project_fingerprint": "manual",
+        "argv": [],
+        "shell": False,
+    }
+
+
 def nested_keys(value: object) -> set[str]:
     if isinstance(value, dict):
         return set(value) | set().union(*(nested_keys(item) for item in value.values()))
@@ -330,6 +356,87 @@ class BlindingTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(BenchmarkError):
                 build_blind_bundle(complete_synthetic_runs(), changed_cases, SEED)
 
+    def test_builder_rejects_surrogate_pairs_and_wrapped_bare_base64(self):
+        """Break: JSON surrogate pairs and base64 whitespace must normalize before matching."""
+        original_cases = cases()
+        surrogate_hidden = "Hidden 😀 value"
+        base64_hidden = "😀 Hidden base64 value"
+        standard = base64.b64encode(base64_hidden.encode("utf-8")).decode("ascii")
+        urlsafe = base64.urlsafe_b64encode(base64_hidden.encode("utf-8")).decode("ascii")
+        self.assertNotEqual(standard, urlsafe)
+        reproducers = (
+            (surrogate_hidden, r"Hidden \ud83d\ude00 value"),
+            (base64_hidden, "\n".join(
+                standard[index:index + 8] for index in range(0, len(standard), 8)
+            )),
+            (base64_hidden, "\n".join(
+                urlsafe[index:index + 8] for index in range(0, len(urlsafe), 8)
+            )),
+        )
+        for hidden, encoded in reproducers:
+            changed_cases = [dict(case) for case in original_cases]
+            changed_cases[0].update({"reviewer_secret": hidden, "context": encoded})
+            with self.subTest(encoded=encoded), self.assertRaises(BenchmarkError):
+                build_blind_bundle(complete_synthetic_runs(), changed_cases, SEED)
+
+    def test_encoded_hidden_literals_remain_allowed_in_opaque_review_content(self):
+        """Break: leak hardening must not scan source, candidate, or generated outputs."""
+        changed_cases = cases()
+        hidden = "Hidden 😀 value"
+        changed_cases[0].update({
+            "reviewer_secret": hidden,
+            "source": r"Hidden \ud83d\ude00 value",
+        })
+        changed_runs = complete_synthetic_runs()
+        changed_runs[0]["output"] = base64.b64encode(hidden.encode("utf-8")).decode("ascii")
+        changed_runs[0]["output_sha256"] = sha256_bytes(
+            changed_runs[0]["output"].encode("utf-8")
+        )
+        changed_runs[0]["raw_output_path"] = (
+            f"raw/{changed_runs[0]['output_sha256']}.txt"
+        )
+
+        bundle, _ = build_blind_bundle(changed_runs, changed_cases, SEED)
+
+        self.assertEqual(len(bundle["items"]), 198)
+
+    def test_builder_accepts_complete_manual_and_mixed_supported_modes(self):
+        """Break: Task 3 manual evidence must remain consumable with fake and CLI records."""
+        manual = [as_manual(run) for run in complete_synthetic_runs()]
+
+        manual_bundle, _ = build_blind_bundle(manual, cases(), SEED)
+
+        mixed = complete_synthetic_runs()
+        mixed[0] = as_manual(mixed[0])
+        mixed[1].update({
+            "runner_mode": "cli",
+            "expected_policy_sha256": "a" * 64,
+            "applied_policy_sha256": "a" * 64,
+            "policy_integrity": "verified",
+            "argv": ["sandbox-adapter", "runner"],
+        })
+        mixed_bundle, _ = build_blind_bundle(mixed, cases(), SEED)
+
+        self.assertEqual(len(manual_bundle["items"]), 198)
+        self.assertEqual(len(mixed_bundle["items"]), 198)
+
+    def test_builder_rejects_incomplete_or_inconsistent_manual_records(self):
+        """Break: manual compatibility must not admit pending, failed, or invented records."""
+        manual = [as_manual(run) for run in complete_synthetic_runs()]
+        mutations = (
+            {"process_started": True},
+            {"status": "pending"},
+            {"failure_class": "model_outcome"},
+            {"reason": None},
+            {"argv": ["manual"]},
+            {"usage": {}},
+        )
+        for mutation in mutations:
+            changed = [dict(run) for run in manual]
+            changed[0].update(mutation)
+            with self.subTest(mutation=mutation), self.assertRaises(BenchmarkError):
+                build_blind_bundle(changed, cases(), SEED)
+
 
 class BlindingCliTests(unittest.TestCase):
     def setUp(self):
@@ -350,6 +457,27 @@ class BlindingCliTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    @staticmethod
+    def _replace_with_same_bytes(path: Path) -> None:
+        original = path.stat()
+        replacement = path.with_name(f".{path.name}.replacement")
+        replacement.write_bytes(path.read_bytes())
+        replacement.chmod(stat.S_IMODE(original.st_mode))
+        os.replace(replacement, path)
+
+    @staticmethod
+    def _sandbox_probe(manifest: dict, **overrides) -> dict:
+        binding = {
+            "schema_version": 1,
+            "probe_version": 1,
+            "adapter_command_sha256": "a" * 64,
+            "probe_program_sha256": "b" * 64,
+            "policy_sha256": ["c" * 64],
+            "snapshot_sha256": manifest["input_snapshot"]["sha256"],
+        }
+        binding.update(overrides)
+        return {**binding, "sha256": sha256_bytes(canonical_bytes(binding))}
 
     def _write_evidence(self) -> None:
         self.evidence.mkdir()
@@ -514,10 +642,20 @@ class BlindingCliTests(unittest.TestCase):
             "suite commit": lambda value: value["suite"].update(commit="wrong-commit"),
             "runner config": lambda value: value.update(runner_config_sha256="wrong"),
             "execution config": lambda value: value.update(execution_config_sha256="wrong"),
+            "boolean schema version": lambda value: value.update(schema_version=True),
+            "boolean schedule seed": lambda value: value.update(schedule_seed=True),
+            "boolean bootstrap seed": lambda value: value.update(bootstrap_seed=True),
             "schedule seed": lambda value: value.update(schedule_seed=None),
             "bootstrap seed": lambda value: value.update(bootstrap_seed=None),
             "evidence path": lambda value: value.update(evidence="/wrong/evidence/path"),
             "snapshot": lambda value: value.pop("input_snapshot"),
+            "null sandbox probe": lambda value: value.update(sandbox_probe=None),
+            "boolean probe schema": lambda value: value.update(
+                sandbox_probe=self._sandbox_probe(value, schema_version=True)
+            ),
+            "boolean probe version": lambda value: value.update(
+                sandbox_probe=self._sandbox_probe(value, probe_version=True)
+            ),
             "incomplete sandbox probe": lambda value: value.update(
                 sandbox_probe={"sha256": "0" * 64}
             ),
@@ -539,6 +677,23 @@ class BlindingCliTests(unittest.TestCase):
                 self.assertFalse(review.exists())
                 self.assertFalse(key.exists())
         atomic_write_json(manifest_path, original)
+
+    def test_cli_accepts_a_complete_optional_sandbox_probe(self):
+        """Break: exact optional validation must preserve a complete prepared probe object."""
+        manifest_path = self.evidence / "run-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["sandbox_probe"] = self._sandbox_probe(manifest)
+        atomic_write_json(manifest_path, manifest)
+        public_dir = self.root / "public-probe"
+        private_dir = self.root / "private-probe"
+        public_dir.mkdir()
+        private_dir.mkdir()
+
+        completed = self.run_cli(
+            public_dir / "bundle.json", private_dir / "key.json"
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_cli_rejects_non_content_addressed_raw_path(self):
         """Break: a valid hash must not authorize arbitrary evidence paths."""
@@ -635,6 +790,109 @@ class BlindingCliTests(unittest.TestCase):
         stderr = io.StringIO()
         with (
             mock.patch.object(blind, "_atomic_create_pair", mutate_raw_then_publish),
+            mock.patch.object(blind.sys, "stdout", stdout),
+            mock.patch.object(blind.sys, "stderr", stderr),
+        ):
+            result = blind.main(self.cli_args(review, key))
+
+        self.assertEqual(result, 2)
+        self.assertFalse(review.exists())
+        self.assertFalse(key.exists())
+
+    def test_cli_rolls_back_same_byte_replacements_of_every_loaded_input_family(self):
+        """Break: inode swaps of equal bytes must invalidate manifest, dataset, and snapshot inputs."""
+        targets = (
+            self.evidence / "run-manifest.json",
+            self.dataset / "dataset-manifest.json",
+            self.dataset / "cases.jsonl",
+            self.dataset / "seeded-errors.json",
+            self.dataset / "reference-signoff.json",
+            self.dataset / "rubric.md",
+            self.evidence / "input-snapshot" / "skills"
+            / "translating-products" / "SKILL.md",
+            self.evidence / "input-snapshot" / ".translation"
+            / "project-brief.md",
+            self.evidence / "input-snapshot" / ".translation"
+            / "setup-approval.json",
+        )
+        original_publish = blind._atomic_create_pair
+        for index, target in enumerate(targets):
+            public_dir = self.root / f"public-input-swap-{index}"
+            private_dir = self.root / f"private-input-swap-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+            review = public_dir / "bundle.json"
+            key = private_dir / "key.json"
+
+            def replace_then_publish(*args, _target=target, **kwargs):
+                self._replace_with_same_bytes(_target)
+                return original_publish(*args, **kwargs)
+
+            stdout = mock.Mock(buffer=io.BytesIO())
+            stderr = io.StringIO()
+            with (
+                self.subTest(target=target.relative_to(self.root)),
+                mock.patch.object(blind, "_atomic_create_pair", replace_then_publish),
+                mock.patch.object(blind.sys, "stdout", stdout),
+                mock.patch.object(blind.sys, "stderr", stderr),
+            ):
+                result = blind.main(self.cli_args(review, key))
+                self.assertEqual(result, 2)
+                self.assertFalse(review.exists())
+                self.assertFalse(key.exists())
+
+    def test_cli_rechecks_dataset_identity_after_published_artifact_reads(self):
+        """Break: a final-acceptance inode swap must roll back already published artifacts."""
+        public_dir = self.root / "public-final-input-swap"
+        private_dir = self.root / "private-final-input-swap"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        review = public_dir / "bundle.json"
+        key = private_dir / "key.json"
+        cases_path = self.dataset / "cases.jsonl"
+        original_read = blind._read_published
+        reads = 0
+
+        def read_then_replace(target):
+            nonlocal reads
+            encoded = original_read(target)
+            reads += 1
+            if reads == 1:
+                self._replace_with_same_bytes(cases_path)
+            return encoded
+
+        stdout = mock.Mock(buffer=io.BytesIO())
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(blind, "_read_published", read_then_replace),
+            mock.patch.object(blind.sys, "stdout", stdout),
+            mock.patch.object(blind.sys, "stderr", stderr),
+        ):
+            result = blind.main(self.cli_args(review, key))
+
+        self.assertEqual(result, 2)
+        self.assertFalse(review.exists())
+        self.assertFalse(key.exists())
+
+    def test_cli_rejects_snapshot_path_set_changes_during_publication(self):
+        """Break: tree-ledger additions must invalidate the frozen snapshot file set."""
+        public_dir = self.root / "public-snapshot-addition"
+        private_dir = self.root / "private-snapshot-addition"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        review = public_dir / "bundle.json"
+        key = private_dir / "key.json"
+        added = self.evidence / "input-snapshot" / "skills" / "unexpected.txt"
+        original_publish = blind._atomic_create_pair
+
+        def add_snapshot_file_then_publish(*args, **kwargs):
+            added.write_text("unexpected", encoding="utf-8")
+            return original_publish(*args, **kwargs)
+
+        stdout = mock.Mock(buffer=io.BytesIO())
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(blind, "_atomic_create_pair", add_snapshot_file_then_publish),
             mock.patch.object(blind.sys, "stdout", stdout),
             mock.patch.object(blind.sys, "stderr", stderr),
         ):
