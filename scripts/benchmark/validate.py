@@ -548,7 +548,7 @@ _MARKDOWN_LIST = re.compile(r"^(\s*)([-+*]|\d+[.)])\s+")
 _MARKDOWN_QUOTE = re.compile(r"^(\s*(?:>\s*)+)")
 _MARKDOWN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 _MARKDOWN_CONTAINER_LIST = re.compile(
-    r"^ {0,3}(?:[-+*]|\d{1,9}[.)])([ \t]{1,4})"
+    r"^ {0,3}(?:[-+*]|\d{1,9}[.)])([ \t]+)"
 )
 _MARKDOWN_CONTAINER_QUOTE = re.compile(r"^ {0,3}>[ \t]?")
 
@@ -596,8 +596,17 @@ def _parse_markdown_topology(text: str) -> object:
                     quotes.append(quote.group(1).count(">"))
                 active_lines.append("")
                 continue
-        if line.startswith("\t") or line.startswith("    "):
+        if fence_line.startswith("\t") or fence_line.startswith("    "):
             active_lines.append("")
+            item = _MARKDOWN_LIST.match(line)
+            if item:
+                lists.append((
+                    len(item.group(1).expandtabs(4)),
+                    "ordered" if item.group(2)[0].isdigit() else "unordered",
+                ))
+            quote = _MARKDOWN_QUOTE.match(line)
+            if quote:
+                quotes.append(quote.group(1).count(">"))
             continue
         active_lines.append(line)
         heading = _MARKDOWN_HEADING.match(line)
@@ -657,9 +666,17 @@ def _markdown_container_content(
             continue
         item = _MARKDOWN_CONTAINER_LIST.match(content)
         if item:
+            marker_column = len(content[:item.start(1)].expandtabs(4))
+            prefix_column = len(content[:item.end()].expandtabs(4))
+            indentation = prefix_column - marker_column
+            if indentation > 4:
+                return (
+                    " " * (indentation - 1) + content[item.end():],
+                    tuple(containers),
+                )
             containers.append((
                 "list",
-                len(content[:item.end()].expandtabs(4)),
+                prefix_column,
             ))
             content = content[item.end():]
             continue

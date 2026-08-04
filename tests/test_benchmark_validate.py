@@ -825,6 +825,150 @@ class ValidatorTests(unittest.TestCase):
                 self.assertEqual(result.findings, ())
                 self.assertEqual(corrupted.status, "failed")
 
+    def test_markdown_list_indented_code_does_not_invent_fences(self):
+        """Break: a five-space list/code prefix could become a truncated fence prefix."""
+        check = [{"type": "markdown_structure", "severity": "critical"}]
+        unclosed_literal = "-     ```text\n      [id]: /inside\n"
+        closed_literal = unclosed_literal + "      ```\n"
+
+        valid_source = validate_output(
+            case_with_checks(source=unclosed_literal, checks=check),
+            unclosed_literal,
+        )
+        translated_literal = validate_output(
+            case_with_checks(source=closed_literal, checks=check),
+            closed_literal.replace("```text", "```translated", 1),
+        )
+
+        self.assertEqual(valid_source.status, "passed")
+        self.assertEqual(valid_source.validator_errors, ())
+        self.assertEqual(translated_literal.status, "passed")
+        self.assertEqual(translated_literal.findings, ())
+
+    def test_markdown_list_fence_boundary_covers_markers_and_space_columns(self):
+        """Break: list whitespace could be truncated instead of classified before fence discovery."""
+        check = [{"type": "markdown_structure", "severity": "critical"}]
+        markers = ("-", "+", "*", "1.", "2)", "123456789.")
+        for marker in markers:
+            for spaces in range(1, 9):
+                with self.subTest(marker=marker, spaces=spaces):
+                    gap = " " * spaces
+                    continuation = " " * (len(marker) + spaces)
+                    source = (
+                        f"{marker}{gap}```text\n"
+                        f"{continuation}[inside]: https://source.example\n"
+                        f"{continuation}```not-a-close\n"
+                        f"{continuation}[inside]\n"
+                        f"{continuation}```\n\n"
+                        "[active]: https://active.example\nOpen [active].\n"
+                    )
+                    candidate_info = "text" if spaces <= 4 else "translated"
+                    candidate = (
+                        f"{marker}{gap}```{candidate_info}\n"
+                        f"{continuation}[changed]: https://candidate.example\n"
+                        f"{continuation}```still-not-a-close\n"
+                        f"{continuation}[changed]\n"
+                        f"{continuation}```\n\n"
+                        "[active]: https://active.example\nAbra [active].\n"
+                    )
+
+                    result = validate_output(
+                        case_with_checks(source=source, checks=check),
+                        candidate,
+                    )
+                    corrupted = validate_output(
+                        case_with_checks(source=source, checks=check),
+                        candidate.replace(
+                            "[active]: https://active.example",
+                            "[active]: https://evil.example",
+                        ),
+                    )
+
+                    self.assertEqual(result.status, "passed")
+                    self.assertEqual(result.findings, ())
+                    self.assertEqual(result.validator_errors, ())
+                    self.assertEqual(corrupted.status, "failed")
+
+    def test_markdown_list_fence_boundary_handles_tabs_and_nested_containers(self):
+        """Break: tab columns or nested containers could expose literal code as Markdown."""
+        check = [{"type": "markdown_structure", "severity": "critical"}]
+        tab_cases = (
+            ("bullet-tab", "-", "\t", 4, True),
+            ("bullet-tab-space", "-", "\t ", 5, True),
+            ("bullet-tab-two-spaces", "-", "\t  ", 6, False),
+            ("bullet-double-tab", "-", "\t\t", 8, False),
+            ("bullet-two-spaces-tab-space", "-", "  \t ", 5, True),
+            ("bullet-two-spaces-tab-two-spaces", "-", "  \t  ", 6, False),
+            ("bullet-three-spaces-tab", "-", "   \t", 8, False),
+            ("ordered-tab", "1.", "\t", 4, True),
+            ("ordered-tab-two-spaces", "1.", "\t  ", 6, True),
+            ("ordered-tab-three-spaces", "1.", "\t   ", 7, False),
+            ("ordered-space-tab-two-spaces", "1.", " \t  ", 6, True),
+            ("ordered-space-tab-three-spaces", "1.", " \t   ", 7, False),
+            ("ordered-two-spaces-tab", "1.", "  \t", 8, False),
+        )
+        for name, marker, gap, continuation_column, is_fence in tab_cases:
+            with self.subTest(case=name):
+                continuation = " " * continuation_column
+                source = (
+                    f"{marker}{gap}```text\n"
+                    f"{continuation}[inside]: https://source.example\n"
+                    f"{continuation}```not-a-close\n"
+                    f"{continuation}```\n\n"
+                    "[active]: https://active.example\nOpen [active].\n"
+                )
+                candidate_info = "text" if is_fence else "translated"
+                candidate = (
+                    f"{marker}{gap}```{candidate_info}\n"
+                    f"{continuation}[changed]: https://candidate.example\n"
+                    f"{continuation}```still-not-a-close\n"
+                    f"{continuation}```\n\n"
+                    "[active]: https://active.example\nAbra [active].\n"
+                )
+
+                result = validate_output(
+                    case_with_checks(source=source, checks=check),
+                    candidate,
+                )
+                self.assertEqual(result.status, "passed")
+                self.assertEqual(result.findings, ())
+                self.assertEqual(result.validator_errors, ())
+
+        nested_cases = (
+            ("> -     ", ">       "),
+            ("- > -     ", "  >       "),
+            ("> > 1.     ", "> >        "),
+            ("- 1.     ", "         "),
+        )
+        for opening_prefix, continuation in nested_cases:
+            with self.subTest(nested=opening_prefix):
+                source = (
+                    f"{opening_prefix}```text\n"
+                    f"{continuation}[inside]: https://source.example\n"
+                    f"{continuation}```not-a-close\n"
+                    f"{continuation}[inside]\n"
+                    f"{continuation}```\n\n"
+                    "[inside]: https://shared.example\n"
+                    "[active]: https://active.example\nOpen [active].\n"
+                )
+                candidate = (
+                    f"{opening_prefix}```translated\n"
+                    f"{continuation}[changed]: https://candidate.example\n"
+                    f"{continuation}```still-not-a-close\n"
+                    f"{continuation}[changed]\n"
+                    f"{continuation}```\n\n"
+                    "[inside]: https://shared.example\n"
+                    "[active]: https://active.example\nAbra [active].\n"
+                )
+
+                result = validate_output(
+                    case_with_checks(source=source, checks=check),
+                    candidate,
+                )
+                self.assertEqual(result.status, "passed")
+                self.assertEqual(result.findings, ())
+                self.assertEqual(result.validator_errors, ())
+
     def test_numeric_placeholders_and_multi_backtick_code_spans_are_protected(self):
         """Break: valid numeric and delimiter-aware scalar syntax could be changed silently."""
         placeholder_case = case_with_checks(
