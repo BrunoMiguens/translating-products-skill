@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -600,7 +601,14 @@ class BlindingCliTests(unittest.TestCase):
         })
         atomic_write_json(self.evidence / "run-manifest.json", manifest)
 
-    def _bind_dirty_suite(self, diff_artifact: Path) -> None:
+    def _bind_dirty_suite(
+        self,
+        diff_artifact: Path,
+        *,
+        canonicalize: bool = True,
+    ) -> None:
+        if canonicalize:
+            diff_artifact = diff_artifact.resolve(strict=True)
         dataset_manifest = build_dataset_manifest(
             self.dataset,
             suite_commit="abc123",
@@ -646,6 +654,7 @@ class BlindingCliTests(unittest.TestCase):
         key: Path,
         *,
         umask: int | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
@@ -659,6 +668,7 @@ class BlindingCliTests(unittest.TestCase):
             capture_output=True,
             check=False,
             preexec_fn=(None if umask is None else lambda: os.umask(umask)),
+            timeout=timeout,
         )
 
     def test_cli_atomically_creates_rescanned_outputs_with_separate_permissions(self):
@@ -943,7 +953,7 @@ class BlindingCliTests(unittest.TestCase):
         parent_alias = self.root / "parent-alias"
         os.symlink(real_parent, parent_alias)
         for index, artifact in enumerate((artifact_alias, parent_alias / real_diff.name)):
-            self._bind_dirty_suite(artifact)
+            self._bind_dirty_suite(artifact, canonicalize=False)
             public_dir = self.root / f"public-dirty-alias-{index}"
             private_dir = self.root / f"private-dirty-alias-{index}"
             public_dir.mkdir()
@@ -954,6 +964,191 @@ class BlindingCliTests(unittest.TestCase):
             )
 
             with self.subTest(artifact=artifact):
+                self.assertEqual(completed.returncode, 2, completed.stdout)
+                self.assertFalse((public_dir / "bundle.json").exists())
+                self.assertFalse((private_dir / "key.json").exists())
+
+    def test_cli_rejects_symlinks_in_initial_external_diff_ancestor_chain(self):
+        """Break: no intermediate ancestor may redirect the external diff traversal."""
+        real_outer = self.root.resolve() / "initial-real-outer"
+        real_middle = real_outer / "real-middle"
+        real_parent = real_middle / "real-parent"
+        real_parent.mkdir(parents=True)
+        artifact = real_parent / "suite.diff"
+        artifact.write_text("diff --git a/input b/input\n+fixture\n", encoding="utf-8")
+
+        outer_alias = self.root.resolve() / "initial-outer-alias"
+        os.symlink(real_outer, outer_alias)
+        middle_alias = real_outer / "middle-alias"
+        os.symlink(real_middle, middle_alias)
+        paths = (
+            outer_alias / "real-middle" / "real-parent" / artifact.name,
+            real_outer / "middle-alias" / "real-parent" / artifact.name,
+        )
+        for index, diff_path in enumerate(paths):
+            self._bind_dirty_suite(diff_path, canonicalize=False)
+            public_dir = self.root / f"public-initial-ancestor-{index}"
+            private_dir = self.root / f"private-initial-ancestor-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+
+            completed = self.run_cli(
+                public_dir / "bundle.json",
+                private_dir / "key.json",
+                timeout=2,
+            )
+
+            with self.subTest(component=index):
+                self.assertEqual(completed.returncode, 2, completed.stdout)
+                self.assertFalse((public_dir / "bundle.json").exists())
+                self.assertFalse((private_dir / "key.json").exists())
+
+    def test_cli_rolls_back_if_any_external_diff_ancestor_is_replaced_at_each_checkpoint(self):
+        """Break: every held ancestor/name edge must survive every acceptance checkpoint."""
+        original_publish = blind._atomic_create_pair
+        original_validate = blind._validate_prepared_manifest
+        original_read = blind._read_published
+        for component_index in range(3):
+            for phase_index, phase in enumerate(("prepublication", "postpublication", "final")):
+                outer = self.root.resolve() / f"timing-{component_index}-{phase_index}-outer"
+                middle = outer / "middle"
+                parent = middle / "parent"
+                parent.mkdir(parents=True)
+                artifact = parent / "suite.diff"
+                artifact.write_text(
+                    "diff --git a/input b/input\n+fixture\n", encoding="utf-8"
+                )
+                self._bind_dirty_suite(artifact)
+                components = (outer, middle, parent)
+                component = components[component_index]
+                displaced = component.with_name(f"{component.name}-displaced")
+                public_dir = self.root / f"public-timing-{component_index}-{phase_index}"
+                private_dir = self.root / f"private-timing-{component_index}-{phase_index}"
+                public_dir.mkdir()
+                private_dir.mkdir()
+                review = public_dir / "bundle.json"
+                key = private_dir / "key.json"
+
+                def replace_component() -> None:
+                    component.rename(displaced)
+                    os.symlink(displaced, component)
+
+                if phase == "prepublication":
+                    validations = 0
+
+                    def mutate_during_validation(*args, **kwargs):
+                        nonlocal validations
+                        result = original_validate(*args, **kwargs)
+                        validations += 1
+                        if validations == 2:
+                            replace_component()
+                        return result
+
+                    phase_patch = mock.patch.object(
+                        blind, "_validate_prepared_manifest", mutate_during_validation
+                    )
+                elif phase == "postpublication":
+                    def mutate_after_publication(*args, **kwargs):
+                        original_publish(*args, **kwargs)
+                        replace_component()
+
+                    phase_patch = mock.patch.object(
+                        blind, "_atomic_create_pair", mutate_after_publication
+                    )
+                else:
+                    reads = 0
+
+                    def mutate_at_final_acceptance(target):
+                        nonlocal reads
+                        encoded = original_read(target)
+                        reads += 1
+                        if reads == 4:
+                            replace_component()
+                        return encoded
+
+                    phase_patch = mock.patch.object(
+                        blind, "_read_published", mutate_at_final_acceptance
+                    )
+
+                stdout = mock.Mock(buffer=io.BytesIO())
+                stderr = io.StringIO()
+                before_fds = len(os.listdir("/dev/fd"))
+                with (
+                    self.subTest(component=component_index, phase=phase),
+                    phase_patch,
+                    mock.patch.object(blind.sys, "stdout", stdout),
+                    mock.patch.object(blind.sys, "stderr", stderr),
+                ):
+                    result = blind.main(self.cli_args(review, key))
+                    self.assertEqual(result, 2)
+                    self.assertFalse(review.exists())
+                    self.assertFalse(key.exists())
+                    self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
+
+    def test_cli_rejects_non_regular_or_multiply_linked_external_diff_endpoints_promptly(self):
+        """Break: endpoint inspection must not block and must accept only one-link regular files."""
+        mutations: list[tuple[str, object]] = []
+
+        def fifo(path: Path) -> None:
+            path.unlink()
+            os.mkfifo(path)
+
+        def character_device(_path: Path) -> None:
+            dataset_manifest_path = self.dataset / "dataset-manifest.json"
+            dataset_manifest = json.loads(
+                dataset_manifest_path.read_text(encoding="utf-8")
+            )
+            dataset_manifest["suite"]["diff_artifact"] = str(Path("/dev/null").resolve())
+            dataset_manifest["suite"]["diff_sha256"] = sha256_bytes(b"")
+            atomic_write_json(dataset_manifest_path, dataset_manifest)
+            run_manifest_path = self.evidence / "run-manifest.json"
+            run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+            run_manifest["dataset"]["manifest_sha256"] = sha256_bytes(
+                canonical_bytes(dataset_manifest)
+            )
+            run_manifest["suite"]["diff_sha256"] = dataset_manifest["suite"][
+                "diff_sha256"
+            ]
+            atomic_write_json(run_manifest_path, run_manifest)
+
+        def directory(path: Path) -> None:
+            path.unlink()
+            path.mkdir()
+
+        def symlink(path: Path) -> None:
+            target = path.with_name(f"{path.name}.target")
+            target.write_text("diff --git a/input b/input\n+fixture\n", encoding="utf-8")
+            path.unlink()
+            os.symlink(target, path)
+
+        def extra_link(path: Path) -> None:
+            os.link(path, path.with_name(f"{path.name}.extra-link"))
+
+        mutations.extend((
+            ("fifo", fifo),
+            ("character device", character_device),
+            ("directory", directory),
+            ("symlink", symlink),
+            ("multiple links", extra_link),
+        ))
+        for index, (name, mutate) in enumerate(mutations):
+            artifact = self._dirty_diff(f"endpoint-{index}")
+            mutate(artifact)
+            public_dir = self.root / f"public-endpoint-{index}"
+            private_dir = self.root / f"private-endpoint-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+            started = time.monotonic()
+            with self.subTest(endpoint=name):
+                try:
+                    completed = self.run_cli(
+                        public_dir / "bundle.json",
+                        private_dir / "key.json",
+                        timeout=2,
+                    )
+                except subprocess.TimeoutExpired:
+                    self.fail(f"{name} endpoint did not return within two seconds")
+                self.assertLess(time.monotonic() - started, 2)
                 self.assertEqual(completed.returncode, 2, completed.stdout)
                 self.assertFalse((public_dir / "bundle.json").exists())
                 self.assertFalse((private_dir / "key.json").exists())

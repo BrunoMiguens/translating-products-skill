@@ -895,25 +895,43 @@ class _HeldInputTree:
 
 
 @dataclass
+class _HeldDirectoryComponent:
+    name: str
+    identity: tuple[int, int]
+
+
+@dataclass
 class _HeldDiffArtifact:
     path: Path
     parent: Path
     name: str
-    directory_fd: int
-    directory_identity: tuple[int, int]
+    anchor: Path
+    directory_fds: list[int]
+    directories: tuple[_HeldDirectoryComponent, ...]
     binding: _InputBinding
 
     def close(self) -> None:
-        if self.directory_fd >= 0:
-            os.close(self.directory_fd)
-            self.directory_fd = -1
+        for descriptor in reversed(self.directory_fds):
+            if descriptor >= 0:
+                os.close(descriptor)
+        self.directory_fds.clear()
 
 
-def _capture_regular_input(directory_fd: int, location: str, name: str) -> _InputBinding:
+def _capture_regular_input(
+    directory_fd: int,
+    location: str,
+    name: str,
+    *,
+    nonblocking: bool = False,
+    require_single_link: bool = False,
+) -> _InputBinding:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    if nonblocking:
+        flags |= getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(
             name,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            flags,
             dir_fd=directory_fd,
         )
     except OSError as error:
@@ -922,7 +940,10 @@ def _capture_regular_input(directory_fd: int, location: str, name: str) -> _Inpu
         ) from error
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or (require_single_link and before.st_nlink != 1)
+        ):
             raise BenchmarkError(f"consumed input is not a regular file: {location}/{name}")
         chunks: list[bytes] = []
         while True:
@@ -977,26 +998,64 @@ def _open_held_diff_artifact(dataset_manifest_bytes: bytes) -> _HeldDiffArtifact
         suite.get("diff_sha256"), "suite diff hash"
     )
     path = Path(path_value)
-    if path.name in {"", ".", ".."} or path.is_symlink():
-        raise BenchmarkError("refusing symlink or invalid suite diff artifact")
+    if (
+        not path.is_absolute()
+        or path.name in {"", ".", ".."}
+        or any(part in {".", ".."} for part in path.parts[1:])
+    ):
+        raise BenchmarkError("suite diff artifact path must be canonical and absolute")
     parent = path.parent
+    anchor = Path(path.anchor)
+    directory_fds: list[int] = []
+    directories: list[_HeldDirectoryComponent] = []
     try:
-        directory_fd = os.open(parent, _directory_flags())
-    except OSError as error:
+        anchor_fd = os.open(anchor, _directory_flags())
+        directory_fds.append(anchor_fd)
+        anchor_stat = os.fstat(anchor_fd)
+        named_anchor = os.stat(anchor, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(anchor_stat.st_mode)
+            or not stat.S_ISDIR(named_anchor.st_mode)
+            or _identity(anchor_stat) != _identity(named_anchor)
+        ):
+            raise BenchmarkError("suite diff artifact anchor identity changed while opening")
+        directories.append(
+            _HeldDirectoryComponent(str(anchor), _identity(anchor_stat))
+        )
+        for component in path.parts[1:-1]:
+            parent_fd = directory_fds[-1]
+            descriptor = os.open(component, _directory_flags(), dir_fd=parent_fd)
+            directory_fds.append(descriptor)
+            held_component = os.fstat(descriptor)
+            named_component = os.stat(
+                component, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                not stat.S_ISDIR(held_component.st_mode)
+                or not stat.S_ISDIR(named_component.st_mode)
+                or _identity(held_component) != _identity(named_component)
+            ):
+                raise BenchmarkError(
+                    "suite diff artifact ancestor identity changed while opening"
+                )
+            directories.append(
+                _HeldDirectoryComponent(component, _identity(held_component))
+            )
+    except (OSError, BenchmarkError) as error:
+        for descriptor in reversed(directory_fds):
+            os.close(descriptor)
+        if isinstance(error, BenchmarkError):
+            raise
         raise BenchmarkError(
-            f"cannot securely open suite diff artifact parent: {error}"
+            f"cannot securely traverse suite diff artifact path: {error}"
         ) from error
     try:
-        held_parent = os.fstat(directory_fd)
-        named_parent = os.stat(parent, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(held_parent.st_mode)
-            or not stat.S_ISDIR(named_parent.st_mode)
-            or _identity(held_parent) != _identity(named_parent)
-        ):
-            raise BenchmarkError("suite diff artifact parent identity changed while opening")
         binding = _capture_regular_input(
-            directory_fd, "suite diff artifact", path.name
+            directory_fds[-1],
+            "suite diff artifact",
+            path.name,
+            nonblocking=True,
+            require_single_link=True,
         )
         if binding.sha256 != expected_sha256:
             raise BenchmarkError("suite diff artifact hash mismatch")
@@ -1004,14 +1063,16 @@ def _open_held_diff_artifact(dataset_manifest_bytes: bytes) -> _HeldDiffArtifact
             path=path,
             parent=parent,
             name=path.name,
-            directory_fd=directory_fd,
-            directory_identity=_identity(held_parent),
+            anchor=anchor,
+            directory_fds=directory_fds,
+            directories=tuple(directories),
             binding=binding,
         )
         _verify_held_diff_artifact(held)
         return held
     except Exception:
-        os.close(directory_fd)
+        for descriptor in reversed(directory_fds):
+            os.close(descriptor)
         raise
 
 
@@ -1019,21 +1080,40 @@ def _verify_held_diff_artifact(held: _HeldDiffArtifact | None) -> None:
     if held is None:
         return
     try:
-        held_parent = os.fstat(held.directory_fd)
-        named_parent = os.stat(held.parent, follow_symlinks=False)
+        anchor_stat = os.fstat(held.directory_fds[0])
+        named_anchor = os.stat(held.anchor, follow_symlinks=False)
+        anchor_binding = held.directories[0]
+        if (
+            not stat.S_ISDIR(anchor_stat.st_mode)
+            or not stat.S_ISDIR(named_anchor.st_mode)
+            or _identity(anchor_stat) != anchor_binding.identity
+            or _identity(named_anchor) != anchor_binding.identity
+        ):
+            raise BenchmarkError("suite diff artifact anchor identity changed")
+        for index, expected in enumerate(held.directories[1:], start=1):
+            parent_fd = held.directory_fds[index - 1]
+            descriptor = held.directory_fds[index]
+            current = os.fstat(descriptor)
+            named = os.stat(
+                expected.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                not stat.S_ISDIR(current.st_mode)
+                or not stat.S_ISDIR(named.st_mode)
+                or _identity(current) != expected.identity
+                or _identity(named) != expected.identity
+            ):
+                raise BenchmarkError("suite diff artifact ancestor identity changed")
     except OSError as error:
         raise BenchmarkError(
-            f"suite diff artifact parent identity changed: {error}"
+            f"suite diff artifact ancestor identity changed: {error}"
         ) from error
-    if (
-        not stat.S_ISDIR(held_parent.st_mode)
-        or not stat.S_ISDIR(named_parent.st_mode)
-        or _identity(held_parent) != held.directory_identity
-        or _identity(named_parent) != held.directory_identity
-    ):
-        raise BenchmarkError("suite diff artifact parent identity changed")
     current = _capture_regular_input(
-        held.directory_fd, "suite diff artifact", held.name
+        held.directory_fds[-1],
+        "suite diff artifact",
+        held.name,
+        nonblocking=True,
+        require_single_link=True,
     )
     if current != held.binding:
         raise BenchmarkError("suite diff artifact changed after loading")
