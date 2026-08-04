@@ -1,0 +1,28 @@
+scripts/benchmark/run.py
+  s_51f69c54a42bb0::t_4db62beda23082 1-269,272-282,288-325,327,329-479,483-484,486-489,491-821
+  s_51f69c54a42bb0::t_6a8d6337ff6a43 270-271,283-287
+  s_51f69c54a42bb0::t_d7f94521542a09 326,328,480-482,485,490
+tests/test_benchmark_run.py
+  s_51f69c54a42bb0::t_85ab9f421fac1b 213-218
+  s_51f69c54a42bb0::t_ba56c91b8a483b 138
+  s_51f69c54a42bb0::t_2245ec0d8382fe 11,15,219-319
+  s_51f69c54a42bb0::t_fe6201b8f1b5b4 1-10,12-14,16-137,139-212,320-390
+benchmarks/pt-pt-v1/runner-config.example.json
+  s_51f69c54a42bb0::t_4db62beda23082 1-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "5d56bdc37f94b440a56b6cba1b84516ca20c1576",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
