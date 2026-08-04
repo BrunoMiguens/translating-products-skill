@@ -773,7 +773,7 @@ def _tree_hash(root: Path) -> str:
     return sha256_bytes(canonical_bytes(entries))
 
 
-def _validate_signed_context(translation: Path) -> None:
+def _validate_signed_context(translation: Path) -> tuple[str, ...]:
     _refuse_symlinks(translation)
     missing = [name for name in (*_CONTEXT_FILES, "setup-approval.json") if not (translation / name).is_file()]
     if missing:
@@ -806,6 +806,7 @@ def _validate_signed_context(translation: Path) -> None:
         actual = sha256_bytes((translation / name).read_bytes())
         if hashes[name] != actual:
             raise BenchmarkError(f"project context approval hash mismatch: {name}")
+    return tuple(hashes[name] for name in _CONTEXT_FILES)
 
 
 def _snapshot_manifest(snapshot_path: Path) -> dict:
@@ -888,8 +889,10 @@ def _freeze_input_snapshot(
             shutil.copy2(translation / name, staged_translation / name)
         _set_snapshot_permissions(staged, readonly=False)
         snapshot_manifest = _snapshot_manifest(staged)
+        context_sha256 = _validate_signed_context(staged_translation)
         integrity_digests = [
             *required_integrity_digests,
+            *context_sha256,
             snapshot_manifest["sha256"],
             *snapshot_manifest["trees"].values(),
         ]

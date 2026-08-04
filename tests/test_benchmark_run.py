@@ -516,6 +516,40 @@ print(json.dumps(envelope, sort_keys=True))
                 self.assertFalse(adapter_log.exists())
                 self.assertFalse(evidence.exists())
 
+    def test_cli_rejects_approved_context_digest_secret_before_evidence_publication(self):
+        """Break: an individual approved context digest could evade the collision gate."""
+        case = one_translation_case()
+        schedule = [RunSpec("context-secret-collision", case["id"], "normal", 1)]
+        # Hand-derived from the exact approved project-brief fixture bytes.
+        context_sha256 = "f113e04fbf0675e564ff26b1ff508a72771546ff940393bb228b50f90c7e97ef"
+        approval = json.loads(
+            (self.suite / ".translation/setup-approval.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            approval["context_sha256"]["project-brief.md"], context_sha256
+        )
+        secret_name = "BENCHMARK_CONTEXT_DIGEST_SECRET"
+        os.environ[secret_name] = context_sha256
+        self.addCleanup(os.environ.pop, secret_name, None)
+        config = self.cli_config(secret_env=[secret_name])
+        runner = CliRunner(
+            config["command"], sandbox_adapter=config["sandbox_adapter"]
+        )
+        adapter_log = Path(config["sandbox_adapter"][1]).with_suffix(".log")
+
+        with self.assertRaisesRegex(BenchmarkError, "secret.*integrity digest"):
+            execute_schedule(
+                schedule, runner, self.evidence,
+                cases=[case], config=config, templates=templates(),
+            )
+
+        self.assertFalse(adapter_log.exists())
+        self.assertFalse(self.evidence.exists())
+        persisted = b"".join(
+            path.read_bytes() for path in self.evidence.rglob("*") if path.is_file()
+        ) if self.evidence.exists() else b""
+        self.assertNotIn(context_sha256.encode("ascii"), persisted)
+
     def test_resume_refuses_literal_legacy_cli_records_without_exact_policy_binding(self):
         """Break: legacy CLI records with absent or wrong policy proof could be skipped."""
         case = one_translation_case()
