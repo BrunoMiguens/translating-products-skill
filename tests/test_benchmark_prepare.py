@@ -151,10 +151,13 @@ class PreparationTests(unittest.TestCase):
             approved_at="2026-08-03T12:00:00Z",
         )
         dataset_manifest = dataset / "dataset-manifest.json"
+        dataset_diff = self.temp_dir / "dataset.diff"
+        dataset_diff.write_text("recorded dirty snapshot\n", encoding="utf-8")
         dataset_result = subprocess.run(
             [
                 sys.executable, "-m", "scripts.benchmark.prepare", "dataset",
                 "--dataset", str(dataset), "--write-manifest", str(dataset_manifest),
+                "--snapshot-id", "test-dataset-snapshot", "--diff-artifact", str(dataset_diff),
             ],
             cwd=Path(__file__).resolve().parents[1],
             text=True,
@@ -188,8 +191,14 @@ class PreparationTests(unittest.TestCase):
     def test_prepare_cli_returns_two_for_data_errors(self):
         """Break: scripts could misclassify invalid data as an infrastructure failure."""
         missing = self.temp_dir / "missing"
+        diff_path = self.temp_dir / "missing-data.diff"
+        diff_path.write_text("recorded dirty snapshot\n", encoding="utf-8")
         result = subprocess.run(
-            [sys.executable, "-m", "scripts.benchmark.prepare", "dataset", "--dataset", str(missing)],
+            [
+                sys.executable, "-m", "scripts.benchmark.prepare", "dataset",
+                "--dataset", str(missing), "--snapshot-id", "missing-data-snapshot",
+                "--diff-artifact", str(diff_path),
+            ],
             cwd=Path(__file__).resolve().parents[1],
             text=True,
             capture_output=True,
@@ -197,3 +206,98 @@ class PreparationTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("cannot read JSONL", result.stderr)
+
+    def test_dirty_dataset_cli_requires_and_records_snapshot_provenance(self):
+        """Break: a dirty tree could freeze a dataset with no reproducible snapshot."""
+        dataset = write_synthetic_dataset(self.temp_dir)
+        write_reviewer_signoff(
+            dataset,
+            reviewer="pt-PT-reviewer",
+            approved_at="2026-08-03T12:00:00Z",
+        )
+        manifest_path = dataset / "dataset-manifest.json"
+        without_provenance = subprocess.run(
+            [
+                sys.executable, "-m", "scripts.benchmark.prepare", "dataset",
+                "--dataset", str(dataset), "--write-manifest", str(manifest_path),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(without_provenance.returncode, 2)
+        self.assertIn("dirty suite tree", without_provenance.stderr)
+        self.assertFalse(manifest_path.exists())
+
+        diff_path = self.temp_dir / "dataset.diff"
+        diff_path.write_text("recorded dirty snapshot\n", encoding="utf-8")
+        with_provenance = subprocess.run(
+            [
+                sys.executable, "-m", "scripts.benchmark.prepare", "dataset",
+                "--dataset", str(dataset), "--write-manifest", str(manifest_path),
+                "--snapshot-id", "dataset-test-snapshot", "--diff-artifact", str(diff_path),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(with_provenance.returncode, 0, with_provenance.stderr)
+        self.assertEqual(
+            read_json(manifest_path)["suite"]["diff_sha256"], sha256_file(diff_path)
+        )
+
+    def test_schema_rejects_a_container_as_seeded_error_severity(self):
+        """Break: malformed JSON types could escape as a TypeError instead of data errors."""
+        cases, errors = synthetic_balanced_cases()
+        review_id = next(case["id"] for case in cases if case["task"] == "review")
+        errors[review_id][0]["severity"] = {"major": True}
+
+        with self.assertRaisesRegex(BenchmarkError, "severity"):
+            validate_cases(cases, errors)
+
+    def test_manifest_rejects_a_container_as_an_approved_case_id(self):
+        """Break: malformed sign-off JSON could escape data-error handling as TypeError."""
+        dataset = write_synthetic_dataset(self.temp_dir)
+        write_reviewer_signoff(
+            dataset,
+            reviewer="pt-PT-reviewer",
+            approved_at="2026-08-03T12:00:00Z",
+        )
+        signoff = read_json(dataset / "reference-signoff.json")
+        signoff["approved_case_ids"][0] = {"case": "not-an-id"}
+        atomic_write_json(dataset / "reference-signoff.json", signoff)
+
+        with self.assertRaisesRegex(BenchmarkError, "approved case ids"):
+            build_dataset_manifest(dataset, suite_commit="abc123", suite_dirty=False)
+
+    def test_prepare_cli_returns_two_without_traceback_for_malformed_types(self):
+        """Break: malformed user data could produce a traceback and exit code one."""
+        dataset = write_synthetic_dataset(self.temp_dir)
+        write_reviewer_signoff(
+            dataset,
+            reviewer="pt-PT-reviewer",
+            approved_at="2026-08-03T12:00:00Z",
+        )
+        seeded = read_json(dataset / "seeded-errors.json")
+        first_review_id = next(iter(seeded))
+        seeded[first_review_id][0]["severity"] = ["major"]
+        atomic_write_json(dataset / "seeded-errors.json", seeded)
+        diff_path = self.temp_dir / "malformed.diff"
+        diff_path.write_text("recorded dirty snapshot\n", encoding="utf-8")
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "scripts.benchmark.prepare", "dataset",
+                "--dataset", str(dataset), "--snapshot-id", "malformed-data-snapshot",
+                "--diff-artifact", str(diff_path),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("severity", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)

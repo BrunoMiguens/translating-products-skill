@@ -46,18 +46,35 @@ def _require_reviewer_signoff(signoff: object, cases: list[dict]) -> dict:
         raise BenchmarkError("PT-PT reviewer sign-off requires human_reference_authored")
     approved_case_ids = signoff.get("approved_case_ids")
     expected_case_ids = [case["id"] for case in cases]
-    if not isinstance(approved_case_ids, list) or set(approved_case_ids) != set(expected_case_ids):
+    if (
+        not isinstance(approved_case_ids, list)
+        or not all(isinstance(case_id, str) and case_id for case_id in approved_case_ids)
+    ):
+        raise BenchmarkError("PT-PT reviewer sign-off approved case ids must be non-empty strings")
+    if set(approved_case_ids) != set(expected_case_ids):
         raise BenchmarkError("PT-PT reviewer sign-off must approve every case id")
     if len(approved_case_ids) != len(set(approved_case_ids)):
         raise BenchmarkError("PT-PT reviewer sign-off contains duplicate case ids")
     return signoff
 
 
-def build_dataset_manifest(dataset_dir: Path, *, suite_commit: str, suite_dirty: bool) -> dict:
+def build_dataset_manifest(
+    dataset_dir: Path,
+    *,
+    suite_commit: str,
+    suite_dirty: bool,
+    snapshot_id: str | None = None,
+    diff_artifact: Path | None = None,
+) -> dict:
     if not isinstance(suite_commit, str) or not suite_commit:
         raise BenchmarkError("suite commit is required")
     if type(suite_dirty) is not bool:
         raise BenchmarkError("suite dirty state must be a boolean")
+    if suite_dirty:
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise BenchmarkError("dirty suite tree requires an explicit snapshot id")
+        if diff_artifact is None or not Path(diff_artifact).is_file():
+            raise BenchmarkError("dirty suite tree requires a diff artifact")
     dataset_dir = Path(dataset_dir)
     cases = read_jsonl(dataset_dir / "cases.jsonl")
     seeded = read_json(dataset_dir / "seeded-errors.json")
@@ -73,7 +90,7 @@ def build_dataset_manifest(dataset_dir: Path, *, suite_commit: str, suite_dirty:
         for path in files
     }
     hash_entries = [[name, digest] for name, digest in file_hashes.items()]
-    return {
+    manifest = {
         "schema_version": SCHEMA_VERSION,
         "dataset_version": DATASET_VERSION,
         "suite_commit": suite_commit,
@@ -82,6 +99,13 @@ def build_dataset_manifest(dataset_dir: Path, *, suite_commit: str, suite_dirty:
         "dataset_sha256": sha256_bytes(canonical_bytes(hash_entries)),
         "reviewer_signoff": signoff,
     }
+    if suite_dirty:
+        manifest["suite"] = {
+            "snapshot_id": snapshot_id,
+            "diff_artifact": str(diff_artifact),
+            "diff_sha256": sha256_file(Path(diff_artifact)),
+        }
+    return manifest
 
 
 def verify_dataset_manifest(dataset_dir: Path) -> None:
@@ -94,10 +118,15 @@ def verify_dataset_manifest(dataset_dir: Path) -> None:
     if manifest.get("dataset_version") != DATASET_VERSION:
         raise BenchmarkError("dataset manifest dataset version mismatch")
     try:
+        provenance = manifest.get("suite", {})
+        if not isinstance(provenance, dict):
+            raise BenchmarkError("dataset manifest suite provenance must be an object")
         expected = build_dataset_manifest(
             dataset_dir,
             suite_commit=manifest["suite_commit"],
             suite_dirty=manifest["suite_dirty"],
+            snapshot_id=provenance.get("snapshot_id"),
+            diff_artifact=provenance.get("diff_artifact"),
         )
     except KeyError as error:
         raise BenchmarkError(f"dataset manifest missing {error.args[0]}") from error
@@ -184,6 +213,8 @@ def _parser() -> argparse.ArgumentParser:
     dataset = commands.add_parser("dataset")
     dataset.add_argument("--dataset", required=True, type=Path)
     dataset.add_argument("--write-manifest", type=Path)
+    dataset.add_argument("--snapshot-id")
+    dataset.add_argument("--diff-artifact", type=Path)
     run = commands.add_parser("run")
     run.add_argument("--dataset", required=True, type=Path)
     run.add_argument("--config", required=True, type=Path)
@@ -204,6 +235,8 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.dataset,
                 suite_commit=suite_commit,
                 suite_dirty=suite_dirty,
+                snapshot_id=arguments.snapshot_id,
+                diff_artifact=arguments.diff_artifact,
             )
             target = arguments.write_manifest or arguments.dataset / _MANIFEST_NAME
             atomic_write_json(target, manifest)

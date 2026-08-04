@@ -60,7 +60,8 @@ def _validate_seeded_errors(seeded_errors: Mapping[str, object], review_ids: set
             seeded_ids.add(error_id)
             if not isinstance(error["dimension"], str) or not error["dimension"]:
                 raise BenchmarkError(f"seeded error {error_id} has an invalid dimension")
-            if error["severity"] not in _SEEDED_SEVERITIES:
+            severity = error["severity"]
+            if not isinstance(severity, str) or severity not in _SEEDED_SEVERITIES:
                 raise BenchmarkError(f"seeded error {error_id} has an invalid severity")
             if not isinstance(error["candidate_span"], str) or not error["candidate_span"]:
                 raise BenchmarkError(f"seeded error {error_id} has an invalid candidate span")
