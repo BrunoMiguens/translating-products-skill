@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import base64
+import io
 import json
 import os
 import stat
@@ -9,7 +11,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import scripts.benchmark.blind as blind
 from scripts.benchmark.blind import build_blind_bundle, scan_visible_bundle
 from scripts.benchmark.common import (
     BenchmarkError,
@@ -18,7 +22,8 @@ from scripts.benchmark.common import (
     canonical_bytes,
     sha256_bytes,
 )
-from scripts.benchmark.prepare import build_dataset_manifest
+from scripts.benchmark.prepare import build_dataset_manifest, build_run_manifest
+from scripts.benchmark.run import _snapshot_manifest
 from tests.benchmark_helpers import (
     synthetic_balanced_cases,
     write_reviewer_signoff,
@@ -39,9 +44,10 @@ def complete_synthetic_runs() -> list[dict]:
         for condition in conditions:
             for attempt in (1, 2, 3):
                 output = f"Output {case['id']} {condition} {attempt}"
+                digest = sha256_bytes(output.encode("utf-8"))
                 records.append({
                     "schema_version": 1,
-                    "run_id": f"run-{len(records):03d}",
+                    "run_id": f"{len(records):020x}",
                     "case_id": case["id"],
                     "condition": condition,
                     "attempt": attempt,
@@ -49,10 +55,27 @@ def complete_synthetic_runs() -> list[dict]:
                     "status": "completed",
                     "failure_class": "success",
                     "output": output,
-                    "output_sha256": sha256_bytes(output.encode("utf-8")),
-                    "raw_output_path": f"raw/{len(records):03d}.txt",
+                    "output_sha256": digest,
+                    "raw_output_path": f"raw/{digest}.txt",
+                    "process_started": True,
+                    "started_at": "2026-08-03T00:00:00Z",
+                    "completed_at": "2026-08-03T00:00:01Z",
+                    "exit_code": 0,
+                    "timed_out": False,
+                    "refused": False,
+                    "malformed_output": False,
+                    "tool_misuse": False,
+                    "reason": None,
+                    "stderr": "",
                     "telemetry": {"runner": "fixture-runner"},
                     "usage": {"output_tokens": 5},
+                    "expected_policy_sha256": None,
+                    "applied_policy_sha256": None,
+                    "policy_integrity": "not_required",
+                    "redacted": False,
+                    "project_fingerprint": f"project-{len(records):03d}",
+                    "argv": ["fake"],
+                    "shell": False,
                 })
     return records
 
@@ -149,6 +172,15 @@ class BlindingTests(unittest.TestCase):
             {"safe": "skills/translating-products/SKILL.md"},
             {"seeded_error_id": "review-case-e1"},
             {"safe": 0.60},
+            {"safe": "0.60"},
+            {"safe": "60%"},
+            {"runtime_ms": 10},
+            {"started_at": "yesterday"},
+            {"completed_at": "today"},
+            {"tool_calls": []},
+            {"generation_order": 1},
+            {"seed": 20260806},
+            {"host_version": "1.0"},
         ]
         for mutation in mutations:
             with self.subTest(mutation=mutation):
@@ -176,6 +208,7 @@ class BlindingTests(unittest.TestCase):
             if run["case_id"] == changed_cases[0]["id"]:
                 run["output"] = "condition suite runner model latency metric /private/literal"
                 run["output_sha256"] = sha256_bytes(run["output"].encode("utf-8"))
+                run["raw_output_path"] = f"raw/{run['output_sha256']}.txt"
 
         bundle, _ = build_blind_bundle(changed_runs, changed_cases, SEED)
 
@@ -215,6 +248,57 @@ class BlindingTests(unittest.TestCase):
             with self.assertRaises(BenchmarkError):
                 build_blind_bundle(broken, cases(), SEED)
 
+    def test_builder_recomputes_outcomes_and_rejects_malformed_record_types(self):
+        """Break: stored labels could disguise infrastructure or malformed evidence as output."""
+        runs = complete_synthetic_runs()
+        mutations = (
+            {"schema_version": True},
+            {"process_started": False},
+            {"status": "pending"},
+            {"run_id": "not-a-run-id"},
+            {"failure_class": "model_outcome"},
+            {"case_id": [runs[0]["case_id"]]},
+            {"attempt": True},
+            {"timed_out": "false"},
+            {"runner_mode": "cli"},
+        )
+        for mutation in mutations:
+            changed = [dict(run) for run in runs]
+            changed[0].update(mutation)
+            with self.subTest(mutation=mutation), self.assertRaises(BenchmarkError):
+                build_blind_bundle(changed, cases(), SEED)
+
+    def test_builder_accepts_a_consistently_classified_started_model_outcome(self):
+        """Break: model refusals/timeouts are durable outcomes and must not be retried or dropped."""
+        runs = complete_synthetic_runs()
+        runs[0].update({
+            "status": "model_outcome",
+            "failure_class": "model_outcome",
+            "timed_out": True,
+            "reason": "timeout",
+        })
+
+        bundle, _ = build_blind_bundle(runs, cases(), SEED)
+
+        self.assertEqual(len(bundle["items"]), 198)
+
+    def test_builder_rejects_decoded_or_case_changed_exact_hidden_values(self):
+        """Break: encoding a private reference must not turn it into harmless visible metadata."""
+        original_cases = cases()
+        private = original_cases[0]["reference"]
+        encoded_values = (
+            private.upper(),
+            private.replace("R", "\\u0052", 1),
+            private.replace("R", "&#82;", 1),
+            private.replace(" ", "%20"),
+            base64.b64encode(private.encode("utf-8")).decode("ascii"),
+        )
+        for encoded in encoded_values:
+            changed_cases = [dict(case) for case in original_cases]
+            changed_cases[0]["context"] = encoded
+            with self.subTest(encoded=encoded), self.assertRaises(BenchmarkError):
+                build_blind_bundle(complete_synthetic_runs(), changed_cases, SEED)
+
 
 class BlindingCliTests(unittest.TestCase):
     def setUp(self):
@@ -238,6 +322,31 @@ class BlindingCliTests(unittest.TestCase):
 
     def _write_evidence(self) -> None:
         self.evidence.mkdir()
+        snapshot = self.evidence / "input-snapshot"
+        skill = snapshot / "skills" / "translating-products"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("approved suite\n", encoding="utf-8")
+        translation = snapshot / ".translation"
+        translation.mkdir()
+        context_files = {
+            "project-brief.md": "Status: approved\n- Name: Fixture\n",
+            "locales.yaml": "source_locale: en-US\ntarget_locales: [pt-PT]\n",
+            "glossary.csv": "source_term,target_term,locale,context,status,notes\n",
+            "style-guide.md": "Status: approved\n- Voice: Clear\n",
+            "protected-terms.txt": "Codex\n",
+        }
+        for name, content in context_files.items():
+            (translation / name).write_text(content, encoding="utf-8")
+        atomic_write_json(translation / "setup-approval.json", {
+            "status": "approved",
+            "approved_by": "fixture-owner",
+            "approved_at": "2026-08-03T10:00:00Z",
+            "context_sha256": {
+                name: sha256_bytes((translation / name).read_bytes())
+                for name in context_files
+            },
+            "approved_empty": ["glossary.csv"],
+        })
         run_ids: list[str] = []
         for index, run in enumerate(complete_synthetic_runs()):
             output = run.pop("output")
@@ -270,35 +379,52 @@ class BlindingCliTests(unittest.TestCase):
             }
             append_jsonl_fsync(self.evidence / "runs.jsonl", record)
             run_ids.append(record["run_id"])
-        atomic_write_json(self.evidence / "run-manifest.json", {
-            "schema_version": 1,
+        manifest = build_run_manifest(
+            self.dataset,
+            {"fixture": "runner-config"},
+            suite_commit="abc123",
+            evidence=self.evidence.resolve(),
+            schedule_seed=20260803,
+            bootstrap_seed=20260804,
+        )
+        manifest.update({
+            "execution_config_sha256": "e" * 64,
             "schedule": {
                 "run_ids": run_ids,
                 "sha256": sha256_bytes(canonical_bytes(run_ids)),
             },
+            "input_snapshot": _snapshot_manifest(snapshot),
         })
+        atomic_write_json(self.evidence / "run-manifest.json", manifest)
 
-    def run_cli(self, review: Path, key: Path) -> subprocess.CompletedProcess[str]:
+    def cli_args(self, review: Path, key: Path) -> list[str]:
+        return [
+            "--dataset", str(self.dataset),
+            "--evidence", str(self.evidence),
+            "--seed", str(SEED),
+            "--review-bundle", str(review),
+            "--condition-key", str(key),
+        ]
+
+    def run_cli(
+        self,
+        review: Path,
+        key: Path,
+        *,
+        umask: int | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 sys.executable,
                 "-m",
                 "scripts.benchmark.blind",
-                "--dataset",
-                str(self.dataset),
-                "--evidence",
-                str(self.evidence),
-                "--seed",
-                str(SEED),
-                "--review-bundle",
-                str(review),
-                "--condition-key",
-                str(key),
+                *self.cli_args(review, key),
             ],
             cwd=Path(__file__).parents[1],
             text=True,
             capture_output=True,
             check=False,
+            preexec_fn=(None if umask is None else lambda: os.umask(umask)),
         )
 
     def test_cli_atomically_creates_rescanned_outputs_with_separate_permissions(self):
@@ -322,6 +448,155 @@ class BlindingCliTests(unittest.TestCase):
         self.assertFalse(any("condition" in name.casefold() for name in nested_keys(
             json.loads(review.read_text(encoding="utf-8"))
         )))
+
+        condition_key = json.loads(key.read_text(encoding="utf-8"))
+        run_manifest = json.loads(
+            (self.evidence / "run-manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            condition_key["review_bundle"]["sha256"],
+            sha256_bytes(review.read_bytes()),
+        )
+        self.assertEqual(
+            condition_key["provenance"]["prepared"]["run_manifest"],
+            run_manifest,
+        )
+        self.assertEqual(
+            condition_key["provenance"]["prepared"]["evidence"],
+            str(self.evidence.resolve()),
+        )
+        self.assertEqual(set(condition_key["items"]), {
+            item["id"] for item in json.loads(review.read_text(encoding="utf-8"))["items"]
+        })
+
+    def test_cli_rejects_incomplete_or_mismatched_prepared_provenance(self):
+        """Break: evidence from another frozen experiment could be paired with this dataset."""
+        manifest_path = self.evidence / "run-manifest.json"
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+        mutations = {
+            "dataset hash": lambda value: value["dataset"].update(
+                dataset_sha256="0" * 64
+            ),
+            "dataset manifest hash": lambda value: value["dataset"].update(
+                manifest_sha256="1" * 64
+            ),
+            "suite commit": lambda value: value["suite"].update(commit="wrong-commit"),
+            "runner config": lambda value: value.update(runner_config_sha256="wrong"),
+            "execution config": lambda value: value.update(execution_config_sha256="wrong"),
+            "schedule seed": lambda value: value.update(schedule_seed=None),
+            "bootstrap seed": lambda value: value.update(bootstrap_seed=None),
+            "evidence path": lambda value: value.update(evidence="/wrong/evidence/path"),
+            "snapshot": lambda value: value.pop("input_snapshot"),
+            "unknown field": lambda value: value.update(unexpected="private"),
+        }
+        for index, (name, mutate) in enumerate(mutations.items()):
+            changed = copy.deepcopy(original)
+            mutate(changed)
+            atomic_write_json(manifest_path, changed)
+            public_dir = self.root / f"public-provenance-{index}"
+            private_dir = self.root / f"private-provenance-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+            review = public_dir / "bundle.json"
+            key = private_dir / "key.json"
+            with self.subTest(name=name):
+                completed = self.run_cli(review, key)
+                self.assertEqual(completed.returncode, 2, completed.stdout)
+                self.assertFalse(review.exists())
+                self.assertFalse(key.exists())
+        atomic_write_json(manifest_path, original)
+
+    def test_cli_rejects_non_content_addressed_raw_path(self):
+        """Break: a valid hash must not authorize arbitrary evidence paths."""
+        records = (self.evidence / "runs.jsonl").read_text(encoding="utf-8").splitlines()
+        first = json.loads(records[0])
+        first["raw_output_path"] = "raw/renamed.txt"
+        source = self.evidence / f"raw/{first['output_sha256']}.txt"
+        (self.evidence / "raw/renamed.txt").write_bytes(source.read_bytes())
+        records[0] = canonical_bytes(first).decode("utf-8").rstrip("\n")
+        (self.evidence / "runs.jsonl").write_text("\n".join(records) + "\n", encoding="utf-8")
+        public_dir = self.root / "public-path"
+        private_dir = self.root / "private-path"
+        public_dir.mkdir()
+        private_dir.mkdir()
+
+        completed = self.run_cli(public_dir / "bundle.json", private_dir / "key.json")
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertFalse((public_dir / "bundle.json").exists())
+        self.assertFalse((private_dir / "key.json").exists())
+
+    def test_cli_reloads_and_rejects_a_replaced_private_key(self):
+        """Break: success must not hash an attacker replacement without validating the key."""
+        public_dir = self.root / "public-tamper"
+        private_dir = self.root / "private-tamper"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        review = public_dir / "bundle.json"
+        key = private_dir / "key.json"
+        original_publish = blind._atomic_create_pair
+
+        def publish_then_tamper(*args, **kwargs):
+            original_publish(*args, **kwargs)
+            key.write_text("{}\n", encoding="utf-8")
+            key.chmod(0o644)
+
+        stdout = mock.Mock(buffer=io.BytesIO())
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(blind, "_atomic_create_pair", publish_then_tamper),
+            mock.patch.object(blind.sys, "stdout", stdout),
+            mock.patch.object(blind.sys, "stderr", stderr),
+        ):
+            result = blind.main(self.cli_args(review, key))
+
+        self.assertEqual(result, 2)
+        self.assertFalse(review.exists())
+        self.assertFalse(key.exists())
+
+    def test_cli_parent_swap_cannot_redirect_private_key_into_dataset(self):
+        """Break: a validated directory pathname must not redirect descriptor-relative writes."""
+        public_dir = self.root / "public-race"
+        private_dir = self.root / "private-race"
+        displaced = self.root / "private-race-displaced"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        review = public_dir / "bundle.json"
+        key = private_dir / "key.json"
+        original_publish = blind._atomic_create_pair
+
+        def race_parent(*args, **kwargs):
+            private_dir.rename(displaced)
+            os.symlink(self.dataset, private_dir)
+            return original_publish(*args, **kwargs)
+
+        stdout = mock.Mock(buffer=io.BytesIO())
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(blind, "_atomic_create_pair", race_parent),
+            mock.patch.object(blind.sys, "stdout", stdout),
+            mock.patch.object(blind.sys, "stderr", stderr),
+        ):
+            result = blind.main(self.cli_args(review, key))
+
+        self.assertEqual(result, 2)
+        self.assertFalse((self.dataset / "key.json").exists())
+        self.assertFalse(review.exists())
+
+    def test_cli_applies_exact_modes_under_restrictive_umask(self):
+        """Break: a restrictive process umask must not erase public/private mode separation."""
+        public_dir = self.root / "public-umask"
+        private_dir = self.root / "private-umask"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        review = public_dir / "bundle.json"
+        key = private_dir / "key.json"
+
+        completed = self.run_cli(review, key, umask=0o077)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(stat.S_IMODE(review.stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE(key.stat().st_mode), 0o600)
 
     def test_cli_refuses_existing_same_directory_and_symlink_aliased_targets(self):
         """Break: unsafe target resolution could co-locate or overwrite the private condition key."""
