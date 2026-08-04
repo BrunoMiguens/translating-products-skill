@@ -91,6 +91,11 @@ def _validated_compact_context(compact_context: object) -> dict:
     return dict(compact_context)
 
 
+def _data_block(name: str, value: str) -> list[str]:
+    encoded = canonical_display(value).replace(f"</{name}>", f"<\\/{name}>")
+    return [f'<{name} encoding="json-string">', encoded, f"</{name}>"]
+
+
 def render_prompt(
     case: dict,
     condition: str,
@@ -122,16 +127,13 @@ def render_prompt(
             "<task-context>",
             canonical_display(visible_case(case)),
             "</task-context>",
-            "<source-data>",
-            source,
-            "</source-data>",
         ]
     )
+    assert_no_hidden_fields("\n".join(sections), case)
+    sections.extend(_data_block("source-data", source))
     if case.get("task") == "review":
         candidate = case.get("candidate")
         if not isinstance(candidate, str):
             raise BenchmarkError("review case candidate must be text")
-        sections.extend(["<candidate-data>", candidate, "</candidate-data>"])
-    prompt = "\n".join(sections) + "\n"
-    assert_no_hidden_fields(prompt, case)
-    return prompt
+        sections.extend(_data_block("candidate-data", candidate))
+    return "\n".join(sections) + "\n"
