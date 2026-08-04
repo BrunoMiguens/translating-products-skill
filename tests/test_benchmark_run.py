@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import stat
 import sys
@@ -63,8 +64,27 @@ class RunnerTests(unittest.TestCase):
         (self.suite / "skills" / "translating-products" / "SKILL.md").write_text(
             "approved suite\n", encoding="utf-8"
         )
-        (self.suite / ".translation").mkdir()
-        (self.suite / ".translation" / "glossary.json").write_text("{}\n", encoding="utf-8")
+        translation = self.suite / ".translation"
+        translation.mkdir()
+        context = {
+            "project-brief.md": "Status: approved\n- Name: Fixture\n",
+            "locales.yaml": "source_locale: en-US\ntarget_locales: [pt-PT]\n",
+            "glossary.csv": "source_term,target_term,locale,context,status,notes\n",
+            "style-guide.md": "Status: approved\n- Voice: Clear\n",
+            "protected-terms.txt": "Codex\n",
+        }
+        for name, content in context.items():
+            (translation / name).write_text(content, encoding="utf-8")
+        atomic_write_json(translation / "setup-approval.json", {
+            "status": "approved",
+            "approved_by": "fixture-owner",
+            "approved_at": "2026-08-03T10:00:00Z",
+            "context_sha256": {
+                name: hashlib.sha256((translation / name).read_bytes()).hexdigest()
+                for name in context
+            },
+            "approved_empty": ["glossary.csv"],
+        })
         self.scratch = self.temp_dir / "scratch"
         self.evidence = self.temp_dir / "evidence"
 
@@ -72,13 +92,96 @@ class RunnerTests(unittest.TestCase):
         self.temp.cleanup()
 
     def config(self, **overrides: object) -> dict:
-        return fake_config(
-            suite_path=str(self.suite), scratch_root=str(self.scratch), **overrides
+        return fake_config(**{
+            "suite_path": str(self.suite),
+            "scratch_root": str(self.scratch),
+            **overrides,
+        })
+
+    def balanced_cases(self) -> list[dict]:
+        cases, _ = synthetic_balanced_cases()
+        return [
+            {
+                **case,
+                "automatic_checks": [f"private-check-{case['id']}"],
+                "reference_notes": f"private-notes-{case['id']}",
+            }
+            for case in cases
+        ]
+
+    def write_adapter(self) -> Path:
+        adapter = self.temp_dir / "sandbox_adapter.py"
+        adapter.write_text(
+            "import hashlib, json, os, subprocess, sys\n"
+            "from pathlib import Path\n"
+            "op = sys.argv[1]\n"
+            "def arg(name): return sys.argv[sys.argv.index(name) + 1]\n"
+            "project = Path(arg('--project')).resolve()\n"
+            "home = Path(arg('--home')).resolve()\n"
+            "policy_path = Path(arg('--policy'))\n"
+            "policy_bytes = policy_path.read_bytes()\n"
+            "policy_hash = hashlib.sha256(policy_bytes).hexdigest()\n"
+            "if op == 'probe':\n"
+            "    def denied(name):\n"
+            "        target = Path(arg(name)).resolve()\n"
+            "        try:\n"
+            "            target.relative_to(project)\n"
+            "        except ValueError:\n"
+            "            try: raise PermissionError(target)\n"
+            "            except PermissionError: return True\n"
+            "        target.read_bytes(); return False\n"
+            "    result = {\n"
+            "      'schema_version': 1, 'outside_read_denied': denied('--outside-sentinel'),\n"
+            "      'suite_read_denied': denied('--suite-source'),\n"
+            "      'context_read_denied': denied('--context-source'),\n"
+            "      'home': str(home), 'home_isolated': Path(os.environ.get('HOME', '')).resolve() == home,\n"
+            "      'policy_sha256': policy_hash, 'network_policy_enforced': True,\n"
+            "      'tool_policy_enforced': True, 'research_policy_enforced': True}\n"
+            "    print(json.dumps(result, sort_keys=True)); raise SystemExit(0)\n"
+            "split = sys.argv.index('--')\n"
+            "agent = sys.argv[split + 1:]\n"
+            "outcome = next((x.split('=', 1)[1] for x in agent if x.startswith('--adapter-outcome=')), '')\n"
+            "agent = [x for x in agent if not x.startswith('--adapter-outcome=')]\n"
+            "started = '2026-08-03T00:00:00Z'\n"
+            "completed = subprocess.run(agent, input=sys.stdin.read(), text=True, capture_output=True, cwd=project, env={**os.environ, 'HOME': str(home)})\n"
+            "if outcome == 'invalid-envelope': print('{}'); raise SystemExit(0)\n"
+            "envelope = {'schema_version': 1, 'process_started': True,\n"
+            " 'exit_code': completed.returncode, 'started_at': started, 'completed_at': started,\n"
+            " 'stdout': completed.stdout, 'stderr': completed.stderr, 'timed_out': False,\n"
+            " 'refused': outcome == 'refused', 'malformed_output': outcome == 'malformed',\n"
+            " 'tool_misuse': outcome == 'tool-misuse', 'reason': outcome or None,\n"
+            " 'usage': {'input_tokens': 1, 'output_tokens': 1},\n"
+            " 'telemetry': {'policy_sha256': policy_hash}}\n"
+            "print(json.dumps(envelope, sort_keys=True))\n",
+            encoding="utf-8",
         )
+        return adapter
+
+    def cli_config(self, **overrides: object) -> dict:
+        adapter = self.write_adapter()
+        agent = self.temp_dir / "agent.py"
+        agent.write_text(
+            "import json, os, sys\n"
+            "print(json.dumps({'stdin': sys.stdin.read(), 'cwd': os.getcwd(), 'home': os.environ['HOME']}))\n",
+            encoding="utf-8",
+        )
+        values = {
+            "mode": "cli",
+            "command": [sys.executable, str(agent)],
+            "sandbox_adapter": [sys.executable, str(adapter)],
+            "settings": {
+                "temperature": 0,
+                "tools": ["read-project"],
+                "network": "disabled",
+                "research": "case-declared-only",
+            },
+            **overrides,
+        }
+        return self.config(**values)
 
     def test_schedule_has_405_unique_randomized_runs(self):
         """Break: wrong attempt/diagnostic expansion would invalidate the balanced experiment."""
-        cases, _ = synthetic_balanced_cases()
+        cases = self.balanced_cases()
 
         schedule = build_schedule(cases, self.config(), 20260803)
 
@@ -111,7 +214,7 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("skills", normal)
         self.assertNotIn(".translation", normal)
         self.assertIn("skills/translating-products/SKILL.md", suite)
-        self.assertIn(".translation/glossary.json", suite)
+        self.assertIn(".translation/setup-approval.json", suite)
         self.assertNotIn("skills", context_only)
         self.assertNotIn(".translation", context_only)
         self.assertTrue(all("task.txt" in snapshot for snapshot in runner.snapshots))
@@ -121,24 +224,92 @@ class RunnerTests(unittest.TestCase):
     def test_cli_uses_argv_stdin_safe_cwd_and_no_shell_interpolation(self):
         """Break: treating adversarial prompts as shell source could execute arbitrary commands."""
         sentinel = self.temp_dir / "benchmark-owned"
-        agent = self.temp_dir / "agent.py"
-        agent.write_text(
-            "import json, os, sys\n"
-            "print(json.dumps({'stdin': sys.stdin.read(), 'cwd': os.getcwd(), 'argv': sys.argv}))\n",
-            encoding="utf-8",
-        )
-        runner = CliRunner([sys.executable, str(agent), "--project", "{project_dir}"])
+        config = self.cli_config()
+        runner = CliRunner(config["command"], sandbox_adapter=config["sandbox_adapter"])
+        policy = self.temp_dir / "policy.json"
+        atomic_write_json(policy, {"tools": [], "network": "disabled", "research": "disabled"})
+        home = self.temp_dir / "home"
+        home.mkdir()
         prompt = f"$(touch {sentinel})\n`uname`"
 
-        result = runner.invoke(prompt=prompt, project_dir=self.temp_dir, timeout_seconds=10)
+        result = runner.invoke(
+            prompt=prompt, project_dir=self.temp_dir, home_dir=home,
+            policy_path=policy, timeout_seconds=10,
+        )
 
         payload = json.loads(result.stdout)
         self.assertFalse(sentinel.exists())
         self.assertEqual(payload["stdin"], prompt)
         self.assertEqual(Path(payload["cwd"]).resolve(), self.temp_dir.resolve())
-        self.assertEqual(payload["argv"][-1], str(self.temp_dir))
+        self.assertEqual(Path(payload["home"]).resolve(), home.resolve())
         self.assertEqual(result.argv[0], sys.executable)
         self.assertFalse(result.shell)
+
+    def test_cli_requires_adapter_and_probe_proves_isolation_before_generation(self):
+        """Break: a CLI agent could run with host filesystem/HOME access or unenforced policy."""
+        with self.assertRaisesRegex(BenchmarkError, "manual mode"):
+            validate_runner_config(self.config(mode="cli", command=["agent"]))
+        cases = self.balanced_cases()
+        schedule = build_schedule(cases, self.cli_config(), 20260803)
+        first_case_id = cases[0]["id"]
+        primary_specs = [
+            spec for spec in schedule
+            if spec.case_id == first_case_id
+            and spec.condition in ("normal", "suite")
+            and spec.attempt == 1
+        ]
+
+        results = execute_schedule(
+            primary_specs,
+            CliRunner(
+                self.cli_config()["command"],
+                sandbox_adapter=self.cli_config()["sandbox_adapter"],
+            ),
+            self.evidence,
+            cases=cases,
+            config=self.cli_config(),
+            templates=templates(),
+        )
+
+        self.assertEqual(len(results), 2)
+        probes = list((self.evidence / "probes").glob("*.json"))
+        self.assertEqual(len(probes), 1)
+        probe = json.loads(probes[0].read_text(encoding="utf-8"))
+        self.assertTrue(probe["outside_read_denied"])
+        self.assertTrue(probe["suite_read_denied"])
+        self.assertTrue(probe["context_read_denied"])
+        self.assertTrue(probe["home_isolated"])
+        manifest = json.loads((self.evidence / "run-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["sandbox_probe"]["sha256"], hashlib.sha256(probes[0].read_bytes()).hexdigest())
+        mismatched_runner = CliRunner(
+            [sys.executable, "different-agent.py"],
+            sandbox_adapter=self.cli_config()["sandbox_adapter"],
+        )
+        with self.assertRaisesRegex(BenchmarkError, "configured"):
+            execute_schedule(
+                primary_specs, mismatched_runner, self.evidence / "mismatch",
+                cases=cases, config=self.cli_config(), templates=templates(),
+            )
+
+    def test_cli_refuses_scratch_inside_repository_and_failed_probe(self):
+        """Break: an in-repository scratch root or unproved adapter could expose host files."""
+        config = self.cli_config(scratch_root=str(Path(__file__).resolve().parents[1] / ".tmp"))
+        cases = self.balanced_cases()
+        schedule = build_schedule(cases, config, 20260803)
+        with self.assertRaisesRegex(BenchmarkError, "outside"):
+            execute_schedule(
+                schedule[:1], CliRunner(config["command"], sandbox_adapter=config["sandbox_adapter"]),
+                self.evidence, cases=cases, config=config, templates=templates(),
+            )
+
+        bad_adapter = self.temp_dir / "bad_adapter.py"
+        bad_adapter.write_text("print('{}')\n", encoding="utf-8")
+        bad = self.cli_config(sandbox_adapter=[sys.executable, str(bad_adapter)])
+        with self.assertRaisesRegex(BenchmarkError, "probe"):
+            execute_schedule(
+                schedule[:1], CliRunner(bad["command"], sandbox_adapter=bad["sandbox_adapter"]),
+                self.evidence / "bad", cases=cases, config=bad, templates=templates(),
+            )
 
     def test_each_attempt_is_fresh_and_raw_output_is_content_addressed_once(self):
         """Break: project reuse or per-run raw copies could contaminate evidence and waste storage."""
@@ -179,7 +350,14 @@ class RunnerTests(unittest.TestCase):
         """Break: configured literal secrets could be stored in raw output or run telemetry."""
         secret = "token-super-secret"
         case = one_translation_case()
-        runner = FakeRunner(secret, stderr=f"stderr {secret}", telemetry={"trace": secret})
+        class SecretRunner(FakeRunner):
+            def invoke(inner_self, *, prompt: str, project_dir: Path, timeout_seconds: int):
+                now = "2026-08-03T00:00:00Z"
+                return Invocation(
+                    (secret,), False, True, now, now, 1, secret, f"stderr {secret}",
+                    reason=secret, telemetry={secret: {"trace": secret}},
+                )
+        runner = SecretRunner()
         os.environ["BENCHMARK_TEST_SECRET"] = secret
         self.addCleanup(os.environ.pop, "BENCHMARK_TEST_SECRET", None)
 
@@ -196,11 +374,17 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn(secret.encode(), persisted)
         self.assertIn(b"[REDACTED]", persisted)
         self.assertTrue(results[0].redacted)
+        records = (self.evidence / "runs.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn(secret, records)
 
     def test_config_rejects_shell_commands_and_primary_policy_differences(self):
         """Break: shell strings or condition-specific policies would weaken safety/comparability."""
         with self.assertRaisesRegex(BenchmarkError, "array"):
             validate_runner_config(self.config(mode="cli", command="agent --run"))
+        with self.assertRaisesRegex(BenchmarkError, "array"):
+            validate_runner_config(
+                self.config(mode="cli", command=["agent"], sandbox_adapter="sandbox --")
+            )
         with self.assertRaisesRegex(BenchmarkError, "primary condition"):
             validate_runner_config(
                 self.config(
@@ -225,6 +409,69 @@ class RunnerTests(unittest.TestCase):
                     }
                 )
             )
+
+    def test_schedule_rejects_malformed_cohorts_before_randomization(self):
+        """Break: malformed counts/types could produce a superficially plausible schedule."""
+        cases = self.balanced_cases()
+        invalid_cohorts = [
+            cases[:-1],
+            [*cases[:-1], {**cases[-1], "id": "replacement", "task": "translation"}],
+            [{**case, "diagnostic": 1} if index == 0 else case for index, case in enumerate(cases)],
+            [{**case, "surface": "web"} if index == 0 else case for index, case in enumerate(cases)],
+        ]
+        for cohort in invalid_cohorts:
+            with self.subTest(cohort=len(cohort)), self.assertRaises(BenchmarkError):
+                build_schedule(cohort, self.config(), 20260803)
+
+    def test_cli_envelope_flags_drive_real_model_outcome_classification(self):
+        """Break: exit-zero refusals/malformed/tool misuse could be recorded as success."""
+        cases = self.balanced_cases()
+        for index, (flag, field) in enumerate((
+            ("refused", "refused"),
+            ("malformed", "malformed_output"),
+            ("tool-misuse", "tool_misuse"),
+            ("invalid-envelope", "malformed_output"),
+        )):
+            config = self.cli_config()
+            config["command"] = [*config["command"], f"--adapter-outcome={flag}"]
+            schedule = build_schedule(cases, config, 20260803)
+            result = execute_schedule(
+                schedule[:1], CliRunner(config["command"], sandbox_adapter=config["sandbox_adapter"]),
+                self.evidence / f"outcome-{index}", cases=cases, config=config, templates=templates(),
+            )[0]
+            self.assertTrue(getattr(result, field))
+            self.assertEqual(result.failure_class, "model_outcome")
+
+    def test_suite_attempts_use_one_frozen_signed_snapshot(self):
+        """Break: source mutation between attempts could change the treatment being measured."""
+        cases = self.balanced_cases()
+        suite_specs = [
+            spec for spec in build_schedule(cases, self.config(), 20260803)
+            if spec.condition == "suite"
+        ][:2]
+        (self.suite / ".translation/unapproved-draft.md").write_text(
+            "must not enter treatment\n", encoding="utf-8"
+        )
+
+        class MutatingRunner(InspectingRunner):
+            def invoke(inner_self, *, prompt: str, project_dir: Path, timeout_seconds: int):
+                content = (project_dir / "skills/translating-products/SKILL.md").read_text(encoding="utf-8")
+                if (project_dir / ".translation/unapproved-draft.md").exists():
+                    raise AssertionError("unsigned context entered the suite project")
+                inner_self.snapshots.append({content})
+                if len(inner_self.snapshots) == 1:
+                    (self.suite / "skills/translating-products/SKILL.md").write_text("mutated\n", encoding="utf-8")
+                return FakeRunner.invoke(inner_self, prompt=prompt, project_dir=project_dir, timeout_seconds=timeout_seconds)
+
+        runner = MutatingRunner()
+        execute_schedule(
+            suite_specs, runner, self.evidence,
+            cases=cases, config=self.config(), templates=templates(),
+        )
+
+        self.assertEqual(runner.snapshots, [{"approved suite\n"}, {"approved suite\n"}])
+        manifest = json.loads((self.evidence / "run-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(manifest["input_snapshot"]["trees"]), {"skills", ".translation"})
 
     def test_prepared_manifest_hash_is_preserved_and_resume_checks_schedule(self):
         """Break: byte-hashed prepared configs could be rejected or changed schedules silently resumed."""

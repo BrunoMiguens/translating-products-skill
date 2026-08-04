@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -26,13 +27,46 @@ from .common import (
 )
 from .prepare import verify_dataset_manifest
 from .prompts import render_prompt
-from .schema import PRIMARY_ATTEMPTS, SCHEMA_VERSION
+from .schema import (
+    DIFFICULTIES,
+    EXPECTED_BY_DIFFICULTY,
+    EXPECTED_BY_SURFACE,
+    EXPECTED_BY_TASK,
+    EXPECTED_DIAGNOSTIC,
+    EXPECTED_TOTAL,
+    PRIMARY_ATTEMPTS,
+    SCHEMA_VERSION,
+    SURFACES,
+    TASKS,
+)
 
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _MODES = {"fake", "cli", "manual"}
 _PRIMARY_CONDITIONS = ("normal", "suite")
 _SAFE_ENVIRONMENT_KEYS = ("HOME", "LANG", "LC_ALL", "PATH", "TMPDIR")
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+_CONTEXT_FILES = (
+    "project-brief.md",
+    "locales.yaml",
+    "glossary.csv",
+    "style-guide.md",
+    "protected-terms.txt",
+)
+_APPROVAL_FIELDS = {
+    "status", "approved_by", "approved_at", "context_sha256", "approved_empty",
+}
+_PROBE_FIELDS = {
+    "schema_version", "outside_read_denied", "suite_read_denied",
+    "context_read_denied", "home", "home_isolated", "policy_sha256",
+    "network_policy_enforced", "tool_policy_enforced", "research_policy_enforced",
+}
+_ENVELOPE_FIELDS = {
+    "schema_version", "process_started", "exit_code", "started_at", "completed_at",
+    "stdout", "stderr", "timed_out", "refused", "malformed_output", "tool_misuse",
+    "reason", "usage", "telemetry",
+}
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -69,6 +103,7 @@ class Invocation:
     tool_misuse: bool = False
     reason: str | None = None
     telemetry: object = None
+    usage: object = None
 
     @classmethod
     def from_completed_process(
@@ -106,6 +141,7 @@ class RunResult:
     raw_output_path: str
     stderr: str
     telemetry: object
+    usage: object
     redacted: bool
     project_fingerprint: str
     argv: tuple[str, ...]
@@ -156,9 +192,10 @@ class LiteralSecretRedactor:
             changed = False
             result = {}
             for key, item in value.items():
+                redacted_key, key_changed = self.value(key)
                 redacted, item_changed = self.value(item)
-                result[key] = redacted
-                changed = changed or item_changed
+                result[redacted_key] = redacted
+                changed = changed or key_changed or item_changed
             return result, changed
         return value, False
 
@@ -191,19 +228,28 @@ class FakeRunner:
 
 
 class CliRunner:
-    """Invoke an agent with a trusted argv while sending untrusted prompts on stdin."""
+    """Invoke an agent only through one trusted host-provided sandbox adapter."""
 
     def __init__(
         self,
         command: Sequence[str],
         *,
+        sandbox_adapter: Sequence[str],
         environment: Mapping[str, str] | None = None,
     ):
         if isinstance(command, (str, bytes)) or not isinstance(command, Sequence):
             raise BenchmarkError("runner command must be an array of strings")
         if not command or not all(isinstance(value, str) and value for value in command):
             raise BenchmarkError("CLI runner command must contain non-empty strings")
+        if (
+            isinstance(sandbox_adapter, (str, bytes))
+            or not isinstance(sandbox_adapter, Sequence)
+            or not sandbox_adapter
+            or not all(isinstance(value, str) and value for value in sandbox_adapter)
+        ):
+            raise BenchmarkError("sandbox adapter must be a non-empty argv array")
         self.command = tuple(command)
+        self.sandbox_adapter = tuple(sandbox_adapter)
         if environment is None:
             environment = {
                 key: os.environ[key]
@@ -212,33 +258,101 @@ class CliRunner:
             }
         self.safe_environment = dict(environment)
 
-    def invoke(self, *, prompt: str, project_dir: Path, timeout_seconds: int) -> Invocation:
-        argv = tuple(_replace_trusted_token(arg, project_dir) for arg in self.command)
-        started_at = utc_now()
+    def probe(
+        self,
+        *,
+        project_dir: Path,
+        home_dir: Path,
+        policy_path: Path,
+        outside_sentinel: Path,
+        suite_source: Path,
+        context_source: Path,
+        timeout_seconds: int,
+    ) -> tuple[dict, tuple[str, ...]]:
+        argv = self.sandbox_adapter + (
+            "probe", "--project", str(project_dir), "--home", str(home_dir),
+            "--policy", str(policy_path), "--outside-sentinel", str(outside_sentinel),
+            "--suite-source", str(suite_source), "--context-source", str(context_source),
+        )
+        completed = self._run_adapter(
+            argv, input_text="", project_dir=project_dir, home_dir=home_dir,
+            timeout_seconds=timeout_seconds,
+        )
+        if isinstance(completed, Invocation):
+            raise BenchmarkError(f"sandbox probe failed before proof: {completed.reason}")
+        if completed.returncode != 0:
+            raise BenchmarkError(f"sandbox probe exited {completed.returncode}: {completed.stderr}")
         try:
-            completed = subprocess.run(
-                argv,
-                input=prompt,
-                text=True,
-                capture_output=True,
-                cwd=project_dir,
-                timeout=timeout_seconds,
-                check=False,
-                shell=False,
-                env=self.safe_environment,
+            value = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise BenchmarkError(f"sandbox probe returned malformed JSON: {error}") from error
+        _validate_probe(value, home_dir=home_dir, policy_path=policy_path)
+        return value, argv
+
+    def invoke(
+        self,
+        *,
+        prompt: str,
+        project_dir: Path,
+        home_dir: Path,
+        policy_path: Path,
+        timeout_seconds: int,
+    ) -> Invocation:
+        agent = tuple(_replace_trusted_token(arg, project_dir) for arg in self.command)
+        argv = self.sandbox_adapter + (
+            "run", "--project", str(project_dir), "--home", str(home_dir),
+            "--policy", str(policy_path), "--",
+        ) + agent
+        started_at = utc_now()
+        completed = self._run_adapter(
+            argv, input_text=prompt, project_dir=project_dir, home_dir=home_dir,
+            timeout_seconds=timeout_seconds,
+        )
+        if isinstance(completed, Invocation):
+            return completed
+        if completed.returncode != 0:
+            return Invocation(
+                argv, False, True, started_at, utc_now(), completed.returncode,
+                "", completed.stderr, malformed_output=True,
+                reason="sandbox_adapter_failed", telemetry={"adapter_stdout": completed.stdout},
+            )
+        try:
+            envelope = json.loads(completed.stdout)
+            return _invocation_from_envelope(envelope, argv)
+        except (json.JSONDecodeError, BenchmarkError) as error:
+            return Invocation(
+                argv, False, True, started_at, utc_now(), 0, "", completed.stderr,
+                malformed_output=True, reason=f"invalid_adapter_envelope: {error}",
+                telemetry={"adapter_stdout": completed.stdout},
+            )
+
+    def _run_adapter(
+        self,
+        argv: tuple[str, ...],
+        *,
+        input_text: str,
+        project_dir: Path,
+        home_dir: Path,
+        timeout_seconds: int,
+    ) -> subprocess.CompletedProcess[str] | Invocation:
+        environment = dict(self.safe_environment)
+        environment["HOME"] = str(home_dir)
+        try:
+            return subprocess.run(
+                argv, input=input_text, text=True, capture_output=True, cwd=project_dir,
+                timeout=timeout_seconds, check=False, shell=False, env=environment,
             )
         except subprocess.TimeoutExpired as error:
             return Invocation(
-                argv, False, True, started_at, utc_now(), None,
+                argv, False, True, utc_now(), utc_now(), None,
                 _timeout_text(error.stdout), _timeout_text(error.stderr),
-                timed_out=True, reason="timeout",
+                timed_out=True, reason="sandbox_adapter_timeout",
             )
         except OSError as error:
             return Invocation(
-                argv, False, False, started_at, utc_now(), None, "", "",
+                argv, False, False, utc_now(), utc_now(), None, "", "",
                 reason=error.__class__.__name__ + (f": {error}" if str(error) else ""),
             )
-        return Invocation.from_completed_process(argv, started_at, utc_now(), completed)
 
 
 def _timeout_text(value: str | bytes | None) -> str:
@@ -249,6 +363,65 @@ def _timeout_text(value: str | bytes | None) -> str:
 
 def _replace_trusted_token(argument: str, project_dir: Path) -> str:
     return argument.replace("{project_dir}", str(project_dir))
+
+
+def _validate_probe(value: object, *, home_dir: Path, policy_path: Path) -> None:
+    if not isinstance(value, dict) or set(value) != _PROBE_FIELDS:
+        raise BenchmarkError("sandbox probe has malformed fields")
+    if value["schema_version"] != SCHEMA_VERSION:
+        raise BenchmarkError("sandbox probe schema version mismatch")
+    required_true = (
+        "outside_read_denied", "suite_read_denied", "context_read_denied",
+        "home_isolated", "network_policy_enforced", "tool_policy_enforced",
+        "research_policy_enforced",
+    )
+    if any(value[field] is not True for field in required_true):
+        raise BenchmarkError("sandbox probe did not prove required isolation and policy")
+    if value["home"] != str(home_dir.resolve()):
+        raise BenchmarkError("sandbox probe did not use the isolated HOME")
+    expected_hash = sha256_bytes(policy_path.read_bytes())
+    if value["policy_sha256"] != expected_hash:
+        raise BenchmarkError("sandbox probe applied policy hash mismatch")
+
+
+def _invocation_from_envelope(value: object, argv: tuple[str, ...]) -> Invocation:
+    if not isinstance(value, dict) or set(value) != _ENVELOPE_FIELDS:
+        raise BenchmarkError("adapter invocation envelope has malformed fields")
+    if value["schema_version"] != SCHEMA_VERSION:
+        raise BenchmarkError("adapter invocation envelope schema version mismatch")
+    for field in ("process_started", "timed_out", "refused", "malformed_output", "tool_misuse"):
+        if type(value[field]) is not bool:
+            raise BenchmarkError(f"adapter invocation envelope {field} must be boolean")
+    if value["exit_code"] is not None and type(value["exit_code"]) is not int:
+        raise BenchmarkError("adapter invocation envelope exit_code must be integer or null")
+    for field in ("started_at", "completed_at", "stdout", "stderr"):
+        if not isinstance(value[field], str) or (
+            field in ("started_at", "completed_at") and not value[field]
+        ):
+            raise BenchmarkError(f"adapter invocation envelope {field} must be text")
+    if value["reason"] is not None and not isinstance(value["reason"], str):
+        raise BenchmarkError("adapter invocation envelope reason must be text or null")
+    if not isinstance(value["usage"], Mapping) or not isinstance(value["telemetry"], Mapping):
+        raise BenchmarkError("adapter invocation envelope usage and telemetry must be objects")
+    if value["process_started"] and value["exit_code"] is None and not value["timed_out"]:
+        raise BenchmarkError("started adapter invocation requires exit_code unless timed out")
+    return Invocation(
+        argv=argv,
+        shell=False,
+        process_started=value["process_started"],
+        started_at=value["started_at"],
+        completed_at=value["completed_at"],
+        exit_code=value["exit_code"],
+        stdout=value["stdout"],
+        stderr=value["stderr"],
+        timed_out=value["timed_out"],
+        refused=value["refused"],
+        malformed_output=value["malformed_output"],
+        tool_misuse=value["tool_misuse"],
+        reason=value["reason"],
+        telemetry=value["telemetry"],
+        usage=value["usage"],
+    )
 
 
 def validate_runner_config(config: Mapping[str, object]) -> dict:
@@ -278,6 +451,18 @@ def validate_runner_config(config: Mapping[str, object]) -> dict:
         raise BenchmarkError("runner command entries must be non-empty strings")
     if mode == "cli" and not command:
         raise BenchmarkError("CLI runner command must not be empty")
+    adapter = config.get("sandbox_adapter")
+    if mode == "cli" and adapter is None:
+        raise BenchmarkError(
+            "CLI mode requires a host sandbox_adapter; configure one or use manual mode"
+        )
+    if adapter is not None and (
+        isinstance(adapter, (str, bytes))
+        or not isinstance(adapter, list)
+        or not adapter
+        or not all(isinstance(value, str) and value for value in adapter)
+    ):
+        raise BenchmarkError("sandbox_adapter must be a non-empty argv array")
     if not isinstance(config["settings"], Mapping):
         raise BenchmarkError("runner settings must be an object")
     research_policy = config["settings"].get("research")
@@ -332,6 +517,7 @@ def build_schedule(cases: list[dict], config: dict, seed: int) -> list[RunSpec]:
     validated = validate_runner_config(config)
     if type(seed) is not int:
         raise BenchmarkError("schedule seed must be an integer")
+    _validate_schedule_cohort(cases)
     seen: set[str] = set()
     specs: list[RunSpec] = []
     for case in sorted(cases, key=lambda value: value["id"]):
@@ -351,7 +537,41 @@ def build_schedule(cases: list[dict], config: dict, seed: int) -> list[RunSpec]:
                     RunSpec(sha256_text(identity)[:20], case_id, condition, attempt)
                 )
     random.Random(seed).shuffle(specs)
+    distribution = Counter(spec.condition for spec in specs)
+    if distribution != {"normal": 180, "suite": 180, "context_only": 45}:
+        raise BenchmarkError(f"invalid schedule condition distribution: {dict(distribution)!r}")
+    if len(specs) != 405 or len({spec.run_id for spec in specs}) != 405:
+        raise BenchmarkError("schedule must contain exactly 405 unique runs")
     return specs
+
+
+def _validate_schedule_cohort(cases: object) -> None:
+    if not isinstance(cases, list) or len(cases) != EXPECTED_TOTAL:
+        raise BenchmarkError(f"schedule cohort must contain exactly {EXPECTED_TOTAL} cases")
+    ids: set[str] = set()
+    for case in cases:
+        if not isinstance(case, Mapping):
+            raise BenchmarkError("schedule cohort cases must be mappings")
+        case_id = case.get("id")
+        if not isinstance(case_id, str) or not case_id or case_id in ids:
+            raise BenchmarkError("schedule cohort case ids must be unique non-empty text")
+        ids.add(case_id)
+        if case.get("task") not in TASKS:
+            raise BenchmarkError(f"invalid schedule task for {case_id}")
+        if case.get("surface") not in SURFACES:
+            raise BenchmarkError(f"invalid schedule surface for {case_id}")
+        if case.get("difficulty") not in DIFFICULTIES:
+            raise BenchmarkError(f"invalid schedule difficulty for {case_id}")
+        if type(case.get("diagnostic")) is not bool:
+            raise BenchmarkError(f"schedule diagnostic must be boolean for {case_id}")
+    if Counter(case["task"] for case in cases) != EXPECTED_BY_TASK:
+        raise BenchmarkError("invalid schedule task distribution")
+    if Counter(case["surface"] for case in cases) != EXPECTED_BY_SURFACE:
+        raise BenchmarkError("invalid schedule surface distribution")
+    if Counter(case["difficulty"] for case in cases) != EXPECTED_BY_DIFFICULTY:
+        raise BenchmarkError("invalid schedule difficulty distribution")
+    if sum(case["diagnostic"] for case in cases) != EXPECTED_DIAGNOSTIC:
+        raise BenchmarkError("invalid schedule diagnostic distribution")
 
 
 def classify_failure(record: Mapping[str, object]) -> str:
@@ -404,7 +624,12 @@ def _refuse_symlinks(root: Path) -> None:
             raise BenchmarkError(f"suite input must not contain symlinks: {path}")
 
 
-def _prepare_project(project_dir: Path, spec: RunSpec, prompt: str, config: Mapping[str, object]) -> None:
+def _prepare_project(
+    project_dir: Path,
+    spec: RunSpec,
+    prompt: str,
+    snapshot_path: Path | None,
+) -> None:
     task = project_dir / "task.txt"
     descriptor = os.open(task, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as target:
@@ -413,11 +638,10 @@ def _prepare_project(project_dir: Path, spec: RunSpec, prompt: str, config: Mapp
         raise BenchmarkError("task prompt permissions are not private")
     if spec.condition != "suite":
         return
-    suite_path = Path(str(config["suite_path"]))
-    if not suite_path.is_dir():
-        raise BenchmarkError(f"suite path does not exist: {suite_path}")
+    if snapshot_path is None:
+        raise BenchmarkError("suite run requires a frozen input snapshot")
     for name in ("skills", ".translation"):
-        source = suite_path / name
+        source = snapshot_path / name
         if source.exists():
             if not source.is_dir():
                 raise BenchmarkError(f"approved suite input must be a directory: {source}")
@@ -427,6 +651,99 @@ def _prepare_project(project_dir: Path, spec: RunSpec, prompt: str, config: Mapp
 
 def stat_mode(path: Path) -> int:
     return path.stat().st_mode & 0o777
+
+
+def _tree_hash(root: Path) -> str:
+    _refuse_symlinks(root)
+    entries = []
+    for path in sorted(root.rglob("*"), key=lambda value: value.relative_to(root).as_posix()):
+        if path.is_file():
+            entries.append([
+                path.relative_to(root).as_posix(),
+                sha256_bytes(path.read_bytes()),
+            ])
+    if not entries:
+        raise BenchmarkError(f"snapshot tree must contain files: {root}")
+    return sha256_bytes(canonical_bytes(entries))
+
+
+def _validate_signed_context(translation: Path) -> None:
+    _refuse_symlinks(translation)
+    missing = [name for name in (*_CONTEXT_FILES, "setup-approval.json") if not (translation / name).is_file()]
+    if missing:
+        raise BenchmarkError(f"signed project context missing files: {missing!r}")
+    approval = read_json(translation / "setup-approval.json")
+    if not isinstance(approval, dict) or set(approval) != _APPROVAL_FIELDS:
+        raise BenchmarkError("project context approval is malformed")
+    if approval["status"] != "approved":
+        raise BenchmarkError("project context is not approved")
+    if not isinstance(approval["approved_by"], str) or not approval["approved_by"].strip():
+        raise BenchmarkError("project context approval requires approved_by")
+    if not isinstance(approval["approved_at"], str) or not approval["approved_at"].strip():
+        raise BenchmarkError("project context approval requires approved_at")
+    hashes = approval["context_sha256"]
+    if (
+        not isinstance(hashes, dict)
+        or set(hashes) != set(_CONTEXT_FILES)
+        or any(not isinstance(value, str) or not _SHA256.fullmatch(value) for value in hashes.values())
+    ):
+        raise BenchmarkError("project context approval hashes are malformed")
+    approved_empty = approval["approved_empty"]
+    if (
+        not isinstance(approved_empty, list)
+        or not all(isinstance(name, str) for name in approved_empty)
+        or len(approved_empty) != len(set(approved_empty))
+        or any(name not in ("glossary.csv", "protected-terms.txt") for name in approved_empty)
+    ):
+        raise BenchmarkError("project context approved_empty is malformed")
+    for name in _CONTEXT_FILES:
+        actual = sha256_bytes((translation / name).read_bytes())
+        if hashes[name] != actual:
+            raise BenchmarkError(f"project context approval hash mismatch: {name}")
+
+
+def _freeze_input_snapshot(
+    evidence_dir: Path,
+    config: Mapping[str, object],
+    *,
+    required: bool,
+) -> tuple[Path | None, dict | None]:
+    if not required:
+        return None, None
+    target = evidence_dir / "input-snapshot"
+    if not target.exists():
+        suite_path = Path(str(config["suite_path"])).resolve()
+        skills = suite_path / "skills"
+        translation = suite_path / ".translation"
+        if not skills.is_dir():
+            raise BenchmarkError("suite runs require a skills directory")
+        if not translation.is_dir():
+            raise BenchmarkError("suite runs require signed .translation project context")
+        _refuse_symlinks(skills)
+        _validate_signed_context(translation)
+        with tempfile.TemporaryDirectory(prefix=".snapshot-", dir=evidence_dir) as temporary:
+            staged = Path(temporary) / "input-snapshot"
+            staged.mkdir()
+            shutil.copytree(skills, staged / "skills")
+            staged_translation = staged / ".translation"
+            staged_translation.mkdir()
+            for name in (*_CONTEXT_FILES, "setup-approval.json"):
+                shutil.copy2(translation / name, staged_translation / name)
+            os.replace(staged, target)
+        for path in sorted(target.rglob("*"), reverse=True):
+            path.chmod(0o555 if path.is_dir() else 0o444)
+        target.chmod(0o555)
+    if not target.is_dir() or target.is_symlink():
+        raise BenchmarkError("frozen input snapshot is unsafe")
+    _validate_signed_context(target / ".translation")
+    trees = {
+        "skills": _tree_hash(target / "skills"),
+        ".translation": _tree_hash(target / ".translation"),
+    }
+    return target, {
+        "trees": trees,
+        "sha256": sha256_bytes(canonical_bytes(trees)),
+    }
 
 
 def _redactor(config: Mapping[str, object]) -> LiteralSecretRedactor:
@@ -465,7 +782,12 @@ def _schedule_manifest(schedule: Sequence[RunSpec]) -> dict:
 
 
 def _ensure_run_manifest(
-    evidence_dir: Path, schedule: Sequence[RunSpec], config: Mapping[str, object]
+    evidence_dir: Path,
+    schedule: Sequence[RunSpec],
+    config: Mapping[str, object],
+    *,
+    input_snapshot: dict | None,
+    sandbox_probe: dict | None,
 ) -> None:
     target = evidence_dir / "run-manifest.json"
     schedule_value = _schedule_manifest(schedule)
@@ -481,6 +803,10 @@ def _ensure_run_manifest(
         if execution_config is not None and execution_config != config_digest:
             raise BenchmarkError("run manifest execution config mismatch")
         manifest["schedule"] = schedule_value
+        if manifest.get("input_snapshot") not in (None, input_snapshot):
+            raise BenchmarkError("run manifest input snapshot mismatch")
+        if manifest.get("sandbox_probe") not in (None, sandbox_probe):
+            raise BenchmarkError("run manifest sandbox probe mismatch")
         manifest.setdefault("runner_config_sha256", config_digest)
         manifest["execution_config_sha256"] = config_digest
     else:
@@ -490,6 +816,10 @@ def _ensure_run_manifest(
             "execution_config_sha256": config_digest,
             "schedule": schedule_value,
         }
+    if input_snapshot is not None:
+        manifest["input_snapshot"] = input_snapshot
+    if sandbox_probe is not None:
+        manifest["sandbox_probe"] = sandbox_probe
     atomic_write_json(target, manifest)
 
 
@@ -515,14 +845,24 @@ def _invoke_with_prestart_retries(
     *,
     prompt: str,
     project_dir: Path,
+    home_dir: Path | None,
+    policy_path: Path | None,
     timeout_seconds: int,
     retries: int,
 ) -> Invocation:
     for retry in range(retries + 1):
         try:
-            invocation = runner.invoke(
-                prompt=prompt, project_dir=project_dir, timeout_seconds=timeout_seconds
-            )
+            if isinstance(runner, CliRunner):
+                if home_dir is None or policy_path is None:
+                    raise BenchmarkError("CLI invocation requires isolated HOME and policy file")
+                invocation = runner.invoke(
+                    prompt=prompt, project_dir=project_dir, home_dir=home_dir,
+                    policy_path=policy_path, timeout_seconds=timeout_seconds,
+                )
+            else:
+                invocation = runner.invoke(
+                    prompt=prompt, project_dir=project_dir, timeout_seconds=timeout_seconds
+                )
         except OSError as error:
             invocation = Invocation(
                 (), False, False, utc_now(), utc_now(), None, "", "",
@@ -531,6 +871,113 @@ def _invoke_with_prestart_retries(
         if invocation.process_started or retry == retries:
             return invocation
     raise AssertionError("pre-start retry loop did not return")
+
+
+def _research_question(case: Mapping[str, object]) -> str | None:
+    direct = case.get("unresolved_question")
+    if direct is not None:
+        if not isinstance(direct, str) or not direct.strip():
+            raise BenchmarkError("case unresolved_question must be exact nonblank text")
+        return direct
+    context = case.get("context")
+    if isinstance(context, Mapping) and "unresolved_question" in context:
+        value = context["unresolved_question"]
+        if not isinstance(value, str) or not value.strip():
+            raise BenchmarkError("case context unresolved_question must be exact nonblank text")
+        return value
+    return None
+
+
+def _effective_settings(config: Mapping[str, object], condition: str) -> dict:
+    settings = dict(config["settings"])
+    condition_settings = config.get("condition_settings")
+    if isinstance(condition_settings, Mapping):
+        override = condition_settings.get(condition)
+        if isinstance(override, Mapping):
+            settings.update(override)
+    return settings
+
+
+def _policy_for_case(
+    config: Mapping[str, object], case: Mapping[str, object], condition: str
+) -> dict:
+    settings = _effective_settings(config, condition)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "tools": settings.get("tools", []),
+        "network": settings.get("network", "disabled"),
+        "research": {
+            "mode": settings["research"],
+            "unresolved_question": _research_question(case),
+        },
+    }
+
+
+def _write_private_policy(path: Path, policy: Mapping[str, object]) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as target:
+        target.write(canonical_bytes(policy))
+
+
+def _preflight_cli(
+    runner: object,
+    schedule: Sequence[RunSpec],
+    cases: Mapping[str, dict],
+    config: Mapping[str, object],
+    evidence_dir: Path,
+    scratch_root: Path,
+    snapshot_path: Path | None,
+) -> dict | None:
+    if config["mode"] != "cli":
+        return None
+    if not isinstance(runner, CliRunner):
+        raise BenchmarkError("CLI mode requires CliRunner with the configured sandbox adapter")
+    if snapshot_path is None:
+        raise BenchmarkError("CLI preflight requires a frozen suite/context snapshot")
+    policies: dict[str, dict] = {}
+    for spec in schedule:
+        policy = _policy_for_case(config, cases[spec.case_id], spec.condition)
+        digest = sha256_bytes(canonical_bytes(policy))
+        policies[digest] = policy
+    probes_dir = evidence_dir / "probes"
+    probes_dir.mkdir(parents=True, exist_ok=True)
+    records = []
+    for policy_digest, policy in sorted(policies.items()):
+        record_path = probes_dir / f"{policy_digest}.json"
+        if record_path.exists():
+            record = read_json(record_path)
+            if not isinstance(record, dict):
+                raise BenchmarkError("saved sandbox probe record is malformed")
+        else:
+            with tempfile.TemporaryDirectory(prefix="benchmark-probe-", dir=scratch_root) as temporary:
+                attempt = Path(temporary)
+                project = attempt / "project"
+                home = attempt / "home"
+                project.mkdir()
+                home.mkdir()
+                policy_path = attempt / "policy.json"
+                _write_private_policy(policy_path, policy)
+                sentinel = attempt / "outside-sentinel.txt"
+                sentinel.write_text("sandbox must deny this\n", encoding="utf-8")
+                record, _ = runner.probe(
+                    project_dir=project,
+                    home_dir=home,
+                    policy_path=policy_path,
+                    outside_sentinel=sentinel,
+                    suite_source=snapshot_path / "skills",
+                    context_source=snapshot_path / ".translation",
+                    timeout_seconds=config["timeout_seconds"],
+                )
+                atomic_write_json(record_path, record)
+        record_hash = sha256_bytes(record_path.read_bytes())
+        records.append({
+            "policy_sha256": policy_digest,
+            "path": record_path.relative_to(evidence_dir).as_posix(),
+            "record_sha256": record_hash,
+        })
+    if len(records) == 1:
+        return {**records[0], "sha256": records[0]["record_sha256"]}
+    return {"records": records, "sha256": sha256_bytes(canonical_bytes(records))}
 
 
 def _result_from_invocation(
@@ -544,7 +991,9 @@ def _result_from_invocation(
 ) -> RunResult:
     stdout, stdout_changed = redactor.text(invocation.stdout)
     stderr, stderr_changed = redactor.text(invocation.stderr)
+    reason, reason_changed = redactor.value(invocation.reason)
     telemetry, telemetry_changed = redactor.value(invocation.telemetry)
+    usage, usage_changed = redactor.value(invocation.usage)
     argv, argv_changed = redactor.value(invocation.argv)
     digest, raw_path = _store_raw(evidence_dir, stdout)
     failure_class = classify_failure(asdict(invocation))
@@ -554,8 +1003,9 @@ def _result_from_invocation(
         failure_class, invocation.process_started, invocation.started_at,
         invocation.completed_at, invocation.exit_code, invocation.timed_out,
         invocation.refused, invocation.malformed_output, invocation.tool_misuse,
-        invocation.reason, digest, raw_path, stderr, telemetry,
-        stdout_changed or stderr_changed or telemetry_changed or argv_changed,
+        reason, digest, raw_path, stderr, telemetry, usage,
+        stdout_changed or stderr_changed or reason_changed or telemetry_changed
+        or usage_changed or argv_changed,
         project_fingerprint, tuple(argv), invocation.shell,
     )
 
@@ -570,6 +1020,13 @@ def execute_schedule(
     templates: Mapping[str, str],
 ) -> list[RunResult]:
     validated = validate_runner_config(config)
+    if validated["mode"] == "cli":
+        if not isinstance(runner, CliRunner):
+            raise BenchmarkError("CLI mode requires the configured CliRunner")
+        if runner.command != tuple(validated["command"]):
+            raise BenchmarkError("CliRunner command does not match configured command")
+        if runner.sandbox_adapter != tuple(validated["sandbox_adapter"]):
+            raise BenchmarkError("CliRunner adapter does not match configured sandbox_adapter")
     evidence_dir = Path(evidence_dir)
     if evidence_dir.is_symlink():
         raise BenchmarkError(f"refusing symlink evidence directory: {evidence_dir}")
@@ -577,10 +1034,33 @@ def execute_schedule(
     scratch_root = Path(str(validated["scratch_root"]))
     if scratch_root.is_symlink():
         raise BenchmarkError(f"refusing symlink scratch root: {scratch_root}")
+    if validated["mode"] == "cli":
+        resolved_scratch = scratch_root.resolve()
+        suite_root = Path(str(validated["suite_path"])).resolve()
+        for protected_root in (_REPOSITORY_ROOT, suite_root):
+            try:
+                resolved_scratch.relative_to(protected_root)
+            except ValueError:
+                continue
+            raise BenchmarkError(
+                f"CLI scratch_root must resolve outside repository/suite root: {protected_root}"
+            )
     scratch_root.mkdir(parents=True, exist_ok=True)
-    _ensure_run_manifest(evidence_dir, schedule, validated)
-    completed = _existing_results(evidence_dir, schedule)
     case_map = _cases_by_id(cases)
+    snapshot_required = validated["mode"] == "cli" or any(
+        spec.condition == "suite" for spec in schedule
+    )
+    snapshot_path, snapshot_manifest = _freeze_input_snapshot(
+        evidence_dir, validated, required=snapshot_required
+    )
+    probe_manifest = _preflight_cli(
+        runner, schedule, case_map, validated, evidence_dir, scratch_root, snapshot_path
+    )
+    _ensure_run_manifest(
+        evidence_dir, schedule, validated,
+        input_snapshot=snapshot_manifest, sandbox_probe=probe_manifest,
+    )
+    completed = _existing_results(evidence_dir, schedule)
     redactor = _redactor(validated)
     for spec in schedule:
         if spec.run_id in completed:
@@ -589,13 +1069,26 @@ def execute_schedule(
         with tempfile.TemporaryDirectory(
             prefix=f"benchmark-{spec.run_id}-", dir=scratch_root
         ) as temporary:
-            project_dir = Path(temporary)
+            attempt_dir = Path(temporary)
+            project_dir = attempt_dir / "project"
+            home_dir = attempt_dir / "home"
+            project_dir.mkdir()
+            home_dir.mkdir()
             project_fingerprint = sha256_text(str(project_dir))
-            _prepare_project(project_dir, spec, prompt, validated)
+            _prepare_project(project_dir, spec, prompt, snapshot_path)
+            policy_path = None
+            if validated["mode"] == "cli":
+                policy_path = attempt_dir / "policy.json"
+                _write_private_policy(
+                    policy_path,
+                    _policy_for_case(validated, case_map[spec.case_id], spec.condition),
+                )
             invocation = _invoke_with_prestart_retries(
                 runner,
                 prompt=prompt,
                 project_dir=project_dir,
+                home_dir=home_dir if validated["mode"] == "cli" else None,
+                policy_path=policy_path,
                 timeout_seconds=validated["timeout_seconds"],
                 retries=validated.get("prestart_retries", 2),
             )
@@ -706,7 +1199,10 @@ def import_manual_responses(
     if evidence_dir.is_symlink():
         raise BenchmarkError(f"refusing symlink evidence directory: {evidence_dir}")
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_run_manifest(evidence_dir, schedule, validated)
+    _ensure_run_manifest(
+        evidence_dir, schedule, validated,
+        input_snapshot=None, sandbox_probe=None,
+    )
     if (evidence_dir / "runs.jsonl").exists():
         raise BenchmarkError("manual import evidence already contains run records")
     redactor = _redactor(validated)
@@ -766,7 +1262,11 @@ def _cli_runner(config: Mapping[str, object]) -> object:
         config.get("secret_env", [])
     )
     environment = {name: os.environ[name] for name in allowed if name in os.environ}
-    return CliRunner(config["command"], environment=environment)
+    return CliRunner(
+        config["command"],
+        sandbox_adapter=config["sandbox_adapter"],
+        environment=environment,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
