@@ -299,6 +299,37 @@ class BlindingTests(unittest.TestCase):
             with self.subTest(encoded=encoded), self.assertRaises(BenchmarkError):
                 build_blind_bundle(complete_synthetic_runs(), changed_cases, SEED)
 
+    def test_builder_rejects_multiline_base64_and_deep_html_hidden_values(self):
+        """Break: control whitespace or encoding depth must not bypass hidden-value matching."""
+        original_cases = cases()
+        multiline = "Private first line\nPrivate second line"
+        multiline_cases = [dict(case) for case in original_cases]
+        multiline_cases[0].update({
+            "reference": multiline,
+            "context": base64.b64encode(multiline.encode("utf-8")).decode("ascii"),
+        })
+
+        private = "Depth bounded private scalar"
+        deeply_encoded = "".join(f"&#{ord(character)};" for character in private)
+        for _ in range(20):
+            deeply_encoded = deeply_encoded.replace("&", "&amp;")
+        deep_cases = [dict(case) for case in original_cases]
+        deep_cases[0].update({"reviewer_secret": private, "context": deeply_encoded})
+
+        excessive = "".join(f"&#{ord(character)};" for character in private)
+        for _ in range(40):
+            excessive = excessive.replace("&", "&amp;")
+        excessive_cases = [dict(case) for case in original_cases]
+        excessive_cases[0].update({"reviewer_secret": private, "context": excessive})
+
+        for label, changed_cases in (
+            ("multiline base64", multiline_cases),
+            ("twenty-layer HTML", deep_cases),
+            ("over-budget HTML", excessive_cases),
+        ):
+            with self.subTest(label=label), self.assertRaises(BenchmarkError):
+                build_blind_bundle(complete_synthetic_runs(), changed_cases, SEED)
+
 
 class BlindingCliTests(unittest.TestCase):
     def setUp(self):
@@ -487,6 +518,9 @@ class BlindingCliTests(unittest.TestCase):
             "bootstrap seed": lambda value: value.update(bootstrap_seed=None),
             "evidence path": lambda value: value.update(evidence="/wrong/evidence/path"),
             "snapshot": lambda value: value.pop("input_snapshot"),
+            "incomplete sandbox probe": lambda value: value.update(
+                sandbox_probe={"sha256": "0" * 64}
+            ),
             "unknown field": lambda value: value.update(unexpected="private"),
         }
         for index, (name, mutate) in enumerate(mutations.items()):
@@ -525,6 +559,119 @@ class BlindingCliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertFalse((public_dir / "bundle.json").exists())
         self.assertFalse((private_dir / "key.json").exists())
+
+    def test_cli_malformed_container_ids_fail_as_benchmark_errors(self):
+        """Break: list-valued record IDs must not escape the CLI as raw TypeError tracebacks."""
+        records_path = self.evidence / "runs.jsonl"
+        original = records_path.read_bytes()
+        for index, field in enumerate(("run_id", "case_id")):
+            records = original.decode("utf-8").splitlines()
+            first = json.loads(records[0])
+            first[field] = [first[field]]
+            records[0] = canonical_bytes(first).decode("utf-8").rstrip("\n")
+            records_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+            public_dir = self.root / f"public-malformed-{index}"
+            private_dir = self.root / f"private-malformed-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+
+            with self.subTest(field=field):
+                completed = self.run_cli(
+                    public_dir / "bundle.json", private_dir / "key.json"
+                )
+                self.assertEqual(completed.returncode, 2, completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+                self.assertFalse((public_dir / "bundle.json").exists())
+                self.assertFalse((private_dir / "key.json").exists())
+        records_path.write_bytes(original)
+
+    def test_cli_rolls_back_if_runs_change_during_publication(self):
+        """Break: a post-load runs.jsonl mutation must not leave attributable artifacts."""
+        public_dir = self.root / "public-runs-race"
+        private_dir = self.root / "private-runs-race"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        review = public_dir / "bundle.json"
+        key = private_dir / "key.json"
+        runs_path = self.evidence / "runs.jsonl"
+        original_publish = blind._atomic_create_pair
+
+        def mutate_runs_then_publish(*args, **kwargs):
+            runs_path.write_bytes(runs_path.read_bytes() + b"\n")
+            return original_publish(*args, **kwargs)
+
+        stdout = mock.Mock(buffer=io.BytesIO())
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(blind, "_atomic_create_pair", mutate_runs_then_publish),
+            mock.patch.object(blind.sys, "stdout", stdout),
+            mock.patch.object(blind.sys, "stderr", stderr),
+        ):
+            result = blind.main(self.cli_args(review, key))
+
+        self.assertEqual(result, 2)
+        self.assertFalse(review.exists())
+        self.assertFalse(key.exists())
+
+    def test_cli_rolls_back_if_consumed_raw_output_changes_during_publication(self):
+        """Break: a post-load raw-output mutation must invalidate both blinded artifacts."""
+        public_dir = self.root / "public-raw-race"
+        private_dir = self.root / "private-raw-race"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        review = public_dir / "bundle.json"
+        key = private_dir / "key.json"
+        first = json.loads(
+            (self.evidence / "runs.jsonl").read_text(encoding="utf-8").splitlines()[0]
+        )
+        raw_path = self.evidence / first["raw_output_path"]
+        original_publish = blind._atomic_create_pair
+
+        def mutate_raw_then_publish(*args, **kwargs):
+            raw_path.write_text("tampered after load", encoding="utf-8")
+            return original_publish(*args, **kwargs)
+
+        stdout = mock.Mock(buffer=io.BytesIO())
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(blind, "_atomic_create_pair", mutate_raw_then_publish),
+            mock.patch.object(blind.sys, "stdout", stdout),
+            mock.patch.object(blind.sys, "stderr", stderr),
+        ):
+            result = blind.main(self.cli_args(review, key))
+
+        self.assertEqual(result, 2)
+        self.assertFalse(review.exists())
+        self.assertFalse(key.exists())
+
+    def test_cli_rejects_an_added_private_key_hardlink(self):
+        """Break: a second link could preserve or expose the private key after validation."""
+        public_dir = self.root / "public-link-race"
+        private_dir = self.root / "private-link-race"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        review = public_dir / "bundle.json"
+        key = private_dir / "key.json"
+        extra_link = private_dir / "extra-key-link.json"
+        original_publish = blind._atomic_create_pair
+
+        def publish_then_link(*args, **kwargs):
+            original_publish(*args, **kwargs)
+            os.link(key, extra_link)
+
+        stdout = mock.Mock(buffer=io.BytesIO())
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(blind, "_atomic_create_pair", publish_then_link),
+            mock.patch.object(blind.sys, "stdout", stdout),
+            mock.patch.object(blind.sys, "stderr", stderr),
+        ):
+            result = blind.main(self.cli_args(review, key))
+
+        self.assertEqual(result, 2)
+        self.assertFalse(review.exists())
+        self.assertFalse(key.exists())
+        self.assertTrue(extra_link.exists())
 
     def test_cli_reloads_and_rejects_a_replaced_private_key(self):
         """Break: success must not hash an attacker replacement without validating the key."""

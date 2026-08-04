@@ -77,6 +77,9 @@ _HIDDEN_THRESHOLD_TEXT = re.compile(
     re.IGNORECASE,
 )
 _RUN_RECORD_FIELDS = {field.name for field in fields(RunResult)} | {"schema_version", "output"}
+_DECODE_MAX_DEPTH = 32
+_DECODE_MAX_FORMS = 128
+_DECODE_MAX_TOTAL_CHARS = 2_000_000
 
 
 def _anonymous_item_id(rng: random.Random, used: set[str]) -> str:
@@ -422,42 +425,76 @@ def build_blind_bundle(
 
 
 def _compact_key(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).casefold()
+    normalized = _normalize_hidden_text(value)
     return "".join(character for character in normalized if character.isalnum())
+
+
+def _normalize_hidden_text(value: str) -> str:
+    newlines = value.replace("\r\n", "\n").replace("\r", "\n")
+    return unicodedata.normalize("NFKC", newlines).casefold()
+
+
+def _unicode_unescape(value: str) -> str:
+    decoded = re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        lambda match: chr(int(match.group(1), 16)),
+        value,
+    )
+    return re.sub(
+        r"\\x([0-9a-fA-F]{2})",
+        lambda match: chr(int(match.group(1), 16)),
+        decoded,
+    )
+
+
+def _base64_scalar(value: str) -> str | None:
+    stripped = value.strip()
+    if len(stripped) < 8 or any(character.isspace() for character in stripped):
+        return None
+    try:
+        encoded = stripped.encode("ascii")
+        encoded += b"=" * (-len(encoded) % 4)
+        decoded = base64.b64decode(
+            encoded, altchars=b"-_", validate=True
+        ).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, UnicodeEncodeError, ValueError):
+        return None
+    if not decoded or not all(
+        character.isprintable() or character in "\r\n\t"
+        for character in decoded
+    ):
+        return None
+    return decoded
 
 
 def _decoded_forms(value: str) -> set[str]:
     forms: set[str] = set()
-    pending = [value]
-    while pending and len(forms) < 16:
-        current = pending.pop()
+    pending = [(value, 0)]
+    total_chars = 0
+    while pending:
+        current, depth = pending.pop()
         if current in forms:
             continue
+        total_chars += len(current)
+        if len(forms) >= _DECODE_MAX_FORMS or total_chars > _DECODE_MAX_TOTAL_CHARS:
+            raise BenchmarkError("visible metadata decoding exceeds the safety budget")
         forms.add(current)
-        decoded = html.unescape(unquote(current))
-        decoded = re.sub(
-            r"\\u([0-9a-fA-F]{4})",
-            lambda match: chr(int(match.group(1), 16)),
-            decoded,
-        )
-        decoded = re.sub(
-            r"\\x([0-9a-fA-F]{2})",
-            lambda match: chr(int(match.group(1), 16)),
-            decoded,
-        )
-        if decoded != current:
-            pending.append(decoded)
-        stripped = current.strip()
-        if len(stripped) >= 8:
-            try:
-                decoded_bytes = base64.b64decode(stripped.encode("ascii"), validate=True)
-                decoded_text = decoded_bytes.decode("utf-8")
-            except (binascii.Error, UnicodeDecodeError, UnicodeEncodeError, ValueError):
-                pass
-            else:
-                if decoded_text.isprintable() or decoded_text.lstrip().startswith(("{", "[")):
-                    pending.append(decoded_text)
-    return {unicodedata.normalize("NFKC", form).casefold() for form in forms}
+        candidates = {
+            html.unescape(current),
+            unquote(current),
+            _unicode_unescape(current),
+        }
+        base64_value = _base64_scalar(current)
+        if base64_value is not None:
+            candidates.add(base64_value)
+        candidates.discard(current)
+        for decoded in candidates:
+            if decoded in forms:
+                continue
+            if depth >= _DECODE_MAX_DEPTH:
+                raise BenchmarkError("visible metadata encoding depth exceeds the safety budget")
+            pending.append((decoded, depth + 1))
+    return {_normalize_hidden_text(form) for form in forms}
 
 
 def _scan_metadata_string(value: str, location: str, hidden_values: frozenset[str]) -> None:
@@ -529,7 +566,7 @@ def scan_visible_bundle(
     if not isinstance(items, list) or len(items) != _EXPECTED_PRESENTATIONS:
         raise BenchmarkError("visible bundle must contain exactly 198 items")
     hidden_values = frozenset(
-        unicodedata.normalize("NFKC", value).casefold()
+        _normalize_hidden_text(value)
         for value in _hidden_values
         if isinstance(value, str) and len(value) >= 4
     )
@@ -724,21 +761,200 @@ def _validate_prepared_manifest(dataset_dir: Path, evidence_dir: Path) -> tuple[
     return manifest, prepared
 
 
-def _read_raw_output(evidence_dir: Path, run: RunResult) -> str:
-    relative = run.raw_output_path
-    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
-        raise BenchmarkError(f"run {run.run_id} has invalid raw output path")
-    raw_root = evidence_dir / "raw"
-    if raw_root.is_symlink():
-        raise BenchmarkError("refusing symlink raw evidence directory")
-    path = evidence_dir / relative
+@dataclass(frozen=True)
+class _InputBinding:
+    location: str
+    name: str
+    identity: tuple[int, int]
+    size: int
+    links: int
+    modified_ns: int
+    changed_ns: int
+    sha256: str
+    encoded: bytes
+
+
+@dataclass
+class _HeldEvidenceInputs:
+    path: Path
+    directory_fd: int
+    directory_identity: tuple[int, int]
+    raw_fd: int
+    raw_identity: tuple[int, int]
+    bindings: dict[tuple[str, str], _InputBinding]
+
+    def close(self) -> None:
+        if self.raw_fd >= 0:
+            os.close(self.raw_fd)
+            self.raw_fd = -1
+        if self.directory_fd >= 0:
+            os.close(self.directory_fd)
+            self.directory_fd = -1
+
+
+def _open_held_evidence(evidence_dir: Path) -> _HeldEvidenceInputs:
+    path = Path(evidence_dir)
     if path.is_symlink():
-        raise BenchmarkError(f"refusing symlink raw output: {relative}")
+        raise BenchmarkError("refusing symlink evidence directory")
     try:
-        path.resolve().relative_to(raw_root.resolve())
-        encoded = path.read_bytes()
-    except (OSError, ValueError) as error:
-        raise BenchmarkError(f"cannot safely read raw output {relative}: {error}") from error
+        directory_fd = os.open(path, _directory_flags())
+    except OSError as error:
+        raise BenchmarkError(f"cannot securely open evidence directory: {error}") from error
+    raw_fd = -1
+    try:
+        directory_stat = os.fstat(directory_fd)
+        named_directory = os.stat(path, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(directory_stat.st_mode)
+            or not stat.S_ISDIR(named_directory.st_mode)
+            or _identity(directory_stat) != _identity(named_directory)
+        ):
+            raise BenchmarkError("evidence directory identity changed while opening")
+        raw_fd = os.open("raw", _directory_flags(), dir_fd=directory_fd)
+        raw_stat = os.fstat(raw_fd)
+        named_raw = os.stat("raw", dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(raw_stat.st_mode)
+            or not stat.S_ISDIR(named_raw.st_mode)
+            or _identity(raw_stat) != _identity(named_raw)
+        ):
+            raise BenchmarkError("raw evidence directory identity changed while opening")
+        return _HeldEvidenceInputs(
+            path=path,
+            directory_fd=directory_fd,
+            directory_identity=_identity(directory_stat),
+            raw_fd=raw_fd,
+            raw_identity=_identity(raw_stat),
+            bindings={},
+        )
+    except (OSError, BenchmarkError) as error:
+        if raw_fd >= 0:
+            os.close(raw_fd)
+        os.close(directory_fd)
+        if isinstance(error, BenchmarkError):
+            raise
+        raise BenchmarkError(f"cannot securely open raw evidence directory: {error}") from error
+
+
+def _recheck_held_evidence(held: _HeldEvidenceInputs) -> None:
+    try:
+        directory_stat = os.fstat(held.directory_fd)
+        named_directory = os.stat(held.path, follow_symlinks=False)
+        raw_stat = os.fstat(held.raw_fd)
+        named_raw = os.stat("raw", dir_fd=held.directory_fd, follow_symlinks=False)
+    except OSError as error:
+        raise BenchmarkError(f"evidence directory identity changed: {error}") from error
+    if (
+        not stat.S_ISDIR(directory_stat.st_mode)
+        or not stat.S_ISDIR(named_directory.st_mode)
+        or _identity(directory_stat) != held.directory_identity
+        or _identity(named_directory) != held.directory_identity
+        or not stat.S_ISDIR(raw_stat.st_mode)
+        or not stat.S_ISDIR(named_raw.st_mode)
+        or _identity(raw_stat) != held.raw_identity
+        or _identity(named_raw) != held.raw_identity
+    ):
+        raise BenchmarkError("evidence directory identity changed")
+
+
+def _read_bound_input(
+    held: _HeldEvidenceInputs,
+    location: str,
+    name: str,
+    *,
+    bind: bool,
+) -> bytes:
+    directory_fd = held.directory_fd if location == "evidence" else held.raw_fd
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+    except OSError as error:
+        raise BenchmarkError(
+            f"cannot securely open consumed input {location}/{name}: {error}"
+        ) from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise BenchmarkError(f"consumed input is not a regular file: {location}/{name}")
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        encoded = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            _identity(after) != _identity(before)
+            or after.st_size != before.st_size
+            or after.st_nlink != before.st_nlink
+            or after.st_mtime_ns != before.st_mtime_ns
+            or after.st_ctime_ns != before.st_ctime_ns
+        ):
+            raise BenchmarkError(f"consumed input changed while reading: {location}/{name}")
+    finally:
+        os.close(descriptor)
+    current = _InputBinding(
+        location=location,
+        name=name,
+        identity=_identity(after),
+        size=after.st_size,
+        links=after.st_nlink,
+        modified_ns=after.st_mtime_ns,
+        changed_ns=after.st_ctime_ns,
+        sha256=sha256_bytes(encoded),
+        encoded=encoded,
+    )
+    key = (location, name)
+    expected = held.bindings.get(key)
+    if bind:
+        if expected is None:
+            held.bindings[key] = current
+        elif current != expected:
+            raise BenchmarkError(f"consumed input changed between reads: {location}/{name}")
+    elif expected is None or current != expected:
+        raise BenchmarkError(f"consumed input changed after loading: {location}/{name}")
+    return encoded
+
+
+def _verify_evidence_inputs(held: _HeldEvidenceInputs) -> None:
+    _recheck_held_evidence(held)
+    for location, name in tuple(held.bindings):
+        _read_bound_input(held, location, name, bind=False)
+    _recheck_held_evidence(held)
+
+
+def _parse_canonical_runs(encoded: bytes) -> list[dict]:
+    try:
+        text = encoded.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise BenchmarkError(f"runs.jsonl is not UTF-8: {error}") from error
+    lines = text.splitlines()
+    if not lines or any(not line for line in lines):
+        raise BenchmarkError("runs.jsonl must contain non-empty canonical JSONL records")
+    records: list[dict] = []
+    for line_number, line in enumerate(lines, start=1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise BenchmarkError(f"invalid runs.jsonl line {line_number}: {error}") from error
+        if not isinstance(record, dict):
+            raise BenchmarkError(f"runs.jsonl line {line_number} must be an object")
+        records.append(record)
+    if b"".join(canonical_bytes(record) for record in records) != encoded:
+        raise BenchmarkError("runs.jsonl must use canonical JSONL bytes")
+    return records
+
+
+def _read_raw_output(held: _HeldEvidenceInputs, run: RunResult) -> str:
+    relative = run.raw_output_path
+    expected_relative = f"raw/{run.output_sha256}.txt"
+    if not isinstance(relative, str) or relative != expected_relative:
+        raise BenchmarkError(f"run {run.run_id} has invalid raw output path")
+    encoded = _read_bound_input(held, "raw", f"{run.output_sha256}.txt", bind=True)
     if sha256_bytes(encoded) != run.output_sha256:
         raise BenchmarkError(f"raw output hash mismatch: {relative}")
     try:
@@ -747,19 +963,23 @@ def _read_raw_output(evidence_dir: Path, run: RunResult) -> str:
         raise BenchmarkError(f"raw output is not UTF-8: {relative}") from error
 
 
-def _load_complete_runs(evidence_dir: Path, run_ids: Sequence[str]) -> list[dict]:
-    evidence_dir = Path(evidence_dir)
-    if evidence_dir.is_symlink():
-        raise BenchmarkError("refusing symlink evidence directory")
-    records = read_jsonl(evidence_dir / "runs.jsonl")
+def _load_complete_runs(held: _HeldEvidenceInputs, run_ids: Sequence[str]) -> list[dict]:
+    records = _parse_canonical_runs(
+        _read_bound_input(held, "evidence", "runs.jsonl", bind=True)
+    )
     by_id: dict[str, dict] = {}
     for record in records:
+        if not isinstance(record.get("run_id"), str):
+            raise BenchmarkError("run record id must be text")
+        if not isinstance(record.get("case_id"), str):
+            raise BenchmarkError("run record case id must be text")
         run = RunResult.from_record(record)
         if run.run_id in by_id:
             raise BenchmarkError(f"duplicate run id: {run.run_id}")
-        by_id[run.run_id] = {**record, "output": _read_raw_output(evidence_dir, run)}
+        by_id[run.run_id] = {**record, "output": _read_raw_output(held, run)}
     if set(by_id) != set(run_ids) or len(by_id) != len(run_ids):
         raise BenchmarkError("run evidence does not match the frozen schedule")
+    _verify_evidence_inputs(held)
     return [by_id[run_id] for run_id in run_ids]
 
 
@@ -951,6 +1171,16 @@ def _atomic_create_pair(
         for target in (review_target, key_target):
             os.fsync(target.directory_fd)
             _recheck_held_target(target)
+            published = os.stat(
+                target.name, dir_fd=target.directory_fd, follow_symlinks=False
+            )
+            if (
+                not stat.S_ISREG(published.st_mode)
+                or _identity(published) != target.published_identity
+                or published.st_nlink != 1
+                or stat.S_IMODE(published.st_mode) != target.mode
+            ):
+                raise BenchmarkError("published blinded artifact identity is not exclusive")
     except (OSError, BenchmarkError) as error:
         for target in created:
             _unlink_relative(target, target.name)
@@ -976,6 +1206,7 @@ def _read_published(target: _HeldTarget) -> bytes:
         if (
             not stat.S_ISREG(before.st_mode)
             or _identity(before) != target.published_identity
+            or before.st_nlink != 1
             or stat.S_IMODE(before.st_mode) != target.mode
         ):
             raise BenchmarkError(f"published artifact identity or mode changed: {target.path}")
@@ -986,7 +1217,14 @@ def _read_published(target: _HeldTarget) -> bytes:
                 break
             chunks.append(block)
         after = os.fstat(descriptor)
-        if _identity(after) != _identity(before) or after.st_size != before.st_size:
+        if (
+            _identity(after) != _identity(before)
+            or after.st_size != before.st_size
+            or after.st_nlink != 1
+            or stat.S_IMODE(after.st_mode) != target.mode
+            or after.st_mtime_ns != before.st_mtime_ns
+            or after.st_ctime_ns != before.st_ctime_ns
+        ):
             raise BenchmarkError(f"published artifact changed while reading: {target.path}")
         return b"".join(chunks)
     finally:
@@ -1108,6 +1346,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     review_target: _HeldTarget | None = None
     key_target: _HeldTarget | None = None
+    evidence_inputs: _HeldEvidenceInputs | None = None
     try:
         review_target, key_target = _validate_output_targets(
             arguments.review_bundle,
@@ -1121,7 +1360,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         cases = read_jsonl(arguments.dataset / "cases.jsonl")
         run_ids = _validate_schedule_manifest(run_manifest)
-        runs = _load_complete_runs(arguments.evidence, run_ids)
+        evidence_inputs = _open_held_evidence(arguments.evidence)
+        runs = _load_complete_runs(evidence_inputs, run_ids)
         bundle, key = build_blind_bundle(
             runs,
             cases,
@@ -1140,8 +1380,10 @@ def main(argv: list[str] | None = None) -> int:
         if current_manifest != run_manifest or current_provenance != prepared_provenance:
             raise BenchmarkError("blinding inputs changed before publication")
 
+        _verify_evidence_inputs(evidence_inputs)
         _atomic_create_pair(review_target, bundle, key_target, key)
         try:
+            _verify_evidence_inputs(evidence_inputs)
             verify_dataset_manifest(arguments.dataset)
             published_manifest, published_provenance = _validate_prepared_manifest(
                 arguments.dataset, arguments.evidence
@@ -1171,6 +1413,7 @@ def main(argv: list[str] | None = None) -> int:
                 or _read_published(key_target) != key_bytes
             ):
                 raise BenchmarkError("published blinded artifacts changed after validation")
+            _verify_evidence_inputs(evidence_inputs)
         except Exception as error:
             _rollback_targets((review_target, key_target))
             if isinstance(error, BenchmarkError):
@@ -1189,6 +1432,8 @@ def main(argv: list[str] | None = None) -> int:
             review_target.close()
         if key_target is not None:
             key_target.close()
+        if evidence_inputs is not None:
+            evidence_inputs.close()
 
 
 if __name__ == "__main__":
