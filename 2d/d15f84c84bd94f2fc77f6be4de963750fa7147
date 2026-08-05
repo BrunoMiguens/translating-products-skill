@@ -1,0 +1,39 @@
+tests/test_benchmark_review_app.py
+  s_51f69c54a42bb0::t_2ac5ac4807a353 490-519
+  s_51f69c54a42bb0::t_32ce8e5947ee92 8-9,122-150,190-197,209-239,241,243-276,349-366,424-489,520-545
+  s_51f69c54a42bb0::t_a4a1e986af2c35 240,242
+  s_51f69c54a42bb0::t_50ca58b278c8ff 546
+tests/test_benchmark_review_ui.js
+  s_51f69c54a42bb0::t_32ce8e5947ee92 1-29,31-54
+  s_51f69c54a42bb0::t_628a795cc9c2f8 30
+scripts/benchmark/review_ui/styles.css
+  s_51f69c54a42bb0::t_edb9bc5e638b81 51-64,157
+scripts/benchmark/review_app.py
+  s_51f69c54a42bb0::t_b1f089b8696e16 820,822
+  s_51f69c54a42bb0::t_6f03a104ecca00 771,774,776-785,789-804,806-808,810-811,813-814,821,823,840-841,850-851,863-867,887-890,924-927
+  s_51f69c54a42bb0::t_a3dee6b8208ad1 44-49,69,79-105,149-150,153-154,174,177-178,180,524,526-528,534,541-549,555-562,567-578,587-588,601,605-607,631,639-645,700
+  s_51f69c54a42bb0::t_a7c1b9aeb63539 550-554,563-566,579-586
+  s_51f69c54a42bb0::t_a46c0f15d79377 844,847-848,853-858
+  s_51f69c54a42bb0::t_ddacc40b770b83 928
+scripts/benchmark/review_ui/app.js
+  s_51f69c54a42bb0::t_edb9bc5e638b81 21,30-59,61-87,104-105,107-111,332-338,361,366,374-375,379,381,400,426,454,456-457,465-473,476-482,485,490-491,496-499,504,512-519,527-529,544-547,560-564,567,589-608
+  s_51f69c54a42bb0::t_c2be8d6d6ef447 60
+scripts/benchmark/review_ui/index.html
+  s_51f69c54a42bb0::t_edb9bc5e638b81 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "2dd15f84c84bd94f2fc77f6be4de963750fa7147",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
