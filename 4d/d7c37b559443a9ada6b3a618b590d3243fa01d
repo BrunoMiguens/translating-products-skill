@@ -1,0 +1,34 @@
+scripts/benchmark/blind.py
+  s_51f69c54a42bb0::t_5f7907ab85e3ff 1408-1413
+  s_51f69c54a42bb0::t_9df6ec54f636ba 1415
+  s_51f69c54a42bb0::t_8bc29050a75274 1378-1407,1414,1416-1418,1421-1422,1424,1442
+.superpowers/sdd/2026-08-03-pt-pt-translation-benchmark/task-5-nul-path-repair-report.md
+  s_51f69c54a42bb0::t_5c27b169d5590a 164-233
+tests/test_benchmark_blind.py
+  s_51f69c54a42bb0::t_f8d31f67079554 661-677,679,681,684-698,1121-1208
+  s_f95e3d316ad601::t_a9b5a0cfbbc9b6 1209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "4dd7c37b559443a9ada6b3a618b590d3243fa01d",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    },
+    "s_f95e3d316ad601": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc3c-6941-7f81-99e7-4b4f4f26fdf5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
