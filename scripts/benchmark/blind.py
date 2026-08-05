@@ -934,7 +934,7 @@ def _capture_regular_input(
             flags,
             dir_fd=directory_fd,
         )
-    except OSError as error:
+    except (OSError, ValueError, UnicodeError) as error:
         raise BenchmarkError(
             f"cannot securely open consumed input {location}/{name}: {error}"
         ) from error
@@ -962,7 +962,7 @@ def _capture_regular_input(
             or stat.S_IMODE(after.st_mode) != stat.S_IMODE(before.st_mode)
         ):
             raise BenchmarkError(f"consumed input changed while reading: {location}/{name}")
-    except OSError as error:
+    except (OSError, ValueError, UnicodeError) as error:
         raise BenchmarkError(
             f"cannot read consumed input {location}/{name}: {error}"
         ) from error
@@ -994,10 +994,17 @@ def _open_held_diff_artifact(dataset_manifest_bytes: bytes) -> _HeldDiffArtifact
     path_value = suite.get("diff_artifact")
     if not isinstance(path_value, str) or not path_value:
         raise BenchmarkError("dirty suite diff artifact path is malformed")
+    try:
+        encoded_path = os.fsencode(path_value)
+        path = Path(path_value)
+        encoded_parts = tuple(os.fsencode(part) for part in path.parts)
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise BenchmarkError("dirty suite diff artifact path is malformed") from error
+    if b"\x00" in encoded_path or any(b"\x00" in part for part in encoded_parts):
+        raise BenchmarkError("dirty suite diff artifact path is malformed")
     expected_sha256 = _require_sha256(
         suite.get("diff_sha256"), "suite diff hash"
     )
-    path = Path(path_value)
     if (
         not path.is_absolute()
         or path.name in {"", ".", ".."}
@@ -1041,10 +1048,12 @@ def _open_held_diff_artifact(dataset_manifest_bytes: bytes) -> _HeldDiffArtifact
             directories.append(
                 _HeldDirectoryComponent(component, _identity(held_component))
             )
-    except (OSError, BenchmarkError) as error:
+    except Exception as error:
         for descriptor in reversed(directory_fds):
             os.close(descriptor)
         if isinstance(error, BenchmarkError):
+            raise
+        if not isinstance(error, (OSError, ValueError, UnicodeError)):
             raise
         raise BenchmarkError(
             f"cannot securely traverse suite diff artifact path: {error}"

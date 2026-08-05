@@ -639,6 +639,39 @@ class BlindingCliTests(unittest.TestCase):
         self._bind_dirty_suite(artifact)
         return artifact
 
+    def _set_serialized_diff_path(self, path_text: str) -> bytes:
+        dataset_manifest_path = self.dataset / "dataset-manifest.json"
+        dataset_manifest = json.loads(dataset_manifest_path.read_text(encoding="utf-8"))
+        dataset_manifest["suite"]["diff_artifact"] = path_text
+        encoded = canonical_bytes(dataset_manifest)
+        dataset_manifest_path.write_bytes(encoded)
+        run_manifest_path = self.evidence / "run-manifest.json"
+        run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        run_manifest["dataset"]["manifest_sha256"] = sha256_bytes(encoded)
+        atomic_write_json(run_manifest_path, run_manifest)
+        return encoded
+
+    def _nul_diff_paths(self) -> tuple[tuple[str, str], ...]:
+        outer = self.root.resolve() / "nul-outer"
+        parent = outer / "middle" / "parent"
+        parent.mkdir(parents=True)
+        artifact = parent / "suite.diff"
+        artifact.write_text("diff --git a/input b/input\n+fixture\n", encoding="utf-8")
+        self._bind_dirty_suite(artifact)
+        parts = str(artifact).split(os.sep)
+        positions = (
+            ("first", -4),
+            ("middle", -3),
+            ("direct parent", -2),
+            ("endpoint", -1),
+        )
+        malformed: list[tuple[str, str]] = []
+        for label, index in positions:
+            changed = list(parts)
+            changed[index] = f"{changed[index]}\x00invalid"
+            malformed.append((label, os.sep.join(changed)))
+        return tuple(malformed)
+
     def cli_args(self, review: Path, key: Path) -> list[str]:
         return [
             "--dataset", str(self.dataset),
@@ -941,6 +974,87 @@ class BlindingCliTests(unittest.TestCase):
 
             with self.subTest(inside_dataset=inside_dataset):
                 self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_direct_diff_api_rejects_nul_in_every_component_without_leaking_descriptors(self):
+        """Break: malformed path text must not escape or retain an anchored descriptor."""
+        review = self.root / "nul-direct-review.json"
+        key = self.root / "nul-direct-key.json"
+        for label, path_text in self._nul_diff_paths():
+            manifest_bytes = self._set_serialized_diff_path(path_text)
+            before_fds = len(os.listdir("/dev/fd"))
+            with self.subTest(component=label), self.assertRaises(BenchmarkError):
+                blind._open_held_diff_artifact(manifest_bytes)
+            self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
+            self.assertFalse(review.exists())
+            self.assertFalse(key.exists())
+
+    def test_nul_path_validation_happens_before_the_anchor_is_opened(self):
+        """Break: cleanup must not substitute for validating every component up front."""
+        for label, path_text in self._nul_diff_paths():
+            manifest_bytes = self._set_serialized_diff_path(path_text)
+            with (
+                self.subTest(component=label),
+                mock.patch.object(
+                    blind.os,
+                    "open",
+                    side_effect=AssertionError("malformed path reached os.open"),
+                ),
+                self.assertRaises(BenchmarkError),
+            ):
+                blind._open_held_diff_artifact(manifest_bytes)
+
+    def test_module_cli_rejects_nul_in_every_component_without_traceback_or_outputs(self):
+        """Break: malformed serialized paths must be ordinary status-2 CLI diagnostics."""
+        for index, (label, path_text) in enumerate(self._nul_diff_paths()):
+            self._set_serialized_diff_path(path_text)
+            public_dir = self.root / f"public-nul-{index}"
+            private_dir = self.root / f"private-nul-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+            review = public_dir / "bundle.json"
+            key = private_dir / "key.json"
+
+            completed = self.run_cli(review, key, timeout=2)
+
+            with self.subTest(component=label):
+                self.assertEqual(completed.returncode, 2, completed.stdout)
+                self.assertEqual(completed.stdout, "")
+                self.assertTrue(completed.stderr.startswith("error: "), completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+                self.assertFalse(review.exists())
+                self.assertFalse(key.exists())
+
+    def test_external_diff_walk_closes_descriptors_in_reverse_on_unexpected_failure(self):
+        """Break: every pre-transfer traversal exception must release the anchored chain."""
+        artifact = self._dirty_diff("unexpected-walk-failure")
+        manifest_bytes = (self.dataset / "dataset-manifest.json").read_bytes()
+        original_open = os.open
+        original_close = os.close
+        opened: list[int] = []
+        closed: list[int] = []
+
+        def fail_after_ancestors(path, flags, *args, **kwargs):
+            if path == artifact.parent.name and kwargs.get("dir_fd") is not None:
+                raise RuntimeError("injected traversal failure")
+            descriptor = original_open(path, flags, *args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+
+        def record_close(descriptor: int) -> None:
+            closed.append(descriptor)
+            original_close(descriptor)
+
+        before_fds = len(os.listdir("/dev/fd"))
+        with (
+            mock.patch.object(blind.os, "open", fail_after_ancestors),
+            mock.patch.object(blind.os, "close", record_close),
+            self.assertRaisesRegex(RuntimeError, "injected traversal failure"),
+        ):
+            blind._open_held_diff_artifact(manifest_bytes)
+
+        self.assertGreater(len(opened), 1)
+        self.assertEqual(closed, list(reversed(opened)))
+        self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
 
     def test_cli_rejects_dirty_diff_symlink_and_parent_aliases(self):
         """Break: dirty provenance must not follow an artifact or parent-directory symlink."""
