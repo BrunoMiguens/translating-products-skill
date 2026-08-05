@@ -29,6 +29,8 @@ MQM_DIMENSIONS = frozenset({
 MQM_SEVERITIES = frozenset({"critical", "major", "minor", "neutral"})
 MAJOR_SEVERITIES = frozenset({"critical", "major"})
 MAX_BODY_BYTES = 1024 * 1024
+MAX_JSON_INTEGER_DIGITS = 4096
+MAX_JSON_NESTING = 256
 CSP = "default-src 'self'; connect-src 'self'; img-src 'none'; object-src 'none'"
 UI_DIRECTORY = Path(__file__).with_name("review_ui")
 
@@ -362,14 +364,48 @@ def _append_artifact(directory_fd: int, name: str, data: bytes) -> None:
         raise BenchmarkError(f"cannot append artifact {name}: {error}") from error
 
 
-def _parse_json_bytes(data: bytes, description: str) -> object:
+def _bounded_json_integer(token: str) -> int:
+    digits = token[1:] if token.startswith("-") else token
+    if len(digits) > MAX_JSON_INTEGER_DIGITS:
+        raise ValueError(f"JSON integer exceeds {MAX_JSON_INTEGER_DIGITS} digits")
+    return int(token)
+
+
+def _reject_json_constant(token: str) -> object:
+    raise ValueError(f"invalid JSON constant {token!r}")
+
+
+def _validate_json_nesting(value: object) -> None:
+    pending = [(value, 0)]
+    while pending:
+        current, depth = pending.pop()
+        if depth > MAX_JSON_NESTING:
+            raise ValueError(f"JSON nesting exceeds {MAX_JSON_NESTING} levels")
+        if isinstance(current, dict):
+            pending.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            pending.extend((item, depth + 1) for item in current)
+
+
+def _decode_json_bytes(data: bytes, description: str) -> object:
     try:
-        value = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_object)
-    except (UnicodeDecodeError, UnicodeEncodeError, json.JSONDecodeError, RecursionError) as error:
+        value = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_int=_bounded_json_integer,
+            parse_constant=_reject_json_constant,
+        )
+        _validate_json_nesting(value)
+    except (ValueError, RecursionError, OverflowError, UnicodeError) as error:
         raise BenchmarkError(f"invalid {description}: {error}") from error
+    return value
+
+
+def _parse_json_bytes(data: bytes, description: str) -> object:
+    value = _decode_json_bytes(data, description)
     try:
         encoded = canonical_bytes(value)
-    except (TypeError, ValueError, UnicodeEncodeError, RecursionError) as error:
+    except (TypeError, ValueError, RecursionError, OverflowError, UnicodeError) as error:
         raise BenchmarkError(f"invalid {description}: {error}") from error
     if encoded != data:
         raise BenchmarkError(f"{description} is not canonical JSON")
@@ -873,10 +909,8 @@ class _ReviewHandler(BaseHTTPRequestHandler):
             self._error(400, "invalid_body", "request body ended early")
             return None
         try:
-            return json.loads(body.decode("utf-8"), object_pairs_hook=_unique_object)
-        except (
-            BenchmarkError, UnicodeDecodeError, json.JSONDecodeError, RecursionError,
-        ):
+            return _decode_json_bytes(body, "request JSON")
+        except BenchmarkError:
             self._error(400, "invalid_json", "request body must be valid UTF-8 JSON")
             return None
 

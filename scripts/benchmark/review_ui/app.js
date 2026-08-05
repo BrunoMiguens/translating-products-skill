@@ -68,8 +68,13 @@ function lockAllowed(reviewState, uiState) {
     && uiState.saving === false;
 }
 
-function interactionLocked(reviewState, uiState) {
-  return reviewState.locked === true || uiState.saving === true;
+function interactionState(reviewState, uiState, index, itemCount) {
+  const navigationDisabled = uiState.saving === true;
+  return {
+    formLocked: reviewState.locked === true || navigationDisabled,
+    previousDisabled: navigationDisabled || index <= 0,
+    nextDisabled: navigationDisabled || index >= itemCount - 1,
+  };
 }
 
 function saveSettlement(submittedGeneration, currentGeneration, formChanged = false) {
@@ -330,10 +335,12 @@ function setFormLocked(locked) {
 }
 
 function setInteractionState() {
-  const locked = interactionLocked(state.review, state);
-  setFormLocked(locked);
-  byId("previous-item").disabled = locked || state.index === 0;
-  byId("next-item").disabled = locked || state.index === state.bundle.items.length - 1;
+  const controls = interactionState(
+    state.review, state, state.index, state.bundle.items.length,
+  );
+  setFormLocked(controls.formLocked);
+  byId("previous-item").disabled = controls.previousDisabled;
+  byId("next-item").disabled = controls.nextDisabled;
 }
 
 function renderCurrent() {
@@ -590,7 +597,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     allowNavigation,
     applyProgress,
-    interactionLocked,
+    interactionState,
     labelsFor,
     lockAllowed,
     nextRevision,

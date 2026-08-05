@@ -11,12 +11,14 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.benchmark.common import BenchmarkError, canonical_bytes, read_json, read_jsonl
 from scripts.benchmark.review_app import (
     MAX_BODY_BYTES,
     CSP,
     ReviewStore,
+    _parse_json_bytes,
     create_server,
     validate_annotation,
 )
@@ -55,6 +57,10 @@ def valid_annotation(review_item: dict, *, revision: int = 1) -> dict:
         "major_or_worse": {label: False for label in labels},
         "note": "Natural product wording.",
     }
+
+
+def nested_json(depth: int) -> bytes:
+    return b"[" * depth + b"0" + b"]" * depth
 
 
 class AnnotationValidationTests(unittest.TestCase):
@@ -147,6 +153,43 @@ class AnnotationValidationTests(unittest.TestCase):
                     event["mqm"][0][field] = malformed
                 with self.assertRaisesRegex(BenchmarkError, message):
                     validate_annotation(review_item, event)
+
+
+class ReviewJsonBoundaryTests(unittest.TestCase):
+    def test_parser_accepts_exact_integer_and_nesting_limits(self):
+        for token in (b"7" * 4096, b"-" + b"7" * 4096):
+            with self.subTest(sign=token[:1]):
+                parsed = _parse_json_bytes(token + b"\n", "boundary JSON")
+                self.assertEqual(parsed < 0, token.startswith(b"-"))
+
+        parsed = _parse_json_bytes(nested_json(256) + b"\n", "boundary JSON")
+        depth = 0
+        while isinstance(parsed, list):
+            depth += 1
+            parsed = parsed[0]
+        self.assertEqual((depth, parsed), (256, 0))
+
+    def test_parser_rejects_large_integers_deep_nesting_and_library_resource_errors(self):
+        for token in (b"8" * 5000, b"-" + b"8" * 5000):
+            with self.subTest(sign=token[:1]):
+                with self.assertRaisesRegex(BenchmarkError, "integer exceeds 4096 digits"):
+                    _parse_json_bytes(token + b"\n", "bounded JSON")
+
+        with self.assertRaisesRegex(BenchmarkError, "nesting exceeds 256 levels"):
+            _parse_json_bytes(nested_json(257) + b"\n", "bounded JSON")
+        with self.assertRaisesRegex(BenchmarkError, "duplicate JSON field"):
+            _parse_json_bytes(b'{"x":1,"x":2}\n', "bounded JSON")
+
+        for error in (
+            ValueError("plain value failure"),
+            RecursionError("recursive failure"),
+            OverflowError("overflow failure"),
+            UnicodeError("unicode failure"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                with patch("scripts.benchmark.review_app.json.loads", side_effect=error):
+                    with self.assertRaisesRegex(BenchmarkError, "invalid bounded JSON"):
+                        _parse_json_bytes(b"{}\n", "bounded JSON")
 
 
 class ReviewStoreTests(unittest.TestCase):
@@ -273,6 +316,119 @@ class ReviewStoreTests(unittest.TestCase):
                 with self.assertRaisesRegex(BenchmarkError, "reviewer_id"):
                     store.lock(reviewer_id=reviewer_id)
                 self.assertFalse(store.lock_path.exists())
+
+    def test_every_persisted_json_artifact_bounds_integer_conversion(self):
+        positive = b"9" * 5000
+        negative = b"-" + b"9" * 5000
+
+        bundle_path = self.directory / "oversized-bundle.json"
+        bundle_path.write_bytes(
+            canonical_bytes(bundle(item())).replace(
+                b'"schema_version":1', b'"schema_version":' + positive,
+            )
+        )
+        bundle_directory = self.directory / "bundle-artifacts"
+        bundle_directory.mkdir()
+        with self.assertRaisesRegex(BenchmarkError, "review bundle.*integer exceeds 4096 digits"):
+            ReviewStore(bundle_path, bundle_directory)
+
+        state_directory = self.directory / "state-artifacts"
+        state_directory.mkdir()
+        state_store = ReviewStore(bundle(item()), state_directory)
+        state_store.state_path.write_bytes(
+            state_store.state_path.read_bytes().replace(
+                b'"last_sequence":0', b'"last_sequence":' + negative,
+            )
+        )
+        state_store.close()
+        with self.assertRaisesRegex(
+            BenchmarkError, "annotation state.*integer exceeds 4096 digits",
+        ):
+            ReviewStore(bundle(item()), state_directory)
+
+        event_directory = self.directory / "event-artifacts"
+        event_directory.mkdir()
+        event_store = ReviewStore(bundle(item()), event_directory)
+        event_store.append(valid_annotation(event_store.item("item-1")))
+        event_store.events_path.write_bytes(
+            event_store.events_path.read_bytes().replace(
+                b'"revision":1', b'"revision":' + positive,
+            )
+        )
+        event_store.close()
+        with self.assertRaisesRegex(
+            BenchmarkError, "annotations line 1.*integer exceeds 4096 digits",
+        ):
+            ReviewStore(bundle(item()), event_directory)
+
+        lock_directory = self.directory / "lock-artifacts"
+        lock_directory.mkdir()
+        lock_store = ReviewStore(bundle(item()), lock_directory)
+        lock_store.append(valid_annotation(lock_store.item("item-1")))
+        lock_store.lock(reviewer_id="reviewer")
+        lock_store.lock_path.write_bytes(
+            lock_store.lock_path.read_bytes().replace(
+                b'"schema_version":1', b'"schema_version":' + negative,
+            )
+        )
+        lock_store.close()
+        with self.assertRaisesRegex(
+            BenchmarkError, "annotation lock.*integer exceeds 4096 digits",
+        ):
+            ReviewStore(bundle(item()), lock_directory)
+
+    def test_every_persisted_json_artifact_rejects_depth_overflow(self):
+        too_deep = json.loads(nested_json(257))
+
+        deep_bundle = bundle(item())
+        deep_bundle["items"][0]["source"] = too_deep
+        bundle_path = self.directory / "deep-bundle.json"
+        bundle_path.write_bytes(canonical_bytes(deep_bundle))
+        bundle_directory = self.directory / "deep-bundle-artifacts"
+        bundle_directory.mkdir()
+        with self.assertRaisesRegex(
+            BenchmarkError, "review bundle.*nesting exceeds 256 levels",
+        ):
+            ReviewStore(bundle_path, bundle_directory)
+
+        state_directory = self.directory / "deep-state-artifacts"
+        state_directory.mkdir()
+        state_store = ReviewStore(bundle(item()), state_directory)
+        deep_state = read_json(state_store.state_path)
+        deep_state["latest"] = too_deep
+        state_store.state_path.write_bytes(canonical_bytes(deep_state))
+        state_store.close()
+        with self.assertRaisesRegex(
+            BenchmarkError, "annotation state.*nesting exceeds 256 levels",
+        ):
+            ReviewStore(bundle(item()), state_directory)
+
+        event_directory = self.directory / "deep-event-artifacts"
+        event_directory.mkdir()
+        event_store = ReviewStore(bundle(item()), event_directory)
+        event_store.append(valid_annotation(event_store.item("item-1")))
+        deep_event = read_jsonl(event_store.events_path)[0]
+        deep_event["note"] = too_deep
+        event_store.events_path.write_bytes(canonical_bytes(deep_event))
+        event_store.close()
+        with self.assertRaisesRegex(
+            BenchmarkError, "annotations line 1.*nesting exceeds 256 levels",
+        ):
+            ReviewStore(bundle(item()), event_directory)
+
+        lock_directory = self.directory / "deep-lock-artifacts"
+        lock_directory.mkdir()
+        lock_store = ReviewStore(bundle(item()), lock_directory)
+        lock_store.append(valid_annotation(lock_store.item("item-1")))
+        lock_store.lock(reviewer_id="reviewer")
+        deep_lock = read_json(lock_store.lock_path)
+        deep_lock["reviewer_id"] = too_deep
+        lock_store.lock_path.write_bytes(canonical_bytes(deep_lock))
+        lock_store.close()
+        with self.assertRaisesRegex(
+            BenchmarkError, "annotation lock.*nesting exceeds 256 levels",
+        ):
+            ReviewStore(bundle(item()), lock_directory)
 
     def test_complete_queue_locks_exact_bytes_and_disables_writes(self):
         review_bundle = bundle(item("item-1"), item("item-2", three_outputs=False))
@@ -433,6 +589,57 @@ class ReviewHttpTests(unittest.TestCase):
         self.assertEqual(headers["Content-Security-Policy"], CSP)
         self.assertEqual(json.loads(payload)["error"]["code"], "validation_error")
         self.assertEqual(payload, canonical_bytes(json.loads(payload)))
+        self.assertFalse(self.store.events_path.exists())
+
+        status, headers, _ = self.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+
+    def test_untrusted_json_resource_limits_return_canonical_400_and_keep_serving(self):
+        annotation = canonical_bytes(valid_annotation(self.store.item("item-1")))
+        requests = (
+            (annotation.replace(b'"revision":1', b'"revision":' + b"9" * 5000), "invalid_json"),
+            (annotation.replace(b'"revision":1', b'"revision":-' + b"9" * 5000), "invalid_json"),
+            (b'{"payload":' + nested_json(256) + b"}", "invalid_json"),
+            (b'{"payload":' + nested_json(2000) + b"}", "invalid_json"),
+            (b'{"confidence":"high","confidence":"low"}', "invalid_json"),
+            (b'\xff', "invalid_json"),
+        )
+        for body, code in requests:
+            with self.subTest(size=len(body), prefix=body[:24]):
+                status, headers, payload = self.request(
+                    "POST", "/api/annotations", body,
+                    Origin=self.origin, **{"Content-Type": "application/json"},
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(headers["Content-Security-Policy"], CSP)
+                self.assertEqual(json.loads(payload)["error"]["code"], code)
+                self.assertEqual(payload, canonical_bytes(json.loads(payload)))
+
+                status, headers, _ = self.request("GET", "/api/state")
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Content-Security-Policy"], CSP)
+
+        boundary_annotation = annotation.replace(
+            b'"revision":1', b'"revision":' + b"7" * 4096,
+        )
+        status, headers, payload = self.request(
+            "POST", "/api/annotations", boundary_annotation,
+            Origin=self.origin, **{"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "validation_error")
+        self.assertFalse(self.store.events_path.exists())
+
+        boundary_depth = b'{"payload":' + nested_json(255) + b"}"
+        status, headers, payload = self.request(
+            "POST", "/api/annotations", boundary_depth,
+            Origin=self.origin, **{"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "validation_error")
         self.assertFalse(self.store.events_path.exists())
 
         status, headers, _ = self.request("GET", "/api/state")

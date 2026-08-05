@@ -35,8 +35,35 @@ assert.equal(logic.lockAllowed(complete, { dirty: true, saving: false }), false)
 assert.equal(logic.lockAllowed(complete, { dirty: false, saving: true }), false);
 assert.equal(logic.lockAllowed({ ...complete, remaining: 1 }, { dirty: false, saving: false }), false);
 assert.equal(logic.lockAllowed({ ...complete, locked: true }, { dirty: false, saving: false }), false);
-assert.equal(logic.interactionLocked({ locked: true }, { saving: false }), true);
-assert.equal(logic.interactionLocked({ locked: false }, { saving: true }), true);
+
+assert.deepEqual(
+  logic.interactionState({ locked: true }, { saving: false }, 1, 3),
+  { formLocked: true, previousDisabled: false, nextDisabled: false },
+);
+assert.deepEqual(
+  logic.interactionState({ locked: true }, { saving: false }, 0, 3),
+  { formLocked: true, previousDisabled: true, nextDisabled: false },
+);
+assert.deepEqual(
+  logic.interactionState({ locked: true }, { saving: false }, 2, 3),
+  { formLocked: true, previousDisabled: false, nextDisabled: true },
+);
+assert.deepEqual(
+  logic.interactionState({ locked: false }, { saving: true }, 1, 3),
+  { formLocked: true, previousDisabled: true, nextDisabled: true },
+);
+assert.deepEqual(
+  logic.interactionState({ locked: false }, { saving: false }, 1, 3),
+  { formLocked: false, previousDisabled: false, nextDisabled: false },
+);
+assert.deepEqual(
+  logic.interactionState({ locked: false }, { saving: false }, 0, 3),
+  { formLocked: false, previousDisabled: true, nextDisabled: false },
+);
+assert.deepEqual(
+  logic.interactionState({ locked: false }, { saving: false }, 2, 3),
+  { formLocked: false, previousDisabled: false, nextDisabled: true },
+);
 
 assert.deepEqual(logic.saveSettlement(4, 4), { dirty: false, newerEdits: false });
 assert.deepEqual(logic.saveSettlement(4, 5), { dirty: true, newerEdits: true });
