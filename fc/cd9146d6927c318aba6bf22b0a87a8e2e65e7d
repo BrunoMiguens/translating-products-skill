@@ -1,0 +1,33 @@
+scripts/benchmark/review_ui/app.js
+  s_51f69c54a42bb0::t_56f4d5bb9e9814 71-77,338-343,600
+tests/test_benchmark_review_app.py
+  s_51f69c54a42bb0::t_ef084e3517f6f6 14,21,158-194,320-325,329-343,347-358,362-374,378-388,392-400,404-413,417-427,431-432,598-627
+  s_51f69c54a42bb0::t_c1708ca705539b 628-633,635-644,647
+  s_51f69c54a42bb0::t_230746bdfe8162 62-63
+  s_51f69c54a42bb0::t_15a834d06f12de 326-328,344-346,359-361,375-377,389-391,401-403,414-416,428-430
+  s_51f69c54a42bb0::t_b75cc900354f7a 64-65
+  s_51f69c54a42bb0::t_d04da74ed148dc 634
+  s_51f69c54a42bb0::t_8dcd29f6d4d71c 645-646
+  s_51f69c54a42bb0::t_7ea771a3d323fe 648
+scripts/benchmark/review_app.py
+  s_51f69c54a42bb0::t_1797767d8fb5ae 32-33,367-390,392-399,401-405,408,912-913
+tests/test_benchmark_review_ui.js
+  s_51f69c54a42bb0::t_70ce3c7580d937 59-66
+  s_51f69c54a42bb0::t_a2152032f555f7 38-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "fccd9146d6927c318aba6bf22b0a87a8e2e65e7d",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
