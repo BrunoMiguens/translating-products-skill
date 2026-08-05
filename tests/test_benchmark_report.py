@@ -133,6 +133,7 @@ def fixed_report_provenance(scores: dict | None = None) -> dict:
         },
         "review_bindings": {
             "blind_bundle_sha256": scores["provenance"]["review_bundle_sha256"],
+            "condition_key_sha256": scores["provenance"]["condition_key_sha256"],
             "annotations_sha256": scores["provenance"]["annotations_sha256"],
             "annotation_lock_sha256": scores["provenance"]["annotation_lock_sha256"],
         },
@@ -341,6 +342,125 @@ class ReportFixRoundTests(unittest.TestCase):
                 with self.assertRaises(BenchmarkError):
                     render_report(scores, mutation)
 
+    def test_condition_key_digest_is_exact_bound_provenance_without_private_mapping(self):
+        """Break: report provenance could omit or misbind the frozen condition-key artifact."""
+        scores = fixed_score_document()
+        provenance = fixed_report_provenance(scores)
+        provenance["review_bindings"]["condition_key_sha256"] = (
+            scores["provenance"]["condition_key_sha256"]
+        )
+
+        result_bytes, markdown = render_report(scores, provenance)
+        result = json.loads(result_bytes)
+        expected = "5" * 64
+        self.assertEqual(
+            result["report_provenance"]["review_bindings"]["condition_key_sha256"],
+            expected,
+        )
+        text = markdown.decode()
+        self.assertIn(expected, text)
+        self.assertNotIn("private_labels", text)
+        self.assertNotIn('"A": "suite"', text)
+
+        for replacement in ("A" * 64, "0" * 64):
+            with self.subTest(replacement=replacement):
+                mutation = copy.deepcopy(provenance)
+                mutation["review_bindings"]["condition_key_sha256"] = replacement
+                with self.assertRaises(BenchmarkError):
+                    render_report(scores, mutation)
+
+        missing = copy.deepcopy(provenance)
+        del missing["review_bindings"]["condition_key_sha256"]
+        with self.assertRaises(BenchmarkError):
+            render_report(scores, missing)
+
+    def test_retry_history_enforces_a_single_backward_attempt_chain(self):
+        """Break: retry provenance could accept cycles, forward links, or impossible attempts."""
+        scores = fixed_score_document()
+
+        def attempt(
+            run_id: str,
+            number: int,
+            outcome: str,
+            retry_of: str | None,
+            retry_reason: str | None,
+        ) -> dict:
+            return {
+                "run_id": run_id,
+                "attempt": number,
+                "outcome": outcome,
+                "retry_of": retry_of,
+                "retry_reason": retry_reason,
+                "started_at": available("2026-08-03T00:00:00Z"),
+                "completed_at": available("2026-08-03T00:00:01Z"),
+            }
+
+        valid_chain = [
+            attempt("run-1", 1, "infrastructure_failure", None, None),
+            attempt("run-2", 2, "timeout", "run-1", "retry one"),
+            attempt("run-3", 3, "success", "run-2", "retry two"),
+        ]
+        valid = fixed_report_provenance(scores)
+        valid["attempt_history"] = valid_chain
+        valid["raw_outputs"] = [
+            {"run_id": "run-1", "sha256": "d" * 64},
+            {"run_id": "run-2", "sha256": "e" * 64},
+            {"run_id": "run-3", "sha256": "f" * 64},
+        ]
+        render_report(scores, valid)
+
+        invalid_histories = {
+            "self": [attempt("run-1", 1, "timeout", "run-1", "self")],
+            "two-cycle": [
+                attempt("run-1", 2, "timeout", "run-2", "cycle"),
+                attempt("run-2", 2, "timeout", "run-1", "cycle"),
+            ],
+            "long-cycle": [
+                attempt("run-1", 3, "timeout", "run-3", "cycle"),
+                attempt("run-2", 2, "timeout", "run-1", "cycle"),
+                attempt("run-3", 3, "timeout", "run-2", "cycle"),
+            ],
+            "forward": [
+                attempt("run-1", 2, "timeout", "run-2", "forward"),
+                attempt("run-2", 1, "timeout", None, None),
+            ],
+            "unknown": [attempt("run-1", 2, "timeout", "missing", "unknown")],
+            "missing-reason": [
+                attempt("run-1", 1, "timeout", None, None),
+                attempt("run-2", 2, "success", "run-1", None),
+            ],
+            "reason-without-predecessor": [
+                attempt("run-1", 1, "timeout", None, "unexpected")
+            ],
+            "duplicate-run-id": [
+                attempt("run-1", 1, "timeout", None, None),
+                attempt("run-1", 2, "success", "run-1", "duplicate"),
+            ],
+            "root-attempt-not-one": [
+                attempt("run-1", 2, "timeout", None, None)
+            ],
+            "skipped-attempt": [
+                attempt("run-1", 1, "timeout", None, None),
+                attempt("run-2", 3, "success", "run-1", "skipped"),
+            ],
+            "retry-after-success": [
+                attempt("run-1", 1, "success", None, None),
+                attempt("run-2", 2, "success", "run-1", "impossible"),
+            ],
+            "branching-predecessor": [
+                attempt("run-1", 1, "timeout", None, None),
+                attempt("run-2", 2, "timeout", "run-1", "first"),
+                attempt("run-3", 2, "success", "run-1", "branch"),
+            ],
+        }
+        for name, history in invalid_histories.items():
+            with self.subTest(name=name):
+                provenance = fixed_report_provenance(scores)
+                provenance["attempt_history"] = history
+                provenance["raw_outputs"] = []
+                with self.assertRaises(BenchmarkError):
+                    render_report(scores, provenance)
+
     def test_markdown_neutralizes_links_images_code_emphasis_html_urls_and_format_controls(self):
         """Break: an untrusted label could trigger remote content or deceptive Markdown display."""
         scores = fixed_score_document()
@@ -396,6 +516,19 @@ class ReportInputIdentityTests(unittest.TestCase):
             "--results", str(self.results if results is None else results),
             "--markdown", str(self.markdown if markdown is None else markdown),
         ]
+
+    def write_expected_pair(self) -> tuple[bytes, bytes]:
+        expected = render_report(self.scores_value, self.provenance_value)
+        self.results.write_bytes(expected[0])
+        self.markdown.write_bytes(expected[1])
+        return expected
+
+    def replace_output(self, target: Path, encoded: bytes = b"tampered") -> None:
+        replacement = target.with_name(target.name + ".replacement")
+        if replacement.exists():
+            replacement.unlink()
+        replacement.write_bytes(encoded)
+        replacement.replace(target)
 
     def test_held_score_and_provenance_replacements_roll_back_publication(self):
         """Break: same-byte input replacement during rendering could still publish a pair."""
@@ -463,6 +596,140 @@ class ReportInputIdentityTests(unittest.TestCase):
             )
 
         self.assertEqual(completed, 2)
+
+    def test_verify_existing_rechecks_replacements_after_each_initial_read(self):
+        """Break: replacing either output after its first read could still verify successfully."""
+        for trigger, target in ((1, self.results), (2, self.markdown)):
+            with self.subTest(target=target.name):
+                for path in (self.results, self.markdown):
+                    if path.exists():
+                        path.unlink()
+                self.write_expected_pair()
+                original = report._read_exact
+                calls = 0
+
+                def replace_after_read(*args, **kwargs):
+                    nonlocal calls
+                    held_output = original(*args, **kwargs)
+                    calls += 1
+                    if calls == trigger:
+                        self.replace_output(target)
+                    return held_output
+
+                with mock.patch.object(report, "_read_exact", side_effect=replace_after_read):
+                    with mock.patch("sys.stderr"):
+                        status = report.main(self.argv() + ["--verify-existing"])
+                self.assertEqual(status, 2)
+                self.assertEqual(target.read_bytes(), b"tampered")
+
+    def test_both_modes_recheck_replacements_during_input_acceptance(self):
+        """Break: an output swap while accepting inputs could escape the earlier output checks."""
+        for verify_existing in (False, True):
+            for target in (self.results, self.markdown):
+                with self.subTest(verify_existing=verify_existing, target=target.name):
+                    for path in (self.results, self.markdown):
+                        if path.exists():
+                            path.unlink()
+                    if verify_existing:
+                        self.write_expected_pair()
+                    original = report._verify_held_input
+                    injected = False
+
+                    def replace_during_acceptance(value):
+                        nonlocal injected
+                        original(value)
+                        if not injected:
+                            injected = True
+                            self.replace_output(target)
+
+                    arguments = self.argv() + (["--verify-existing"] if verify_existing else [])
+                    with mock.patch.object(
+                        report, "_verify_held_input", side_effect=replace_during_acceptance
+                    ):
+                        with mock.patch("sys.stderr"):
+                            status = report.main(arguments)
+                    self.assertEqual(status, 2)
+                    self.assertEqual(target.read_bytes(), b"tampered")
+
+    def test_both_modes_recheck_replacements_after_each_name_verification(self):
+        """Break: swapping a name after a successful stat could create a false acceptance."""
+        real_stat = os.stat
+        for verify_existing in (False, True):
+            for target in (self.results, self.markdown):
+                with self.subTest(verify_existing=verify_existing, target=target.name):
+                    for path in (self.results, self.markdown):
+                        if path.exists():
+                            path.unlink()
+                    if verify_existing:
+                        self.write_expected_pair()
+                    injected = False
+
+                    def replace_after_name(path, *args, **kwargs):
+                        nonlocal injected
+                        metadata = real_stat(path, *args, **kwargs)
+                        if (
+                            not injected
+                            and kwargs.get("dir_fd") is not None
+                            and os.fspath(path) == target.name
+                        ):
+                            injected = True
+                            self.replace_output(target)
+                        return metadata
+
+                    arguments = self.argv() + (["--verify-existing"] if verify_existing else [])
+                    with mock.patch.object(report.os, "stat", side_effect=replace_after_name):
+                        with mock.patch("sys.stderr"):
+                            status = report.main(arguments)
+                    self.assertEqual(status, 2)
+                    self.assertTrue(injected)
+                    self.assertEqual(target.read_bytes(), b"tampered")
+
+    def test_both_modes_reject_unlink_rename_hardlink_and_content_mutations(self):
+        """Break: final acceptance could miss non-replacement output identity mutations."""
+        for verify_existing in (False, True):
+            for target in (self.results, self.markdown):
+                for mutation in ("unlink", "rename", "hardlink", "content"):
+                    with self.subTest(
+                        verify_existing=verify_existing,
+                        target=target.name,
+                        mutation=mutation,
+                    ):
+                        sidecar = target.with_name(target.name + "." + mutation)
+                        for path in (self.results, self.markdown, sidecar):
+                            if path.exists():
+                                path.unlink()
+                        if verify_existing:
+                            self.write_expected_pair()
+                        original = report._verify_held_input
+                        injected = False
+
+                        def mutate_during_acceptance(value):
+                            nonlocal injected
+                            original(value)
+                            if injected:
+                                return
+                            injected = True
+                            if mutation == "unlink":
+                                target.unlink()
+                            elif mutation == "rename":
+                                target.replace(sidecar)
+                            elif mutation == "hardlink":
+                                os.link(target, sidecar)
+                            else:
+                                target.write_bytes(b"tampered")
+
+                        arguments = self.argv() + (
+                            ["--verify-existing"] if verify_existing else []
+                        )
+                        with mock.patch.object(
+                            report,
+                            "_verify_held_input",
+                            side_effect=mutate_during_acceptance,
+                        ):
+                            with mock.patch("sys.stderr"):
+                                status = report.main(arguments)
+                        self.assertEqual(status, 2)
+                        self.assertTrue(injected)
 
 
 class ReportCliTests(unittest.TestCase):

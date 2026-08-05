@@ -550,12 +550,17 @@ def _validate_report_provenance(
     if not isinstance(attempts, list):
         raise BenchmarkError("report provenance attempt_history must be a list")
     attempt_ids: list[str] = []
-    retry_targets: list[str] = []
+    attempt_records: dict[str, Mapping[str, object]] = {}
+    retried_predecessors: set[str] = set()
     for index, attempt in enumerate(attempts):
         record = _object(attempt, _ATTEMPT_FIELDS, f"attempt history {index}")
         run_id = _text(record["run_id"], f"attempt history {index} run_id")
+        if run_id in attempt_records:
+            raise BenchmarkError("attempt history run IDs must be unique")
         attempt_ids.append(run_id)
-        _integer(record["attempt"], f"attempt history {index} attempt", minimum=1)
+        attempt_number = _integer(
+            record["attempt"], f"attempt history {index} attempt", minimum=1
+        )
         if record["outcome"] not in _ATTEMPT_OUTCOMES:
             raise BenchmarkError(f"attempt history {index} outcome is invalid")
         retry_of = record["retry_of"]
@@ -563,9 +568,33 @@ def _validate_report_provenance(
         if retry_of is None:
             if retry_reason is not None:
                 raise BenchmarkError(f"attempt history {index} retry reason has no retry target")
+            if attempt_number != 1:
+                raise BenchmarkError(
+                    f"attempt history {index} root attempt must be one"
+                )
         else:
-            retry_targets.append(_text(retry_of, f"attempt history {index} retry_of"))
+            retry_of = _text(retry_of, f"attempt history {index} retry_of")
             _text(retry_reason, f"attempt history {index} retry_reason")
+            if retry_of == run_id:
+                raise BenchmarkError(f"attempt history {index} cannot retry itself")
+            predecessor = attempt_records.get(retry_of)
+            if predecessor is None:
+                raise BenchmarkError(
+                    f"attempt history {index} retry target must be an earlier record"
+                )
+            if predecessor["outcome"] == "success":
+                raise BenchmarkError(
+                    f"attempt history {index} cannot retry a successful predecessor"
+                )
+            if attempt_number != predecessor["attempt"] + 1:
+                raise BenchmarkError(
+                    f"attempt history {index} attempt does not follow its predecessor"
+                )
+            if retry_of in retried_predecessors:
+                raise BenchmarkError(
+                    f"attempt history {index} predecessor already has a retry"
+                )
+            retried_predecessors.add(retry_of)
         started = _timestamp_binding(record["started_at"], f"attempt history {index} started_at")
         completed = _timestamp_binding(record["completed_at"], f"attempt history {index} completed_at")
         if started.get("status") == "available" and completed.get("status") == "available":
@@ -573,10 +602,9 @@ def _validate_report_provenance(
             end_value = datetime.strptime(completed["value"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
             if end_value < start_value:
                 raise BenchmarkError(f"attempt history {index} completion precedes start")
-    if attempt_ids != sorted(set(attempt_ids)):
-        raise BenchmarkError("attempt history run IDs must be unique and sorted")
-    if any(target not in set(attempt_ids) for target in retry_targets):
-        raise BenchmarkError("attempt history retry target is unknown")
+        attempt_records[run_id] = record
+    if attempt_ids != sorted(attempt_ids):
+        raise BenchmarkError("attempt history run IDs must be sorted")
 
     raw_outputs = provenance["raw_outputs"]
     if not isinstance(raw_outputs, list):
@@ -612,11 +640,15 @@ def _validate_report_provenance(
 
     review_bindings = _object(
         provenance["review_bindings"],
-        {"blind_bundle_sha256", "annotations_sha256", "annotation_lock_sha256"},
+        {
+            "blind_bundle_sha256", "condition_key_sha256",
+            "annotations_sha256", "annotation_lock_sha256",
+        },
         "report provenance review bindings",
     )
     for field, score_field in (
         ("blind_bundle_sha256", "review_bundle_sha256"),
+        ("condition_key_sha256", "condition_key_sha256"),
         ("annotations_sha256", "annotations_sha256"),
         ("annotation_lock_sha256", "annotation_lock_sha256"),
     ):
@@ -965,6 +997,7 @@ def _render_markdown(
         ["Learned metrics", _binding_summary(report_provenance["result_bindings"]["learned_metrics"])],
         ["Review mappings", _binding_summary(report_provenance["result_bindings"]["review_mappings"])],
         ["Blind review bundle", report_provenance["review_bindings"]["blind_bundle_sha256"]],
+        ["Condition-key artifact", report_provenance["review_bindings"]["condition_key_sha256"]],
         ["Annotations", report_provenance["review_bindings"]["annotations_sha256"]],
         ["Annotation lock", report_provenance["review_bindings"]["annotation_lock_sha256"]],
     ]
@@ -1054,6 +1087,35 @@ class _HeldInput:
         if self.descriptor >= 0:
             os.close(self.descriptor)
             self.descriptor = -1
+
+
+@dataclass
+class _HeldOutput:
+    path: Path
+    description: str
+    descriptor: int
+    parent_descriptor: int
+    identity: tuple[int, int]
+    parent_identity: tuple[int, int]
+    metadata: tuple[int, int, int, int, int, int, int]
+    expected: bytes
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+
+def _file_metadata(value: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def _read_descriptor(descriptor: int, limit: int) -> bytes:
@@ -1235,6 +1297,72 @@ def _write_fd(descriptor: int, encoded: bytes) -> None:
         offset += written
 
 
+def _verify_held_output(value: _HeldOutput) -> None:
+    try:
+        encoded = _read_descriptor(value.descriptor, len(value.expected))
+        held = os.fstat(value.descriptor)
+        held_parent = os.fstat(value.parent_descriptor)
+        linked = os.stat(
+            value.path.name,
+            dir_fd=value.parent_descriptor,
+            follow_symlinks=False,
+        )
+        linked_parent = value.path.parent.stat()
+        if (
+            encoded != value.expected
+            or _file_metadata(held) != value.metadata
+            or _file_metadata(linked) != value.metadata
+            or not stat.S_ISREG(held.st_mode)
+            or held.st_nlink != 1
+            or held.st_size != len(value.expected)
+            or (held.st_dev, held.st_ino) != value.identity
+            or (held_parent.st_dev, held_parent.st_ino) != value.parent_identity
+            or (linked_parent.st_dev, linked_parent.st_ino) != value.parent_identity
+        ):
+            raise BenchmarkError(
+                f"{value.description} identity, metadata, or bytes changed during acceptance"
+            )
+    except BenchmarkError:
+        raise
+    except OSError as error:
+        raise BenchmarkError(
+            f"cannot reverify {value.description}: {error}"
+        ) from error
+
+
+def _verify_output_set(values: Sequence[_HeldOutput]) -> None:
+    for value in values:
+        _verify_held_output(value)
+
+
+def _accept_output_set(
+    values: Sequence[_HeldOutput],
+    accept_inputs: Callable[[], None] | None,
+) -> None:
+    # The first pass binds exact bytes and names before potentially lengthy input
+    # acceptance. The final pass is the filesystem acceptance boundary: no later
+    # operation in this function uses an output pathname.
+    _verify_output_set(values)
+    if accept_inputs is not None:
+        accept_inputs()
+    _verify_output_set(values)
+
+
+def _unlink_created_if_still_bound(
+    parent_descriptor: int,
+    name: str,
+    identity: tuple[int, int],
+) -> None:
+    try:
+        linked = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (linked.st_dev, linked.st_ino) == identity:
+            os.unlink(name, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
 def _publish_pair(
     results: Path,
     result_bytes: bytes,
@@ -1245,8 +1373,8 @@ def _publish_pair(
 ) -> None:
     targets = ((Path(results), result_bytes), (Path(markdown), markdown_bytes))
     parents: list[int] = []
-    outputs: list[int] = []
-    created: list[tuple[int, str]] = []
+    outputs: list[_HeldOutput] = []
+    created: list[tuple[int, str, tuple[int, int]]] = []
     parent_metadata: list[tuple[int, int]] = []
     try:
         for target, _ in targets:
@@ -1255,10 +1383,22 @@ def _publish_pair(
             metadata = os.fstat(parent_fd)
             parent_metadata.append((metadata.st_dev, metadata.st_ino))
         for index, ((target, encoded), parent_fd) in enumerate(zip(targets, parents)):
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
             output_fd = os.open(target.name, flags, 0o600, dir_fd=parent_fd)
-            outputs.append(output_fd)
-            created.append((parent_fd, target.name))
+            opened = os.fstat(output_fd)
+            identity = (opened.st_dev, opened.st_ino)
+            created.append((parent_fd, target.name, identity))
+            output = _HeldOutput(
+                path=target,
+                description=("results output" if index == 0 else "Markdown output"),
+                descriptor=output_fd,
+                parent_descriptor=parent_fd,
+                identity=identity,
+                parent_identity=parent_metadata[index],
+                metadata=_file_metadata(opened),
+                expected=encoded,
+            )
+            outputs.append(output)
             _write_fd(output_fd, encoded)
             os.fsync(output_fd)
             metadata = os.fstat(output_fd)
@@ -1270,31 +1410,25 @@ def _publish_pair(
                 or (metadata.st_dev, metadata.st_ino) != (linked.st_dev, linked.st_ino)
             ):
                 raise BenchmarkError("report output publication integrity check failed")
+            output.metadata = _file_metadata(metadata)
         for index, ((target, _), parent_fd) in enumerate(zip(targets, parents)):
             current = target.parent.stat()
             if (current.st_dev, current.st_ino) != parent_metadata[index]:
                 raise BenchmarkError("report output parent changed during publication")
             os.fsync(parent_fd)
-        if accept is not None:
-            accept()
+        _accept_output_set(outputs, accept)
     except BenchmarkError:
-        for parent_fd, name in reversed(created):
-            try:
-                os.unlink(name, dir_fd=parent_fd)
-            except OSError:
-                pass
+        for parent_fd, name, identity in reversed(created):
+            _unlink_created_if_still_bound(parent_fd, name, identity)
         raise
     except OSError as error:
-        for parent_fd, name in reversed(created):
-            try:
-                os.unlink(name, dir_fd=parent_fd)
-            except OSError:
-                pass
+        for parent_fd, name, identity in reversed(created):
+            _unlink_created_if_still_bound(parent_fd, name, identity)
         raise BenchmarkError(f"cannot publish report output pair: {error}") from error
     finally:
-        for descriptor in outputs:
+        for value in outputs:
             try:
-                os.close(descriptor)
+                value.close()
             except OSError:
                 pass
         for descriptor in parents:
@@ -1310,25 +1444,54 @@ def _read_exact(
     description: str,
     *,
     expected_identity: tuple[int, int],
-) -> None:
+) -> _HeldOutput:
+    parent_descriptor = -1
+    descriptor = -1
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(descriptor, "rb") as source:
-            metadata = os.fstat(source.fileno())
-            linked = path.lstat()
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_nlink != 1
-                or (metadata.st_dev, metadata.st_ino) != expected_identity
-                or (linked.st_dev, linked.st_ino) != expected_identity
-            ):
-                raise BenchmarkError(f"{description} must be an exclusive regular file")
-            encoded = source.read(len(expected) + 1)
-        if encoded != expected:
-            raise BenchmarkError(f"{description} does not match deterministic rendering")
+        parent_descriptor = os.open(
+            path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        parent = os.fstat(parent_descriptor)
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+        metadata = os.fstat(descriptor)
+        linked = os.stat(
+            path.name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size != len(expected)
+            or (metadata.st_dev, metadata.st_ino) != expected_identity
+            or (linked.st_dev, linked.st_ino) != expected_identity
+        ):
+            raise BenchmarkError(f"{description} must be an exclusive regular file")
+        value = _HeldOutput(
+            path=path,
+            description=description,
+            descriptor=descriptor,
+            parent_descriptor=parent_descriptor,
+            identity=expected_identity,
+            parent_identity=(parent.st_dev, parent.st_ino),
+            metadata=_file_metadata(metadata),
+            expected=expected,
+        )
+        _verify_held_output(value)
+        return value
     except BenchmarkError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if parent_descriptor >= 0:
+            os.close(parent_descriptor)
         raise
     except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if parent_descriptor >= 0:
+            os.close(parent_descriptor)
         raise BenchmarkError(f"cannot verify {description}: {error}") from error
 
 
@@ -1345,6 +1508,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     held: list[_HeldInput] = []
+    held_outputs: list[_HeldOutput] = []
     try:
         scores_input = _open_held_input(
             arguments.scores, "scores input", limit=_MAX_SCORE_BYTES
@@ -1372,15 +1536,19 @@ def main(argv: list[str] | None = None) -> int:
             for value in held:
                 _verify_held_input(value)
         if arguments.verify_existing:
-            _read_exact(
-                results, result_bytes, "results output",
-                expected_identity=output_identities[results],
+            held_outputs.append(
+                _read_exact(
+                    results, result_bytes, "results output",
+                    expected_identity=output_identities[results],
+                )
             )
-            _read_exact(
-                markdown, markdown_bytes, "Markdown output",
-                expected_identity=output_identities[markdown],
+            held_outputs.append(
+                _read_exact(
+                    markdown, markdown_bytes, "Markdown output",
+                    expected_identity=output_identities[markdown],
+                )
             )
-            accept_inputs()
+            _accept_output_set(held_outputs, accept_inputs)
         else:
             _publish_pair(
                 results, result_bytes, markdown, markdown_bytes,
@@ -1395,6 +1563,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
     finally:
+        for value in reversed(held_outputs):
+            try:
+                value.close()
+            except OSError:
+                pass
+            try:
+                os.close(value.parent_descriptor)
+            except OSError:
+                pass
         for value in reversed(held):
             value.close()
 
