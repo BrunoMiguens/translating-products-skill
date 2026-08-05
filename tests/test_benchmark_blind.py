@@ -651,6 +651,31 @@ class BlindingCliTests(unittest.TestCase):
         atomic_write_json(run_manifest_path, run_manifest)
         return encoded
 
+    def _set_raw_dataset_manifest_string(
+        self,
+        field: str,
+        raw_json_string: bytes,
+        *,
+        section: str | None = None,
+    ) -> bytes:
+        dataset_manifest_path = self.dataset / "dataset-manifest.json"
+        dataset_manifest = json.loads(dataset_manifest_path.read_text(encoding="utf-8"))
+        container = dataset_manifest if section is None else dataset_manifest[section]
+        placeholder = "__RAW_MANIFEST_STRING__"
+        container[field] = placeholder
+        encoded = canonical_bytes(dataset_manifest)
+        encoded = encoded.replace(
+            canonical_bytes(placeholder).rstrip(b"\n"),
+            raw_json_string,
+            1,
+        )
+        dataset_manifest_path.write_bytes(encoded)
+        run_manifest_path = self.evidence / "run-manifest.json"
+        run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        run_manifest["dataset"]["manifest_sha256"] = sha256_bytes(encoded)
+        atomic_write_json(run_manifest_path, run_manifest)
+        return encoded
+
     def _nul_diff_paths(self) -> tuple[tuple[str, str], ...]:
         outer = self.root.resolve() / "nul-outer"
         parent = outer / "middle" / "parent"
@@ -987,6 +1012,84 @@ class BlindingCliTests(unittest.TestCase):
             self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
             self.assertFalse(review.exists())
             self.assertFalse(key.exists())
+
+    def test_direct_diff_api_converts_lone_surrogates_in_any_manifest_string(self):
+        """Break: canonical re-encoding failures must remain benchmark input errors."""
+        cases = (
+            ("high diff path", "diff_artifact", "suite", br'"/invalid/\ud800/suite.diff"'),
+            ("low diff path", "diff_artifact", "suite", br'"/invalid/\udc00/suite.diff"'),
+            ("high adjacent", "snapshot_id", "suite", br'"snapshot-\ud800"'),
+            ("low adjacent", "snapshot_id", "suite", br'"snapshot-\udc00"'),
+        )
+        for index, (label, field, section, raw_value) in enumerate(cases):
+            self._dirty_diff(f"direct-surrogate-{index}")
+            manifest_bytes = self._set_raw_dataset_manifest_string(
+                field,
+                raw_value,
+                section=section,
+            )
+            before_fds = len(os.listdir("/dev/fd"))
+
+            with self.subTest(case=label), self.assertRaises(BenchmarkError):
+                blind._open_held_diff_artifact(manifest_bytes)
+
+            self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
+
+    def test_module_cli_converts_lone_surrogates_without_traceback_or_outputs(self):
+        """Break: non-encodable manifest strings must be one status-2 diagnostic."""
+        cases = (
+            ("high diff path", "diff_artifact", "suite", br'"/invalid/\ud800/suite.diff"'),
+            ("low diff path", "diff_artifact", "suite", br'"/invalid/\udc00/suite.diff"'),
+            ("high adjacent", "snapshot_id", "suite", br'"snapshot-\ud800"'),
+            ("low adjacent", "snapshot_id", "suite", br'"snapshot-\udc00"'),
+        )
+        for index, (label, field, section, raw_value) in enumerate(cases):
+            self._dirty_diff(f"cli-surrogate-{index}")
+            self._set_raw_dataset_manifest_string(
+                field,
+                raw_value,
+                section=section,
+            )
+            public_dir = self.root / f"public-surrogate-{index}"
+            private_dir = self.root / f"private-surrogate-{index}"
+            public_dir.mkdir()
+            private_dir.mkdir()
+            review = public_dir / "bundle.json"
+            key = private_dir / "key.json"
+
+            completed = self.run_cli(review, key, timeout=2)
+
+            with self.subTest(case=label):
+                self.assertEqual(completed.returncode, 2, completed.stdout)
+                self.assertEqual(completed.stdout, "")
+                self.assertEqual(completed.stderr.count("error: "), 1, completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+                self.assertFalse(review.exists())
+                self.assertFalse(key.exists())
+
+    def test_non_bmp_and_ordinary_unicode_diff_path_remains_accepted(self):
+        """Break: rejecting lone surrogates must not reject valid Unicode scalars."""
+        artifact = self._dirty_diff("valid-😀-café")
+        manifest_bytes = (self.dataset / "dataset-manifest.json").read_bytes()
+        before_fds = len(os.listdir("/dev/fd"))
+
+        held = blind._open_held_diff_artifact(manifest_bytes)
+
+        self.assertIsNotNone(held)
+        self.assertEqual(held.path, artifact.resolve())
+        held.close()
+        self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
+
+        public_dir = self.root / "public-valid-unicode"
+        private_dir = self.root / "private-valid-unicode"
+        public_dir.mkdir()
+        private_dir.mkdir()
+        completed = self.run_cli(
+            public_dir / "bundle.json",
+            private_dir / "key.json",
+            timeout=2,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_nul_path_validation_happens_before_the_anchor_is_opened(self):
         """Break: cleanup must not substitute for validating every component up front."""

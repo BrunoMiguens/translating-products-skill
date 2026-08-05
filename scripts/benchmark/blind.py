@@ -1366,12 +1366,21 @@ def _verify_evidence_inputs(held: _HeldEvidenceInputs) -> None:
     _recheck_held_evidence(held)
 
 
+def _canonical_input_bytes(value: object, description: str) -> bytes:
+    try:
+        return canonical_bytes(value)
+    except (UnicodeEncodeError, UnicodeDecodeError, TypeError, ValueError) as error:
+        raise BenchmarkError(
+            f"invalid {description}: cannot encode canonical JSON: {error}"
+        ) from error
+
+
 def _parse_canonical_json(encoded: bytes, description: str) -> object:
     try:
         value = json.loads(encoded.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise BenchmarkError(f"invalid {description}: {error}") from error
-    if canonical_bytes(value) != encoded:
+    if _canonical_input_bytes(value, description) != encoded:
         raise BenchmarkError(f"{description} must use canonical JSON bytes")
     return value
 
@@ -1397,7 +1406,10 @@ def _parse_canonical_jsonl(encoded: bytes, description: str) -> list[dict]:
         if not isinstance(record, dict):
             raise BenchmarkError(f"{description} line {line_number} must be an object")
         records.append(record)
-    if b"".join(canonical_bytes(record) for record in records) != encoded:
+    if b"".join(
+        _canonical_input_bytes(record, f"{description} line {line_number}")
+        for line_number, record in enumerate(records, start=1)
+    ) != encoded:
         raise BenchmarkError(f"{description} must use canonical JSONL bytes")
     return records
 
