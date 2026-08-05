@@ -1,0 +1,28 @@
+tests/test_benchmark_report.py
+  s_51f69c54a42bb0::t_e8b201238cf53f 3-9,11-12,14-15,63-328
+  s_51f69c54a42bb0::t_4944352f37b4cb 1-2,10,13,16-62,329-332
+scripts/benchmark/report.py
+  s_51f69c54a42bb0::t_1bd13c28ad0303 1-2,11,17-18,22-40,75-76,640
+  s_51f69c54a42bb0::t_c8f9fb2dbceb2b 587-589
+  s_51f69c54a42bb0::t_0e3fc15cd6a45b 427
+  s_51f69c54a42bb0::t_f79bfba8cd1643 633-635
+  s_51f69c54a42bb0::t_713077c710509a 3-10,12-16,19-21,41-74,77-426,428-586,590-632,636-639,641-855
+.superpowers/sdd/2026-08-03-pt-pt-translation-benchmark/task-8-report.md
+  s_51f69c54a42bb0::t_1d40112c66e0d7 1-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "965c584fac43b8975a2c3e692c3b047573b6e0af",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
