@@ -1,0 +1,33 @@
+scripts/benchmark/blind.py
+  s_51f69c54a42bb0::t_075ab3e9690e66 1370-1375
+  s_51f69c54a42bb0::t_6a9bbe6e987f41 1369,1376-1377,1383,1409-1412
+tests/test_benchmark_blind.py
+  s_51f69c54a42bb0::t_903c801036b2e4 654-678,1016-1092
+  s_f95e3d316ad601::t_9b44c24e565b6e 1093
+.superpowers/sdd/2026-08-03-pt-pt-translation-benchmark/task-5-nul-path-repair-report.md
+  s_51f69c54a42bb0::t_3193d5abade260 100-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "3bc1d0934c486f9c8c53c9b0e46044975b4d32e8",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    },
+    "s_f95e3d316ad601": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcc3c-6941-7f81-99e7-4b4f4f26fdf5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
