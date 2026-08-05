@@ -84,7 +84,14 @@ def item(
         "repeat_of": repeat_of,
         "labels": labels,
         "comparisons": comparisons,
-        "mqm": [] if mqm is None else mqm,
+        "mqm": (
+            []
+            if mqm is None
+            else [
+                {**finding, "dimension": finding.get("dimension", "accuracy")}
+                for finding in mqm
+            ]
+        ),
         "major_or_worse": (
             {label: False for label in labels}
             if major_or_worse is None
@@ -95,7 +102,7 @@ def item(
 
 
 def base_evidence() -> dict:
-    return {
+    evidence = {
         "schema_version": 1,
         "bootstrap_seed": 20260804,
         "items": [
@@ -130,6 +137,44 @@ def base_evidence() -> dict:
         "review_mappings": None,
         "learned_metrics": None,
     }
+    return with_case_and_run_metadata(evidence)
+
+
+def with_case_and_run_metadata(evidence: dict) -> dict:
+    """Attach hand-shaped frozen strata and operational evidence."""
+    tasks = {
+        item_value["case_id"]: item_value["task"]
+        for item_value in evidence["items"]
+        if item_value["repeat_of"] is None
+    }
+    strata = {
+        "translation-1": ("web", "simple"),
+        "translation-2": ("marketing", "adversarial"),
+        "review-1": ("documentation", "contextual"),
+    }
+    evidence["cases"] = [
+        {
+            "case_id": case_id,
+            "task": task,
+            "surface": strata.get(case_id, ("ui-mobile", "simple"))[0],
+            "difficulty": strata.get(case_id, ("ui-mobile", "simple"))[1],
+        }
+        for case_id, task in sorted(tasks.items())
+    ]
+    evidence["runs"] = [
+        {
+            "run_id": record["run_id"],
+            "case_id": record["case_id"],
+            "condition": record["condition"],
+            "attempt": record["attempt"],
+            "started_at": "2026-08-03T00:00:00Z",
+            "completed_at": "2026-08-03T00:00:01Z",
+            "telemetry": {},
+            "usage": {},
+        }
+        for record in evidence["validations"]
+    ]
+    return evidence
 
 
 def passing_metrics() -> dict:
@@ -269,6 +314,7 @@ class ScoreTests(unittest.TestCase):
                 "adjudicator": "pt-PT-reviewer", "note": "unresolved",
             },
         ]
+        with_case_and_run_metadata(evidence)
 
         review = score_evidence(evidence)["review"]
 
@@ -324,6 +370,196 @@ class ScoreTests(unittest.TestCase):
         first = score_evidence(base_evidence())
         second = score_evidence(copy.deepcopy(base_evidence()))
         self.assertEqual(canonical_bytes(first), canonical_bytes(second))
+
+    def test_scorecards_preserve_strata_dimensions_invariants_and_paired_intervals(self):
+        """Break: dropping frozen metadata leaves the report without registered breakdowns."""
+        evidence = with_case_and_run_metadata(base_evidence())
+        evidence["items"][0]["mqm"] = [
+            {"output": "A", "dimension": "accuracy", "severity": "major"},
+            {"output": "B", "dimension": "accuracy", "severity": "minor"},
+        ]
+        critical = {
+            "invariant": "placeholder_multiset",
+            "severity": "critical",
+            "expected": ["{name}"],
+            "observed": [],
+            "affected_span": None,
+            "message": "placeholder changed",
+        }
+        suite_validation = next(
+            record for record in evidence["validations"]
+            if record["run_id"] == "t2-s"
+        )
+        suite_validation.update({
+            "status": "failed",
+            "findings": [critical],
+            "applicable_checks": 1,
+            "passed_checks": 0,
+            "failed_checks": 1,
+        })
+
+        metrics = score_evidence(evidence)
+        scorecards = metrics["scorecards"]
+
+        self.assertEqual(scorecards["overall"]["case_attempts"], 2)
+        self.assertEqual(scorecards["task"]["translation"]["suite_wins"], 1)
+        self.assertFalse(scorecards["task"]["review"]["available"])
+        self.assertEqual(scorecards["surface"]["web"]["suite_wins"], 1)
+        self.assertEqual(scorecards["surface"]["marketing"]["ties"], 1)
+        self.assertFalse(scorecards["surface"]["app-store"]["available"])
+        self.assertEqual(scorecards["difficulty"]["simple"]["case_attempts"], 1)
+        self.assertEqual(
+            scorecards["error_dimension"]["accuracy"]["mqm_points"],
+            {"context_only": 0, "normal": 5, "suite": 1},
+        )
+        self.assertEqual(
+            scorecards["error_dimension"]["accuracy"]["paired_difference"]["estimate"],
+            2.0,
+        )
+        self.assertEqual(
+            scorecards["invariant"]["placeholder_multiset"]["failures"]["suite"],
+            1,
+        )
+        self.assertIn(
+            "paired_difference",
+            scorecards["invariant"]["placeholder_multiset"],
+        )
+        self.assertEqual(scorecards["overall"]["paired_bootstrap"]["seed"], 20260804)
+
+    def test_operational_diagnostics_use_per_run_latency_usage_cost_tools_and_research(self):
+        """Break: normalized scoring could discard the run telemetry required for diagnosis."""
+        evidence = with_case_and_run_metadata(base_evidence())
+        by_run = {record["run_id"]: record for record in evidence["runs"]}
+        by_run["t1-n"].update({
+            "completed_at": "2026-08-03T00:00:02Z",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "cost_usd": 0.1,
+            },
+            "telemetry": {"tools_invoked": ["read", "web"], "research_calls": 1},
+        })
+        by_run["t1-s"].update({
+            "completed_at": "2026-08-03T00:00:04Z",
+            "usage": {
+                "input_tokens": 12,
+                "output_tokens": 6,
+                "total_tokens": 18,
+                "cost_usd": 0.2,
+            },
+            "telemetry": {"tools_invoked": ["read"], "research_calls": 0},
+        })
+
+        operational = score_evidence(evidence)["operational"]
+
+        self.assertEqual(
+            operational["latency_seconds"]["by_condition"]["normal"],
+            {"count": 2, "mean": 1.5, "total": 3.0},
+        )
+        self.assertEqual(
+            operational["latency_seconds"]["by_condition"]["suite"],
+            {"count": 2, "mean": 2.5, "total": 5.0},
+        )
+        self.assertEqual(
+            operational["usage"]["input_tokens"]["by_condition"]["normal"],
+            {"count": 1, "mean": 10.0, "total": 10.0},
+        )
+        self.assertEqual(
+            operational["cost_usd"]["by_condition"]["suite"],
+            {"count": 1, "mean": 0.2, "total": 0.2},
+        )
+        self.assertEqual(
+            operational["tools"]["by_condition"]["normal"],
+            {"calls": 2, "runs": 1, "unique": ["read", "web"]},
+        )
+        self.assertEqual(
+            operational["research_calls"]["by_condition"]["normal"],
+            {"count": 1, "mean": 1.0, "total": 1.0},
+        )
+        self.assertFalse(operational["usage"]["input_tokens"]["by_condition"]["context_only"]["available"])
+
+    def test_unresolved_mappings_affect_non_precision_metrics_and_introduced_is_per_run(self):
+        """Break: unresolved or multi-error records could disappear or overweight responses."""
+        evidence = base_evidence()
+        evidence["items"] = [
+            item(
+                "item-r1", "review-1", "review",
+                labels={"A": "normal", "B": "suite"},
+                comparisons={"A:B": "right_slight"},
+            )
+        ]
+        evidence["validations"] = [
+            validation("r-normal", "review-1", "normal"),
+            validation("r-suite", "review-1", "suite"),
+        ]
+        evidence["seeded_errors"] = {
+            "review-1": [
+                {"id": "required-1", "severity": "critical", "correction_required": True},
+                {"id": "required-2", "severity": "major", "correction_required": True},
+            ]
+        }
+        evidence["review_mappings"] = [
+            {
+                "run_id": run_id,
+                "seeded_error_id": error_id,
+                "reported": True,
+                "corrected": True,
+                "introduced_error": introduced,
+                "adjudicator": "pt-PT-reviewer",
+                "note": "mapped",
+            }
+            for run_id, error_id, introduced in (
+                ("r-normal", "required-1", False),
+                ("r-normal", "required-2", False),
+                ("r-suite", "required-1", False),
+                ("r-suite", "required-2", True),
+            )
+        ]
+        evidence["review_mappings"].append({
+            "run_id": "r-normal",
+            "seeded_error_id": "unresolved-free-text",
+            "reported": True,
+            "corrected": True,
+            "introduced_error": True,
+            "adjudicator": "pt-PT-reviewer",
+            "note": "unresolved",
+        })
+        with_case_and_run_metadata(evidence)
+
+        review = score_evidence(evidence)["review"]
+
+        self.assertEqual(review["reported_error_precision"], {"normal": 1.0, "suite": 1.0})
+        self.assertEqual(review["unresolved"], 1)
+        self.assertEqual(review["unresolved_reported"], 1)
+        self.assertEqual(review["unresolved_corrected"], 1)
+        self.assertEqual(review["introduced_error_rate"], {"normal": 1.0, "suite": 1.0})
+        self.assertEqual(review["introduced_error_runs"], {"normal": 1, "suite": 1})
+        self.assertEqual(review["response_runs"], {"normal": 1, "suite": 1})
+        self.assertEqual(review["introduced_error_aggregation"], "any_mapping_per_run")
+
+    def test_repeat_requires_equal_conditions_and_one_to_one_relationship(self):
+        """Break: repeats could omit a condition or multiply one original's influence."""
+        unequal = base_evidence()
+        unequal["items"].append(item(
+            "item-repeat", "translation-1", "translation",
+            labels={"A": "suite", "B": "normal"},
+            comparisons={"A:B": "right_clear"},
+            repeat_of="item-t1",
+        ))
+        with self.assertRaisesRegex(BenchmarkError, "condition set"):
+            score_evidence(unequal)
+
+        duplicate = base_evidence()
+        for suffix in ("one", "two"):
+            duplicate["items"].append(item(
+                f"item-repeat-{suffix}", "translation-2", "translation",
+                labels={"A": "normal", "B": "suite"},
+                comparisons={"A:B": "tie"},
+                repeat_of="item-t2",
+            ))
+        with self.assertRaisesRegex(BenchmarkError, "multiple repeats"):
+            score_evidence(duplicate)
 
 
 class BootstrapTests(unittest.TestCase):
@@ -561,17 +797,8 @@ class LockedScoringTests(unittest.TestCase):
             })
         store.lock(reviewer_id="pt-PT-reviewer")
 
-    def test_locked_paths_and_cli_produce_one_canonical_deterministic_document(self):
-        """Break: scoring could skip lock verification or publish unstable/non-atomic JSON."""
-        verify_locked_inputs(self.paths)
-        first = score_paths(self.paths)
-        second = score_paths(self.paths)
-        self.assertEqual(canonical_bytes(first), canonical_bytes(second))
-        self.assertEqual(first["provenance"]["bootstrap_seed"], 20260804)
-        self.assertIsNone(first["gates"]["review"]["passed"])
-
-        output = self.root / "score.json"
-        completed = subprocess.run(
+    def run_score_cli(self, output: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
             [
                 sys.executable, "-m", "scripts.benchmark.score",
                 "--dataset", str(self.dataset),
@@ -587,12 +814,126 @@ class LockedScoringTests(unittest.TestCase):
             capture_output=True,
             check=False,
         )
+
+    def test_locked_paths_and_cli_produce_one_canonical_deterministic_document(self):
+        """Break: scoring could skip lock verification or publish unstable/non-atomic JSON."""
+        verify_locked_inputs(self.paths)
+        first = score_paths(self.paths)
+        second = score_paths(self.paths)
+        self.assertEqual(canonical_bytes(first), canonical_bytes(second))
+        self.assertEqual(first["provenance"]["bootstrap_seed"], 20260804)
+        self.assertIsNone(first["gates"]["review"]["passed"])
+        self.assertEqual(first["metrics"]["scorecards"]["overall"]["case_attempts"], 180)
+        self.assertEqual(
+            first["metrics"]["scorecards"]["task"]["translation"]["case_attempts"],
+            120,
+        )
+        self.assertEqual(
+            first["metrics"]["scorecards"]["surface"]["web"]["case_attempts"],
+            36,
+        )
+        self.assertEqual(
+            first["metrics"]["scorecards"]["difficulty"]["simple"]["case_attempts"],
+            60,
+        )
+        self.assertEqual(
+            first["metrics"]["operational"]["latency_seconds"]["by_condition"]["normal"],
+            {"count": 180, "mean": 1.0, "total": 180.0},
+        )
+
+        output = self.root / "score.json"
+        completed = self.run_score_cli(output)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), {
             "output": str(output),
             "sha256": sha256_bytes(output.read_bytes()),
         })
         self.assertEqual(output.read_bytes(), canonical_bytes(first))
+
+    def test_cli_never_overwrites_existing_or_writes_inside_consumed_trees(self):
+        """Break: score publication could replace prior results or frozen input bytes."""
+        existing = self.root / "existing-score.json"
+        existing.write_bytes(b"keep-existing\n")
+        completed = self.run_score_cli(existing)
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(existing.read_bytes(), b"keep-existing\n")
+
+        raw = next((self.evidence / "raw").iterdir())
+        raw_before = raw.read_bytes()
+        completed = self.run_score_cli(raw)
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(raw.read_bytes(), raw_before)
+
+        inside_evidence = self.evidence / "new-score.json"
+        completed = self.run_score_cli(inside_evidence)
+        self.assertEqual(completed.returncode, 2)
+        self.assertFalse(inside_evidence.exists())
+
+        inside_annotations = self.annotations_dir / "new-score.json"
+        completed = self.run_score_cli(inside_annotations)
+        self.assertEqual(completed.returncode, 2)
+        self.assertFalse(inside_annotations.exists())
+
+    def test_cli_rejects_output_parent_aliases_without_creating_bytes(self):
+        """Break: a symlinked output parent could redirect publication into evidence."""
+        alias = self.root / "evidence-alias"
+        try:
+            alias.symlink_to(self.evidence, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"directory symlinks unavailable: {error}")
+        output = alias / "redirected-score.json"
+
+        completed = self.run_score_cli(output)
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertFalse((self.evidence / "redirected-score.json").exists())
+
+    def test_cli_converts_hostile_required_json_to_status_two_without_output(self):
+        """Break: integer/depth/duplicate parser failures could escape as tracebacks."""
+        originals = {
+            "dataset": (self.dataset / "dataset-manifest.json").read_bytes(),
+            "run": (self.evidence / "run-manifest.json").read_bytes(),
+            "bundle": self.review_bundle.read_bytes(),
+            "key": self.condition_key.read_bytes(),
+            "annotations": (self.annotations_dir / "annotations.jsonl").read_bytes(),
+            "lock": (self.annotations_dir / "annotation-lock.json").read_bytes(),
+        }
+        paths = {
+            "dataset": self.dataset / "dataset-manifest.json",
+            "run": self.evidence / "run-manifest.json",
+            "bundle": self.review_bundle,
+            "key": self.condition_key,
+            "annotations": self.annotations_dir / "annotations.jsonl",
+            "lock": self.annotations_dir / "annotation-lock.json",
+        }
+        huge_integer = b'{"schema_version":' + b"9" * 5000 + b'}\n'
+        deep = b'{"value":' + b"[" * 257 + b"0" + b"]" * 257 + b'}\n'
+        hostile = (
+            ("dataset", huge_integer),
+            ("run", deep),
+            ("bundle", b'{"schema_version":1,"schema_version":1,"items":[]}\n'),
+            ("key", deep),
+            ("annotations", huge_integer),
+            ("lock", deep),
+        )
+        for index, (name, encoded) in enumerate(hostile):
+            with self.subTest(name=name):
+                for original_name, original in originals.items():
+                    paths[original_name].write_bytes(original)
+                if name == "annotations":
+                    paths[name].write_bytes(encoded)
+                    lock = json.loads(originals["lock"])
+                    lock["annotations_sha256"] = sha256_bytes(encoded)
+                    paths["lock"].write_bytes(canonical_bytes(lock))
+                else:
+                    paths[name].write_bytes(encoded)
+                output = self.root / f"hostile-{index}.json"
+                completed = self.run_score_cli(output)
+                self.assertEqual(completed.returncode, 2, completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+                self.assertFalse(output.exists())
+        for name, original in originals.items():
+            paths[name].write_bytes(original)
 
     def test_annotation_tampering_fails_before_condition_key_loading(self):
         """Break: private labels could be exposed before annotation hash/completeness checks."""

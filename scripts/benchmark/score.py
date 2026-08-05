@@ -9,6 +9,7 @@ import sys
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .blind import (
@@ -22,15 +23,14 @@ from .blind import (
 )
 from .common import (
     BenchmarkError,
-    atomic_write_json,
     canonical_bytes,
     sha256_bytes,
     sha256_file,
 )
 from .prepare import verify_dataset_manifest
-from .review_app import ReviewStore
+from .review_app import MQM_DIMENSIONS, ReviewStore
 from .run import RunResult
-from .schema import CONDITIONS, SCHEMA_VERSION, TASKS
+from .schema import CONDITIONS, DIFFICULTIES, SCHEMA_VERSION, SURFACES, TASKS
 
 
 SEVERITY_POINTS = {"critical": 25, "major": 5, "minor": 1, "neutral": 0}
@@ -60,6 +60,11 @@ _MAPPING_FIELDS = {
 }
 _LEARNED_FIELDS = {"run_id", "metric", "value"}
 _LEARNED_METRICS = {"comet", "xcomet", "chrf"}
+_CASE_FIELDS = {"case_id", "task", "surface", "difficulty"}
+_RUN_FIELDS = {
+    "run_id", "case_id", "condition", "attempt", "started_at", "completed_at",
+    "telemetry", "usage",
+}
 _MAX_SMALL_INPUT_BYTES = 1024 * 1024
 _MAX_DOCUMENT_INPUT_BYTES = 64 * 1024 * 1024
 
@@ -100,9 +105,14 @@ def _text(value: object, description: str, *, nonempty: bool = True) -> str:
 
 
 def _finite(value: object, description: str) -> float:
-    if type(value) not in (int, float) or not math.isfinite(value):
+    if type(value) not in (int, float):
         raise BenchmarkError(f"{description} must be a finite number")
-    return float(value)
+    try:
+        if not math.isfinite(value):
+            raise BenchmarkError(f"{description} must be a finite number")
+        return float(value)
+    except (OverflowError, ValueError) as error:
+        raise BenchmarkError(f"{description} must be a finite number") from error
 
 
 def _rate(numerator: int | float, denominator: int | float) -> float:
@@ -289,14 +299,17 @@ def _validate_item(value: object, index: int) -> dict:
     if not isinstance(mqm, list):
         raise BenchmarkError(f"score item {index} mqm must be a list")
     for finding_index, finding in enumerate(mqm):
-        if not isinstance(finding, Mapping) or set(finding) != {"output", "severity"}:
+        if not isinstance(finding, Mapping) or set(finding) != {"output", "dimension", "severity"}:
             raise BenchmarkError(f"score item {index} mqm entry {finding_index} fields are invalid")
         output = finding.get("output")
+        dimension = finding.get("dimension")
         severity = finding.get("severity")
         if type(output) is not str or output not in labels:
             raise BenchmarkError(f"score item {index} mqm output is invalid")
         if type(severity) is not str or severity not in SEVERITY_POINTS:
             raise BenchmarkError(f"score item {index} mqm severity is invalid")
+        if type(dimension) is not str or dimension not in MQM_DIMENSIONS:
+            raise BenchmarkError(f"score item {index} mqm dimension is invalid")
         if severity in {"critical", "major"}:
             observed_major[output] = True
     if any(major[label] is not observed_major[label] for label in expected_labels):
@@ -467,6 +480,9 @@ def _review_metrics(
     seen: set[tuple[str, str]] = set()
     known: dict[tuple[str, str], dict] = {}
     unresolved = 0
+    unresolved_reported = 0
+    unresolved_corrected = 0
+    mappings_by_run: dict[str, list[dict]] = defaultdict(list)
     for index, mapping in enumerate(mappings):
         if not isinstance(mapping, Mapping) or set(mapping) != _MAPPING_FIELDS:
             raise BenchmarkError(f"review mapping {index} fields are invalid")
@@ -487,9 +503,12 @@ def _review_metrics(
         if identity in seen:
             raise BenchmarkError(f"duplicate review mapping: {identity!r}")
         seen.add(identity)
+        mappings_by_run[run_id].append(record)
         seeded = inventory.get(error_id)
         if seeded is None or seeded["case_id"] != validation["case_id"]:
             unresolved += 1
+            unresolved_reported += int(record["reported"])
+            unresolved_corrected += int(record["corrected"])
             continue
         known[identity] = record
 
@@ -514,7 +533,6 @@ def _review_metrics(
         seeded = inventory[error_id]
         required = seeded["correction_required"]
         counters[condition]["known"] += 1
-        counters[condition]["introduced"] += int(mapping["introduced_error"])
         if required:
             counters[condition]["required"] += 1
             counters[condition]["recalled"] += int(mapping["reported"])
@@ -528,8 +546,31 @@ def _review_metrics(
             counters[condition]["reported"] += 1
             counters[condition]["true_reported"] += int(required)
 
+    for record in validations:
+        if (record["case_id"], record["attempt"]) not in review_identities:
+            continue
+        condition = record["condition"]
+        counters[condition]["response_runs"] += 1
+        counters[condition]["introduced_runs"] += int(any(
+            mapping["introduced_error"] for mapping in mappings_by_run[record["run_id"]]
+        ))
+
     structural, _, regressions = _structural_summary(validations, review_identities)
-    result: dict[str, object] = {"available": True, "unresolved": unresolved}
+    result: dict[str, object] = {
+        "available": True,
+        "unresolved": unresolved,
+        "unresolved_reported": unresolved_reported,
+        "unresolved_corrected": unresolved_corrected,
+        "introduced_error_aggregation": "any_mapping_per_run",
+        "introduced_error_runs": {
+            condition: values["introduced_runs"] for condition, values in counters.items()
+            if values["response_runs"]
+        },
+        "response_runs": {
+            condition: values["response_runs"] for condition, values in counters.items()
+            if values["response_runs"]
+        },
+    }
     result["required_error_recall"] = {
         condition: _rate(values["recalled"], values["required"])
         for condition, values in counters.items()
@@ -551,9 +592,9 @@ def _review_metrics(
         if values["known"]
     }
     result["introduced_error_rate"] = {
-        condition: _rate(values["introduced"], values["known"])
+        condition: _rate(values["introduced_runs"], values["response_runs"])
         for condition, values in counters.items()
-        if values["known"]
+        if values["response_runs"]
     }
     result["critical_misses"] = {
         condition: values["critical_misses"]
@@ -603,12 +644,290 @@ def _learned_metrics(values: object, validations_by_run: Mapping[str, Mapping[st
     }
 
 
+def _validate_cases_and_runs(
+    cases_value: object,
+    runs_value: object,
+    validations_by_run: Mapping[str, Mapping[str, object]],
+    primary_identities: set[tuple[str, int]],
+) -> tuple[dict[str, dict], list[dict]]:
+    if not isinstance(cases_value, list):
+        raise BenchmarkError("cases must be a list")
+    cases: dict[str, dict] = {}
+    for index, value in enumerate(cases_value):
+        if not isinstance(value, Mapping) or set(value) != _CASE_FIELDS:
+            raise BenchmarkError(f"case metadata {index} fields are invalid")
+        record = dict(value)
+        case_id = _text(record.get("case_id"), f"case metadata {index} case_id")
+        if case_id in cases:
+            raise BenchmarkError(f"duplicate case metadata: {case_id}")
+        if record.get("task") not in TASKS:
+            raise BenchmarkError(f"case metadata {index} task is invalid")
+        if record.get("surface") not in SURFACES:
+            raise BenchmarkError(f"case metadata {index} surface is invalid")
+        if record.get("difficulty") not in DIFFICULTIES:
+            raise BenchmarkError(f"case metadata {index} difficulty is invalid")
+        cases[case_id] = record
+    expected_case_ids = {case_id for case_id, _ in primary_identities}
+    if set(cases) != expected_case_ids:
+        raise BenchmarkError("case metadata identities do not match primary score items")
+
+    if not isinstance(runs_value, list):
+        raise BenchmarkError("runs must be a list")
+    runs: list[dict] = []
+    seen: set[str] = set()
+    for index, value in enumerate(runs_value):
+        if not isinstance(value, Mapping) or set(value) != _RUN_FIELDS:
+            raise BenchmarkError(f"run metadata {index} fields are invalid")
+        record = dict(value)
+        run_id = _text(record.get("run_id"), f"run metadata {index} run_id")
+        if run_id in seen or run_id not in validations_by_run:
+            raise BenchmarkError(f"run metadata {index} run id is invalid or duplicate")
+        seen.add(run_id)
+        validation = validations_by_run[run_id]
+        if any(
+            record.get(field) != validation[field]
+            for field in ("case_id", "condition", "attempt")
+        ):
+            raise BenchmarkError(f"run metadata {index} does not match validation")
+        if record["case_id"] not in cases:
+            raise BenchmarkError(f"run metadata {index} has unknown case")
+        for field in ("started_at", "completed_at"):
+            timestamp = _text(record.get(field), f"run metadata {index} {field}")
+            try:
+                parsed = datetime.strptime(
+                    timestamp, "%Y-%m-%dT%H:%M:%SZ"
+                ).replace(tzinfo=timezone.utc)
+            except ValueError as error:
+                raise BenchmarkError(f"run metadata {index} {field} is not canonical UTC") from error
+            record[f"_{field}"] = parsed
+        if record["_completed_at"] < record["_started_at"]:
+            raise BenchmarkError(f"run metadata {index} completion precedes start")
+        runs.append(record)
+    if seen != set(validations_by_run):
+        raise BenchmarkError("run metadata identities do not match validations")
+    return cases, runs
+
+
+def _numeric_summary(values: Sequence[float]) -> dict:
+    if not values:
+        return {"available": False}
+    return {
+        "count": len(values),
+        "mean": sum(values) / len(values),
+        "total": sum(values),
+    }
+
+
+def _operational_diagnostics(runs: Sequence[Mapping[str, object]]) -> dict:
+    latency: dict[str, list[float]] = {condition: [] for condition in CONDITIONS}
+    usage: dict[str, dict[str, list[float]]] = {
+        name: {condition: [] for condition in CONDITIONS}
+        for name in ("input_tokens", "output_tokens", "total_tokens")
+    }
+    costs = {condition: [] for condition in CONDITIONS}
+    research = {condition: [] for condition in CONDITIONS}
+    tool_calls: dict[str, list[str]] = {condition: [] for condition in CONDITIONS}
+    tool_runs = {condition: 0 for condition in CONDITIONS}
+    for record in runs:
+        condition = record["condition"]
+        latency[condition].append(
+            (record["_completed_at"] - record["_started_at"]).total_seconds()
+        )
+        usage_value = record.get("usage")
+        if isinstance(usage_value, Mapping):
+            for name in usage:
+                if name in usage_value:
+                    value = _finite(usage_value[name], f"run {record['run_id']} {name}")
+                    if value < 0:
+                        raise BenchmarkError(
+                            f"run {record['run_id']} {name} must be non-negative"
+                        )
+                    usage[name][condition].append(value)
+            if "cost_usd" in usage_value:
+                value = _finite(
+                    usage_value["cost_usd"], f"run {record['run_id']} cost_usd"
+                )
+                if value < 0:
+                    raise BenchmarkError(f"run {record['run_id']} cost_usd must be non-negative")
+                costs[condition].append(value)
+        telemetry = record.get("telemetry")
+        if isinstance(telemetry, Mapping):
+            if "tools_invoked" in telemetry:
+                tools = telemetry["tools_invoked"]
+                if not isinstance(tools, list) or any(
+                    type(name) is not str or not name for name in tools
+                ):
+                    raise BenchmarkError(f"run {record['run_id']} tools_invoked is invalid")
+                tool_calls[condition].extend(tools)
+                tool_runs[condition] += 1
+            if "research_calls" in telemetry:
+                value = _finite(
+                    telemetry["research_calls"],
+                    f"run {record['run_id']} research_calls",
+                )
+                if value < 0:
+                    raise BenchmarkError(f"run {record['run_id']} research_calls must be non-negative")
+                research[condition].append(value)
+
+    def metric(by_condition: Mapping[str, Sequence[float]]) -> dict:
+        summaries = {
+            condition: _numeric_summary(by_condition[condition])
+            for condition in CONDITIONS
+        }
+        return {
+            "available": any(
+                value.get("available") is not False for value in summaries.values()
+            ),
+            "by_condition": summaries,
+        }
+
+    tools_by_condition = {}
+    for condition in CONDITIONS:
+        calls = tool_calls[condition]
+        tools_by_condition[condition] = (
+            {"available": False}
+            if not tool_runs[condition]
+            else {
+                "calls": len(calls),
+                "runs": tool_runs[condition],
+                "unique": sorted(set(calls)),
+            }
+        )
+    return {
+        "latency_seconds": metric(latency),
+        "usage": {name: metric(values) for name, values in usage.items()},
+        "cost_usd": metric(costs),
+        "tools": {
+            "available": any(
+                value.get("available") is not False
+                for value in tools_by_condition.values()
+            ),
+            "by_condition": tools_by_condition,
+        },
+        "research_calls": metric(research),
+    }
+
+
+def _paired_mean_difference(pairs: Sequence[Pair]) -> float:
+    return sum(pair.suite_value - pair.normal_value for pair in pairs) / len(pairs)
+
+
+def _preference_scorecard(items: Sequence[Mapping[str, object]], seed: int) -> dict:
+    if not items:
+        return {"available": False}
+    outcomes = [_condition_ordinal(item, "suite", "normal") for item in items]
+    pairs = [
+        Pair(item["case_id"], item["attempt"], float(outcome), 0.0)
+        for item, outcome in zip(items, outcomes)
+    ]
+    return {
+        "available": True,
+        "case_attempts": len(items),
+        "suite_wins": sum(value > 0 for value in outcomes),
+        "normal_wins": sum(value < 0 for value in outcomes),
+        "ties": sum(value == 0 for value in outcomes),
+        "ordinal_sum": sum(outcomes),
+        "non_tied_win_rate": non_tied_win_rate(outcomes),
+        "paired_bootstrap": paired_bootstrap(pairs, _paired_mean_difference, seed=seed),
+    }
+
+
+def _scorecards(
+    items: Sequence[Mapping[str, object]],
+    cases: Mapping[str, Mapping[str, object]],
+    validations: Sequence[Mapping[str, object]],
+    seed: int,
+) -> dict:
+    primaries = [item for item in items if item["repeat_of"] is None]
+
+    def strata(field: str, values: Sequence[str]) -> dict:
+        return {
+            value: _preference_scorecard(
+                [item for item in primaries if cases[item["case_id"]][field] == value],
+                seed,
+            )
+            for value in values
+        }
+
+    dimensions: dict[str, dict] = {}
+    for dimension in sorted(MQM_DIMENSIONS):
+        has_observation = any(
+            finding["dimension"] == dimension
+            for item in primaries
+            for finding in item["mqm"]
+        )
+        if not has_observation:
+            dimensions[dimension] = {"available": False}
+            continue
+        totals = {condition: 0 for condition in CONDITIONS}
+        pairs: list[Pair] = []
+        for item in primaries:
+            per_condition = {condition: 0 for condition in item["labels"].values()}
+            for finding in item["mqm"]:
+                if finding["dimension"] != dimension:
+                    continue
+                condition = item["labels"][finding["output"]]
+                points = SEVERITY_POINTS[finding["severity"]]
+                totals[condition] += points
+                per_condition[condition] += points
+            pairs.append(Pair(
+                item["case_id"], item["attempt"],
+                float(per_condition["normal"]), float(per_condition["suite"]),
+            ))
+        dimensions[dimension] = {
+            "available": True,
+            "mqm_points": totals,
+            "paired_difference": paired_bootstrap(
+                pairs, _paired_mean_difference, seed=seed
+            ),
+        }
+
+    invariant_names = sorted({
+        finding["invariant"]
+        for validation in validations
+        for finding in validation["findings"]
+    })
+    invariants: dict[str, dict] = {}
+    validations_by_identity = {
+        (record["case_id"], record["attempt"], record["condition"]): record
+        for record in validations
+    }
+    for invariant in invariant_names:
+        failures = {condition: 0 for condition in CONDITIONS}
+        pairs = []
+        for item in primaries:
+            per_condition = {}
+            for condition in item["labels"].values():
+                record = validations_by_identity[(item["case_id"], item["attempt"], condition)]
+                count = sum(finding["invariant"] == invariant for finding in record["findings"])
+                failures[condition] += count
+                per_condition[condition] = count
+            pairs.append(Pair(
+                item["case_id"], item["attempt"],
+                float(per_condition["normal"]), float(per_condition["suite"]),
+            ))
+        invariants[invariant] = {
+            "available": True,
+            "failures": failures,
+            "paired_difference": paired_bootstrap(pairs, _paired_mean_difference, seed=seed),
+        }
+    return {
+        "overall": _preference_scorecard(primaries, seed),
+        "task": strata("task", TASKS),
+        "surface": strata("surface", SURFACES),
+        "difficulty": strata("difficulty", DIFFICULTIES),
+        "error_dimension": dimensions,
+        "invariant": invariants,
+    }
+
+
 def _consistency(items: Sequence[Mapping[str, object]]) -> dict:
     by_id = {item["item_id"]: item for item in items}
     repeats = [item for item in items if item["repeat_of"] is not None]
     exact = 0
     quadratic = 0.0
     major_equal = major_total = 0
+    repeat_targets: set[str] = set()
     for repeat in repeats:
         original = by_id.get(repeat["repeat_of"])
         if original is None or original["repeat_of"] is not None:
@@ -619,13 +938,18 @@ def _consistency(items: Sequence[Mapping[str, object]]) -> dict:
             original["case_id"], original["attempt"], original["task"]
         ):
             raise BenchmarkError(f"repeat {repeat['item_id']} identity differs from original")
+        if repeat["repeat_of"] in repeat_targets:
+            raise BenchmarkError(f"multiple repeats name original {repeat['repeat_of']}")
+        repeat_targets.add(repeat["repeat_of"])
+        if set(repeat["labels"].values()) != set(original["labels"].values()):
+            raise BenchmarkError(f"repeat {repeat['item_id']} condition set differs from original")
         original_ordinal = _condition_ordinal(original, "suite", "normal")
         repeat_ordinal = _condition_ordinal(repeat, "suite", "normal")
         exact += int(original_ordinal == repeat_ordinal)
         quadratic += 1.0 - ((original_ordinal - repeat_ordinal) / 4.0) ** 2
         original_major = _condition_major(original)
         repeat_major = _condition_major(repeat)
-        for condition in sorted(set(original_major) & set(repeat_major)):
+        for condition in sorted(original_major):
             major_equal += int(original_major[condition] == repeat_major[condition])
             major_total += 1
     count = len(repeats)
@@ -642,7 +966,7 @@ def score_evidence(evidence: Mapping[str, object]) -> dict:
     """Score an exact, verified and condition-decoded benchmark evidence document."""
     fields = {
         "schema_version", "bootstrap_seed", "items", "validations",
-        "seeded_errors", "review_mappings", "learned_metrics",
+        "seeded_errors", "review_mappings", "learned_metrics", "cases", "runs",
     }
     if not isinstance(evidence, Mapping) or set(evidence) != fields:
         raise BenchmarkError("scoring evidence fields are invalid")
@@ -681,6 +1005,13 @@ def score_evidence(evidence: Mapping[str, object]) -> dict:
         raise BenchmarkError(
             f"validation identities mismatch: missing={missing!r}, unknown={unknown!r}"
         )
+    cases, runs = _validate_cases_and_runs(
+        evidence.get("cases"), evidence.get("runs"), validations_by_run,
+        primary_identities,
+    )
+    for item in items:
+        if cases[item["case_id"]]["task"] != item["task"]:
+            raise BenchmarkError(f"score item {item['item_id']} task differs from case metadata")
 
     seeded_errors = evidence.get("seeded_errors")
     if not isinstance(seeded_errors, Mapping):
@@ -776,6 +1107,8 @@ def score_evidence(evidence: Mapping[str, object]) -> dict:
         "learned_metrics": _learned_metrics(
             evidence.get("learned_metrics"), validations_by_run
         ),
+        "scorecards": _scorecards(items, cases, validations, seed),
+        "operational": _operational_diagnostics(runs),
     }
 
 
@@ -798,7 +1131,10 @@ _REVIEW_GATE_INPUTS = {
 
 def evaluate_gates(metrics: Mapping[str, object]) -> dict:
     """Apply the pre-registered gates exactly, with no override mechanism."""
-    allowed_top = {"translation", "review", "consistency", "learned_metrics"}
+    allowed_top = {
+        "translation", "review", "consistency", "learned_metrics",
+        "scorecards", "operational",
+    }
     if (
         not isinstance(metrics, Mapping)
         or not {"translation", "review"} <= set(metrics)
@@ -994,11 +1330,16 @@ def _verify_annotation_paths(paths: ScorePaths) -> dict[str, dict]:
         or annotations.parent.resolve() != annotation_lock.parent.resolve()
     ):
         raise BenchmarkError("annotation paths must name canonical artifacts in one directory")
-    _read_bounded(annotations, "annotations", limit=_MAX_DOCUMENT_INPUT_BYTES)
-    _read_bounded(annotation_lock, "annotation lock", limit=_MAX_SMALL_INPUT_BYTES)
+    _canonical_jsonl_file(annotations, "annotations", limit=_MAX_DOCUMENT_INPUT_BYTES)
+    _canonical_json_file(annotation_lock, "annotation lock", limit=_MAX_SMALL_INPUT_BYTES)
     state_path = annotations.parent / "annotation-state.json"
-    _read_bounded(state_path, "annotation state", limit=_MAX_DOCUMENT_INPUT_BYTES)
-    store = ReviewStore(paths.review_bundle, annotations.parent)
+    _canonical_json_file(state_path, "annotation state", limit=_MAX_DOCUMENT_INPUT_BYTES)
+    try:
+        store = ReviewStore(paths.review_bundle, annotations.parent)
+    except BenchmarkError:
+        raise
+    except (ValueError, RecursionError, OverflowError, TypeError, UnicodeError) as error:
+        raise BenchmarkError(f"invalid annotation artifacts: {error}") from error
     try:
         if not store.locked or len(store.latest) != len(store.bundle["items"]):
             raise BenchmarkError("annotation lock covers an incomplete queue")
@@ -1054,20 +1395,33 @@ def _load_verified_inputs(paths: ScorePaths) -> dict:
         raise BenchmarkError("score paths must be ScorePaths")
     dataset_dir = Path(paths.dataset_dir)
     evidence_dir = Path(paths.evidence_dir)
-    # Apply resource bounds before invoking legacy semantic verifiers whose
-    # readers predate the bounded canonical parser.
-    for path, description, limit in (
-        (dataset_dir / "dataset-manifest.json", "dataset manifest", _MAX_DOCUMENT_INPUT_BYTES),
-        (dataset_dir / "cases.jsonl", "cases.jsonl", _MAX_DOCUMENT_INPUT_BYTES),
-        (dataset_dir / "seeded-errors.json", "seeded-errors.json", _MAX_DOCUMENT_INPUT_BYTES),
-        (dataset_dir / "reference-signoff.json", "reference signoff", _MAX_DOCUMENT_INPUT_BYTES),
-        (evidence_dir / "run-manifest.json", "run manifest", _MAX_DOCUMENT_INPUT_BYTES),
-        (evidence_dir / "runs.jsonl", "runs.jsonl", _MAX_DOCUMENT_INPUT_BYTES),
-        (Path(paths.review_bundle), "review bundle", _MAX_DOCUMENT_INPUT_BYTES),
+    # Strict bounded canonical parsing precedes every legacy semantic verifier.
+    # It converts hostile integer/depth/encoding shapes into BenchmarkError at
+    # the trust boundary instead of allowing implementation exceptions to leak.
+    for path, description in (
+        (dataset_dir / "dataset-manifest.json", "dataset manifest"),
+        (dataset_dir / "seeded-errors.json", "seeded-errors.json"),
+        (dataset_dir / "reference-signoff.json", "reference signoff"),
+        (evidence_dir / "run-manifest.json", "run manifest"),
+        (Path(paths.review_bundle), "review bundle"),
     ):
-        _read_bounded(path, description, limit=limit)
-    verify_dataset_manifest(dataset_dir)
-    run_manifest, prepared = _validate_prepared_manifest(dataset_dir, evidence_dir)
+        _canonical_json_file(
+            path, description, limit=_MAX_DOCUMENT_INPUT_BYTES
+        )
+    for path, description in (
+        (dataset_dir / "cases.jsonl", "cases.jsonl"),
+        (evidence_dir / "runs.jsonl", "runs.jsonl"),
+    ):
+        _canonical_jsonl_file(
+            path, description, limit=_MAX_DOCUMENT_INPUT_BYTES
+        )
+    try:
+        verify_dataset_manifest(dataset_dir)
+        run_manifest, prepared = _validate_prepared_manifest(dataset_dir, evidence_dir)
+    except BenchmarkError:
+        raise
+    except (ValueError, RecursionError, OverflowError, TypeError, UnicodeError) as error:
+        raise BenchmarkError(f"invalid frozen benchmark inputs: {error}") from error
     cases = _canonical_jsonl_file(
         dataset_dir / "cases.jsonl", "cases.jsonl", limit=_MAX_DOCUMENT_INPUT_BYTES
     )
@@ -1096,8 +1450,31 @@ def _load_verified_inputs(paths: ScorePaths) -> dict:
         runs=runs,
         prepared_provenance=prepared,
     )
-    verify_dataset_manifest(dataset_dir)
-    current_manifest, current_prepared = _validate_prepared_manifest(dataset_dir, evidence_dir)
+    _canonical_json_file(
+        dataset_dir / "dataset-manifest.json", "dataset manifest",
+        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    )
+    _canonical_jsonl_file(
+        dataset_dir / "cases.jsonl", "cases.jsonl",
+        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    )
+    _canonical_json_file(
+        evidence_dir / "run-manifest.json", "run manifest",
+        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    )
+    _canonical_jsonl_file(
+        evidence_dir / "runs.jsonl", "runs.jsonl",
+        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    )
+    try:
+        verify_dataset_manifest(dataset_dir)
+        current_manifest, current_prepared = _validate_prepared_manifest(
+            dataset_dir, evidence_dir
+        )
+    except BenchmarkError:
+        raise
+    except (ValueError, RecursionError, OverflowError, TypeError, UnicodeError) as error:
+        raise BenchmarkError(f"invalid frozen benchmark inputs: {error}") from error
     if current_manifest != run_manifest or current_prepared != prepared:
         raise BenchmarkError("frozen inputs changed during scoring verification")
     return {
@@ -1201,7 +1578,11 @@ def _normalized_scoring_evidence(paths: ScorePaths, loaded: Mapping[str, object]
             "labels": labels,
             "comparisons": dict(annotation["comparisons"]),
             "mqm": [
-                {"output": finding["output"], "severity": finding["severity"]}
+                {
+                    "output": finding["output"],
+                    "dimension": finding["dimension"],
+                    "severity": finding["severity"],
+                }
                 for finding in annotation["mqm"]
             ],
             "major_or_worse": dict(annotation["major_or_worse"]),
@@ -1224,6 +1605,28 @@ def _normalized_scoring_evidence(paths: ScorePaths, loaded: Mapping[str, object]
     return {
         "schema_version": SCHEMA_VERSION,
         "bootstrap_seed": loaded["run_manifest"]["bootstrap_seed"],
+        "cases": [
+            {
+                "case_id": case["id"],
+                "task": case["task"],
+                "surface": case["surface"],
+                "difficulty": case["difficulty"],
+            }
+            for case in loaded["cases"]
+        ],
+        "runs": [
+            {
+                "run_id": run["run_id"],
+                "case_id": run["case_id"],
+                "condition": run["condition"],
+                "attempt": run["attempt"],
+                "started_at": run["started_at"],
+                "completed_at": run["completed_at"],
+                "telemetry": run["telemetry"],
+                "usage": run["usage"],
+            }
+            for run in loaded["runs"]
+        ],
         "items": items,
         "validations": _normalized_validations(Path(paths.evidence_dir), loaded["runs"]),
         "seeded_errors": normalized_seeded,
@@ -1306,21 +1709,94 @@ def score_paths(paths: ScorePaths) -> dict:
     return document
 
 
-def _refuse_output_alias(output: Path, inputs: Sequence[Path]) -> None:
+def _validate_output_target(output: Path, paths: ScorePaths) -> Path:
     output = Path(output)
     try:
-        resolved_output = output.resolve()
-        for path in inputs:
-            path = Path(path)
-            aliases = resolved_output == path.resolve()
-            if not aliases and output.exists() and path.exists():
-                aliases = os.path.samefile(output, path)
-            if aliases:
-                raise BenchmarkError(f"score output aliases consumed input: {path}")
+        try:
+            output.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise BenchmarkError(f"score output already exists: {output}")
+        parent = output.parent.resolve(strict=True)
+        if not parent.is_dir():
+            raise BenchmarkError(f"score output parent is not a directory: {output.parent}")
+        resolved_output = parent / output.name
+        protected_roots = (
+            Path(paths.dataset_dir).resolve(strict=True),
+            Path(paths.evidence_dir).resolve(strict=True),
+            Path(paths.annotations).parent.resolve(strict=True),
+        )
+        for root in protected_roots:
+            if resolved_output == root or resolved_output.is_relative_to(root):
+                raise BenchmarkError(f"score output is inside consumed input tree: {root}")
+        for consumed in (
+            paths.review_bundle, paths.condition_key, paths.annotations,
+            paths.annotation_lock,
+        ):
+            if resolved_output == Path(consumed).resolve(strict=True):
+                raise BenchmarkError(f"score output aliases consumed input: {consumed}")
+        return resolved_output
     except BenchmarkError:
         raise
     except OSError as error:
         raise BenchmarkError(f"cannot validate score output path: {error}") from error
+
+
+def _publish_exclusive_json(output: Path, value: object) -> str:
+    encoded = canonical_bytes(value)
+    resolved_parent = output.parent.resolve(strict=True)
+    parent_fd = -1
+    output_fd = -1
+    created = False
+    try:
+        parent_fd = os.open(resolved_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        parent_before = os.fstat(parent_fd)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        output_fd = os.open(output.name, flags, 0o600, dir_fd=parent_fd)
+        created = True
+        offset = 0
+        while offset < len(encoded):
+            written = os.write(output_fd, encoded[offset:])
+            if written <= 0:
+                raise OSError("short write while publishing score output")
+            offset += written
+        os.fsync(output_fd)
+        metadata = os.fstat(output_fd)
+        linked = os.stat(output.name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size != len(encoded)
+            or (metadata.st_dev, metadata.st_ino) != (linked.st_dev, linked.st_ino)
+        ):
+            raise BenchmarkError("score output publication integrity check failed")
+        current_parent = output.parent.stat()
+        if (parent_before.st_dev, parent_before.st_ino) != (current_parent.st_dev, current_parent.st_ino):
+            raise BenchmarkError("score output parent changed during publication")
+        os.fsync(parent_fd)
+        return sha256_bytes(encoded)
+    except BenchmarkError:
+        if created and parent_fd >= 0:
+            try:
+                os.unlink(output.name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        raise
+    except OSError as error:
+        if created and parent_fd >= 0:
+            try:
+                os.unlink(output.name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        if error.errno == getattr(os, "EEXIST", 17):
+            raise BenchmarkError(f"score output already exists: {output}") from error
+        raise BenchmarkError(f"cannot publish score output: {error}") from error
+    finally:
+        if output_fd >= 0:
+            os.close(output_fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1346,31 +1822,15 @@ def main(argv: list[str] | None = None) -> int:
         annotation_lock=arguments.annotation_lock,
     )
     try:
-        optional_inputs = [
-            arguments.evidence / "review-mappings.jsonl",
-            arguments.evidence / "learned-metrics.jsonl",
-        ]
-        _refuse_output_alias(arguments.output, [
-            arguments.dataset / "dataset-manifest.json",
-            arguments.dataset / "cases.jsonl",
-            arguments.dataset / "seeded-errors.json",
-            arguments.evidence / "run-manifest.json",
-            arguments.evidence / "runs.jsonl",
-            arguments.evidence / "validation.jsonl",
-            arguments.review_bundle,
-            arguments.condition_key,
-            arguments.annotations,
-            arguments.annotation_lock,
-            *(path for path in optional_inputs if path.exists()),
-        ])
+        output = _validate_output_target(arguments.output, paths)
         document = score_paths(paths)
-        atomic_write_json(arguments.output, document)
+        output_sha256 = _publish_exclusive_json(output, document)
         sys.stdout.buffer.write(canonical_bytes({
             "output": str(arguments.output),
-            "sha256": sha256_file(arguments.output),
+            "sha256": output_sha256,
         }))
         return 0
-    except BenchmarkError as error:
+    except (BenchmarkError, ValueError, RecursionError, OverflowError, TypeError, UnicodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
