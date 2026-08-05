@@ -1401,7 +1401,7 @@ def _rename_no_replace(
         raise OSError(error, os.strerror(error))
 
 
-def _move_public_output_to_recovery(output: _HeldOutput) -> tuple[str, Path] | None:
+def _move_public_output_to_recovery(output: _HeldOutput) -> Path:
     for _ in range(64):
         name = f".report-recovery-{secrets.token_hex(16)}"
         try:
@@ -1411,79 +1411,26 @@ def _move_public_output_to_recovery(output: _HeldOutput) -> tuple[str, Path] | N
                 output.parent_descriptor,
                 name,
             )
-            return name, output.path.parent / name
+            # This atomic move is the recovery acceptance boundary. Do not
+            # inspect, restore, or otherwise use either pathname afterward.
+            return output.path.parent / name
         except FileExistsError:
             continue
-        except FileNotFoundError:
-            return None
         except OSError:
-            return output.path.name, output.path
-    return output.path.name, output.path
-
-
-def _recover_public_output(output: _HeldOutput) -> Path | None:
-    moved = _move_public_output_to_recovery(output)
-    if moved is None:
-        return None
-    recovery_name, recovery_path = moved
-    if recovery_path == output.path:
-        return recovery_path
-
-    descriptor = -1
-    try:
-        held_output = os.fstat(output.descriptor)
-        try:
-            descriptor = os.open(
-                recovery_name,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                dir_fd=output.parent_descriptor,
-            )
-            moved_entry = os.fstat(descriptor)
-        except OSError:
-            moved_entry = None
-
-        created_output_is_bound = (
-            moved_entry is not None
-            and (moved_entry.st_dev, moved_entry.st_ino) == output.identity
-            and (held_output.st_dev, held_output.st_ino) == output.identity
-            and held_output.st_nlink == 1
-            and stat.S_ISREG(moved_entry.st_mode)
-            and stat.S_IMODE(moved_entry.st_mode)
-            == stat.S_IMODE(output.metadata[2])
-            and 0 <= moved_entry.st_size <= len(output.expected)
-        )
-        if created_output_is_bound:
-            # POSIX has no compare-and-unlink operation. Preserve the exact
-            # invocation-created inode at its recovery name instead of turning
-            # this identity check into another check/use deletion race.
-            return recovery_path
-
-        if held_output.st_nlink == 0:
-            try:
-                _rename_no_replace(
-                    output.parent_descriptor,
-                    recovery_name,
-                    output.parent_descriptor,
-                    output.path.name,
-                )
-                return None
-            except OSError:
-                return recovery_path
-        return recovery_path
-    finally:
-        if descriptor >= 0:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
+            return output.path
+    return output.path
 
 
 def _rollback_created_outputs(outputs: Sequence[_HeldOutput]) -> list[Path]:
     recoverable: list[Path] = []
     for output in reversed(outputs):
-        recovered = _recover_public_output(output)
-        if recovered is not None:
-            recoverable.append(recovered)
+        try:
+            recovered = _move_public_output_to_recovery(output)
+        except Exception:
+            # Rollback is best-effort and output-local. Preserve and report the
+            # requested name if cleanup itself fails, then attempt its sibling.
+            recovered = output.path
+        recoverable.append(recovered)
     return sorted(set(recoverable), key=str)
 
 

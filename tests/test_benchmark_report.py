@@ -690,6 +690,8 @@ class ReportInputIdentityTests(unittest.TestCase):
                     for path in (self.results, self.markdown):
                         if path.exists():
                             path.unlink()
+                    for path in self.root.glob(".report-recovery-*"):
+                        self.remove_path(path)
                     if verify_existing:
                         self.write_expected_pair()
                     original = report._verify_held_input
@@ -709,7 +711,18 @@ class ReportInputIdentityTests(unittest.TestCase):
                         with mock.patch("sys.stderr"):
                             status = report.main(arguments)
                     self.assertEqual(status, 2)
-                    self.assertEqual(target.read_bytes(), b"tampered")
+                    if verify_existing:
+                        self.assertEqual(target.read_bytes(), b"tampered")
+                    else:
+                        self.assertFalse(target.exists())
+                        self.assertEqual(
+                            sum(
+                                path.read_bytes() == b"tampered"
+                                for path in self.root.glob(".report-recovery-*")
+                                if path.is_file()
+                            ),
+                            1,
+                        )
 
     def test_both_modes_recheck_replacements_after_each_name_verification(self):
         """Break: swapping a name after a successful stat could create a false acceptance."""
@@ -720,6 +733,8 @@ class ReportInputIdentityTests(unittest.TestCase):
                     for path in (self.results, self.markdown):
                         if path.exists():
                             path.unlink()
+                    for path in self.root.glob(".report-recovery-*"):
+                        self.remove_path(path)
                     if verify_existing:
                         self.write_expected_pair()
                     injected = False
@@ -742,7 +757,18 @@ class ReportInputIdentityTests(unittest.TestCase):
                             status = report.main(arguments)
                     self.assertEqual(status, 2)
                     self.assertTrue(injected)
-                    self.assertEqual(target.read_bytes(), b"tampered")
+                    if verify_existing:
+                        self.assertEqual(target.read_bytes(), b"tampered")
+                    else:
+                        self.assertFalse(target.exists())
+                        self.assertEqual(
+                            sum(
+                                path.read_bytes() == b"tampered"
+                                for path in self.root.glob(".report-recovery-*")
+                                if path.is_file()
+                            ),
+                            1,
+                        )
 
     def test_both_modes_reject_unlink_rename_hardlink_and_content_mutations(self):
         """Break: final acceptance could miss non-replacement output identity mutations."""
@@ -791,407 +817,189 @@ class ReportInputIdentityTests(unittest.TestCase):
                         self.assertEqual(status, 2)
                         self.assertTrue(injected)
 
-    def test_rollback_never_deletes_a_swap_after_precleanup_stat(self):
-        """Break: stat-then-unlink cleanup could delete an attacker replacement inode."""
-        real_stat = os.stat
-        for failure in ("second-publication", "input-acceptance"):
-            for target in (self.results, self.markdown):
-                with self.subTest(failure=failure, target=target.name):
-                    for path in (self.results, self.markdown):
-                        self.remove_path(path)
-                    replacement, replacement_ino = self.make_replacement(
-                        f"prestat-{failure}-{target.name}", "file"
-                    )
-                    displaced = self.root / f"displaced-{failure}-{target.name}"
-                    self.remove_path(displaced)
-                    armed = [False]
-                    injected = False
-
-                    def swap_after_stat(path, *args, **kwargs):
-                        nonlocal injected
-                        metadata = real_stat(path, *args, **kwargs)
-                        if (
-                            armed[0]
-                            and not injected
-                            and kwargs.get("dir_fd") is not None
-                            and os.fspath(path) == target.name
-                        ):
-                            injected = True
-                            target.replace(displaced)
-                            replacement.replace(target)
-                        return metadata
-
-                    with mock.patch.object(report.os, "stat", side_effect=swap_after_stat):
-                        status, _ = self.run_publication_failure(failure, armed)
-                    self.assertEqual(status, 2)
-                    surviving = [
-                        path
-                        for path in self.root.rglob("*")
-                        if path.lstat().st_ino == replacement_ino
-                    ]
-                    self.assertTrue(
-                        surviving,
-                        "rollback deleted the attacker replacement inode",
-                    )
-
-    def test_rollback_restores_each_replacement_type_quarantined_before_rename(self):
-        """Break: quarantine cleanup could lose file, symlink, hard-link, or directory replacements."""
-        real_rename = os.rename
+    def test_rollback_has_no_post_move_path_or_descriptor_inspection(self):
+        """Break: post-move open/fstat hooks could invalidate a reported recovery name."""
         atomic_move = report._rename_no_replace
-        for failure in ("second-publication", "input-acceptance"):
-            for target in (self.results, self.markdown):
-                for kind in ("file", "symlink", "hardlink", "directory"):
-                    with self.subTest(
-                        failure=failure, target=target.name, kind=kind
-                    ):
-                        for path in (self.results, self.markdown):
-                            self.remove_path(path)
-                        replacement, replacement_ino = self.make_replacement(
-                            f"before-{failure}-{target.name}-{kind}", kind
-                        )
-                        armed = [False]
-                        injected = False
+        real_open = os.open
+        real_fstat = os.fstat
+        moved: list[Path] = []
+        post_move_calls: list[str] = []
+        armed = [False]
 
-                        def replace_before_quarantine(
-                            source_descriptor,
-                            source_name,
-                            destination_descriptor,
-                            destination_name,
-                        ):
-                            nonlocal injected
-                            if (
-                                armed[0]
-                                and not injected
-                                and os.fspath(source_name) == target.name
-                                and os.fspath(destination_name).startswith(
-                                    ".report-recovery-"
-                                )
-                            ):
-                                injected = True
-                                target.unlink()
-                                real_rename(replacement, target)
-                            return atomic_move(
-                                source_descriptor,
-                                source_name,
-                                destination_descriptor,
-                                destination_name,
-                            )
+        def move_and_arm(source_fd, source_name, destination_fd, destination_name):
+            result = atomic_move(source_fd, source_name, destination_fd, destination_name)
+            moved.append(self.root / os.fspath(destination_name))
+            armed[0] = True
+            return result
 
-                        with mock.patch.object(
-                            report,
-                            "_rename_no_replace",
-                            side_effect=replace_before_quarantine,
-                        ):
-                            status, _ = self.run_publication_failure(failure, armed)
-                        self.assertEqual(status, 2)
-                        self.assertTrue(injected)
-                        self.assertTrue(target.exists() or target.is_symlink())
-                        self.assertEqual(target.lstat().st_ino, replacement_ino)
+        def reject_post_move_open(*args, **kwargs):
+            if armed[0]:
+                post_move_calls.append("open")
+                raise OSError(errno.EIO, "post-move open must be unreachable")
+            return real_open(*args, **kwargs)
 
-    def test_rollback_preserves_replacement_installed_after_quarantine_rename(self):
-        """Break: cleanup after quarantine could overwrite a newly occupied public name."""
+        def reject_post_move_fstat(*args, **kwargs):
+            if armed[0]:
+                post_move_calls.append("fstat")
+                raise OSError(errno.EIO, "post-move fstat must be unreachable")
+            return real_fstat(*args, **kwargs)
+
+        with mock.patch.object(
+            report, "_rename_no_replace", side_effect=move_and_arm
+        ), mock.patch.object(report.os, "open", side_effect=reject_post_move_open), mock.patch.object(
+            report.os, "fstat", side_effect=reject_post_move_fstat
+        ), mock.patch.object(report.os, "unlink", side_effect=AssertionError("unlink")), mock.patch.object(
+            report.os, "rmdir", side_effect=AssertionError("rmdir")
+        ):
+            status, errors = self.run_publication_failure("input-acceptance", [False])
+
+        self.assertEqual(status, 2)
+        self.assertEqual(post_move_calls, [])
+        self.assertEqual(len(moved), 2)
+        for path in moved:
+            self.assertIn(str(path), errors)
+
+    def test_rollback_cleanup_exception_for_one_output_does_not_abort_the_other(self):
+        """Break: one rollback exception could skip the sibling output and escape main."""
+        original = report._move_public_output_to_recovery
+        attempted: list[str] = []
+
+        def fail_results_only(output):
+            attempted.append(output.path.name)
+            if output.path.name == self.results.name:
+                raise OSError(errno.EIO, "injected primitive failure")
+            return original(output)
+
+        with mock.patch.object(
+            report, "_move_public_output_to_recovery", side_effect=fail_results_only
+        ), mock.patch.object(report.os, "unlink", side_effect=AssertionError("unlink")), mock.patch.object(
+            report.os, "rmdir", side_effect=AssertionError("rmdir")
+        ):
+            status, errors = self.run_publication_failure("input-acceptance", [False])
+
+        recoveries = list(self.root.glob(".report-recovery-*"))
+        self.assertEqual(status, 2)
+        self.assertCountEqual(attempted, [self.results.name, self.markdown.name])
+        self.assertTrue(self.results.exists())
+        self.assertFalse(self.markdown.exists())
+        self.assertEqual(len(recoveries), 1)
+        self.assertIn(str(self.results), errors)
+        self.assertIn(str(recoveries[0]), errors)
+
+    def test_rollback_primitive_error_for_one_output_does_not_abort_the_other(self):
+        """Break: one kernel rename error could prevent snapshotting the sibling output."""
         atomic_move = report._rename_no_replace
-        for failure in ("second-publication", "input-acceptance"):
-            for target in (self.results, self.markdown):
-                with self.subTest(failure=failure, target=target.name):
-                    for path in (self.results, self.markdown):
-                        self.remove_path(path)
-                    armed = [False]
-                    injected = False
-
-                    def occupy_after_quarantine(
-                        source_descriptor,
-                        source_name,
-                        destination_descriptor,
-                        destination_name,
-                    ):
-                        nonlocal injected
-                        result = atomic_move(
-                            source_descriptor,
-                            source_name,
-                            destination_descriptor,
-                            destination_name,
-                        )
-                        if (
-                            armed[0]
-                            and not injected
-                            and os.fspath(source_name) == target.name
-                            and os.fspath(destination_name).startswith(
-                                ".report-recovery-"
-                            )
-                        ):
-                            injected = True
-                            target.write_bytes(b"post-quarantine replacement")
-                        return result
-
-                    with mock.patch.object(
-                        report,
-                        "_rename_no_replace",
-                        side_effect=occupy_after_quarantine,
-                    ):
-                        status, _ = self.run_publication_failure(failure, armed)
-                    self.assertEqual(status, 2)
-                    self.assertTrue(injected)
-                    self.assertEqual(target.read_bytes(), b"post-quarantine replacement")
-
-    def test_rollback_reports_recoverable_quarantine_when_restore_name_is_occupied(self):
-        """Break: a failed exclusive restore could delete or hide the quarantined replacement."""
-        real_rename = os.rename
-        atomic_move = report._rename_no_replace
-        for failure in ("second-publication", "input-acceptance"):
-            for target in (self.results, self.markdown):
-                with self.subTest(failure=failure, target=target.name):
-                    for path in (self.results, self.markdown):
-                        self.remove_path(path)
-                    replacement, replacement_ino = self.make_replacement(
-                        f"occupied-{failure}-{target.name}", "file"
-                    )
-                    armed = [False]
-                    injected = False
-
-                    def occupy_restore_name(
-                        source_descriptor,
-                        source_name,
-                        destination_descriptor,
-                        destination_name,
-                    ):
-                        nonlocal injected
-                        if (
-                            armed[0]
-                            and not injected
-                            and os.fspath(source_name) == target.name
-                            and os.fspath(destination_name).startswith(
-                                ".report-recovery-"
-                            )
-                        ):
-                            injected = True
-                            target.unlink()
-                            real_rename(replacement, target)
-                            result = atomic_move(
-                                source_descriptor,
-                                source_name,
-                                destination_descriptor,
-                                destination_name,
-                            )
-                            target.write_bytes(b"occupied-public-name")
-                            return result
-                        return atomic_move(
-                            source_descriptor,
-                            source_name,
-                            destination_descriptor,
-                            destination_name,
-                        )
-
-                    with mock.patch.object(
-                        report,
-                        "_rename_no_replace",
-                        side_effect=occupy_restore_name,
-                    ):
-                        status, errors = self.run_publication_failure(failure, armed)
-                    self.assertEqual(status, 2)
-                    self.assertTrue(injected)
-                    self.assertEqual(target.read_bytes(), b"occupied-public-name")
-                    quarantined = [
-                        path
-                        for path in self.root.glob(".report-recovery-*")
-                        if path.lstat().st_ino == replacement_ino
-                    ]
-                    self.assertEqual(len(quarantined), 1)
-                    self.assertIn(str(quarantined[0]), errors)
-
-    def test_rollback_never_accepts_a_directory_swapped_before_quarantine_open(self):
-        """Break: mkdir-then-open could accept an attacker directory as trusted quarantine."""
-        real_open = os.open
-        real_rename = os.rename
-        for failure in ("second-publication", "input-acceptance"):
-            with self.subTest(failure=failure):
-                for path in (self.results, self.markdown):
-                    self.remove_path(path)
-                armed = [False]
-                injected = False
-                attacker = self.root / f"attacker-quarantine-{failure}"
-                displaced = self.root / f"created-quarantine-{failure}"
-                self.remove_path(attacker)
-                self.remove_path(displaced)
-                attacker.mkdir()
-                attacker_inode = attacker.stat().st_ino
-
-                def swap_before_open(path, flags, *args, **kwargs):
-                    nonlocal injected
-                    name = os.fspath(path)
-                    if (
-                        armed[0]
-                        and not injected
-                        and name.startswith(".report-quarantine-")
-                        and kwargs.get("dir_fd") is not None
-                    ):
-                        injected = True
-                        created = self.root / name
-                        real_rename(created, displaced)
-                        real_rename(attacker, created)
-                    return real_open(path, flags, *args, **kwargs)
-
-                with mock.patch.object(report.os, "open", side_effect=swap_before_open):
-                    status, errors = self.run_publication_failure(failure, armed)
-                self.assertEqual(status, 2)
-                surviving = [
-                    path
-                    for path in self.root.rglob("*")
-                    if path.lstat().st_ino == attacker_inode
-                ]
-                self.assertTrue(surviving, "rollback deleted the swapped attacker directory")
-                if injected:
-                    self.assertIn(str(surviving[0]), errors)
-
-    def test_rollback_never_rmdirs_a_cleanup_name_replacement(self):
-        """Break: quarantine stat-then-rmdir could delete a replacement directory."""
-        real_rmdir = os.rmdir
-        real_rename = os.rename
-        for failure in ("second-publication", "input-acceptance"):
-            with self.subTest(failure=failure):
-                for path in (self.results, self.markdown):
-                    self.remove_path(path)
-                armed = [False]
-                injected = False
-                replacement = self.root / f"cleanup-replacement-{failure}"
-                displaced = self.root / f"cleanup-displaced-{failure}"
-                self.remove_path(replacement)
-                self.remove_path(displaced)
-                replacement.mkdir()
-                replacement_inode = replacement.stat().st_ino
-
-                def swap_before_cleanup_removal(path, *args, **kwargs):
-                    nonlocal injected
-                    name = os.fspath(path)
-                    if (
-                        armed[0]
-                        and not injected
-                        and name.startswith(".report-quarantine-")
-                        and kwargs.get("dir_fd") is not None
-                    ):
-                        injected = True
-                        quarantine = self.root / name
-                        real_rename(quarantine, displaced)
-                        real_rename(replacement, quarantine)
-                    return real_rmdir(path, *args, **kwargs)
-
-                with mock.patch.object(
-                    report.os, "rmdir", side_effect=swap_before_cleanup_removal
-                ):
-                    status, errors = self.run_publication_failure(failure, armed)
-                self.assertEqual(status, 2)
-                surviving = [
-                    path
-                    for path in self.root.rglob("*")
-                    if path.lstat().st_ino == replacement_inode
-                ]
-                self.assertTrue(surviving, "rollback deleted the cleanup-name replacement")
-                if injected:
-                    self.assertIn(str(surviving[0]), errors)
-
-    def test_rollback_fails_closed_when_atomic_recovery_move_is_unsupported(self):
-        """Break: unsupported atomic moves could fall back to destructive path cleanup."""
-        for failure in ("second-publication", "input-acceptance"):
-            with self.subTest(failure=failure):
-                for path in (self.results, self.markdown):
-                    self.remove_path(path)
-                armed = [False]
-                with mock.patch.object(
-                    report,
-                    "_rename_no_replace",
-                    side_effect=OSError(errno.ENOTSUP, "injected unsupported primitive"),
-                ), mock.patch.object(report.os, "unlink", wraps=os.unlink) as unlink:
-                    status, errors = self.run_publication_failure(failure, armed)
-                self.assertEqual(status, 2)
-                self.assertTrue(self.results.exists() or self.markdown.exists())
-                self.assertIn("recoverable", errors)
-                self.assertFalse(
-                    any(
-                        call.kwargs.get("dir_fd") is not None
-                        for call in unlink.mock_calls
-                    ),
-                    "unsupported recovery must not fall back to unlinking public names",
-                )
-
-    def test_recovery_open_swap_preserves_both_the_moved_inode_and_replacement(self):
-        """Break: a recovery-name swap around open could be accepted or destructively cleaned."""
-        real_open = os.open
-        real_rename = os.rename
-        for failure in ("second-publication", "input-acceptance"):
-            with self.subTest(failure=failure):
-                for path in (self.results, self.markdown):
-                    self.remove_path(path)
-                armed = [False]
-                injected = False
-                displaced = self.root / f"recovery-open-displaced-{failure}"
-                attacker = self.root / f"recovery-open-attacker-{failure}"
-                self.remove_path(displaced)
-                self.remove_path(attacker)
-                attacker.write_bytes(b"unrelated recovery-name replacement")
-                attacker_inode = attacker.stat().st_ino
-
-                def swap_before_recovery_open(path, flags, *args, **kwargs):
-                    nonlocal injected
-                    name = os.fspath(path)
-                    if (
-                        armed[0]
-                        and not injected
-                        and name.startswith(".report-recovery-")
-                        and kwargs.get("dir_fd") is not None
-                    ):
-                        injected = True
-                        recovery = self.root / name
-                        real_rename(recovery, displaced)
-                        real_rename(attacker, recovery)
-                    return real_open(path, flags, *args, **kwargs)
-
-                with mock.patch.object(report.os, "open", side_effect=swap_before_recovery_open):
-                    status, errors = self.run_publication_failure(failure, armed)
-                self.assertEqual(status, 2)
-                self.assertTrue(injected)
-                self.assertTrue(displaced.exists())
-                surviving = [
-                    path
-                    for path in self.root.rglob("*")
-                    if path.lstat().st_ino == attacker_inode
-                ]
-                self.assertTrue(surviving)
-                self.assertIn("recoverable", errors)
-
-    def test_failed_recovery_open_preserves_the_atomic_move(self):
-        """Break: failure opening moved recovery material could trigger path deletion."""
-        real_open = os.open
-        for failure in ("second-publication", "input-acceptance"):
-            with self.subTest(failure=failure):
+        for error_number in (errno.EIO, errno.ENOTSUP):
+            with self.subTest(error_number=error_number):
                 for path in (self.results, self.markdown):
                     self.remove_path(path)
                 for path in self.root.glob(".report-recovery-*"):
                     self.remove_path(path)
-                armed = [False]
-                injected = False
+                attempted: list[str] = []
 
-                def fail_recovery_open(path, flags, *args, **kwargs):
-                    nonlocal injected
-                    name = os.fspath(path)
-                    if (
-                        armed[0]
-                        and not injected
-                        and name.startswith(".report-recovery-")
-                        and kwargs.get("dir_fd") is not None
-                    ):
-                        injected = True
-                        raise OSError(errno.EIO, "injected recovery open failure")
-                    return real_open(path, flags, *args, **kwargs)
+                def fail_results_only(
+                    source_fd, source_name, destination_fd, destination_name
+                ):
+                    source_name = os.fspath(source_name)
+                    attempted.append(source_name)
+                    if source_name == self.results.name:
+                        raise OSError(error_number, "injected primitive failure")
+                    return atomic_move(
+                        source_fd, source_name, destination_fd, destination_name
+                    )
 
-                with mock.patch.object(report.os, "open", side_effect=fail_recovery_open):
-                    status, errors = self.run_publication_failure(failure, armed)
-                self.assertEqual(status, 2)
-                self.assertTrue(injected)
+                with mock.patch.object(
+                    report, "_rename_no_replace", side_effect=fail_results_only
+                ), mock.patch.object(
+                    report.os, "unlink", side_effect=AssertionError("unlink")
+                ), mock.patch.object(
+                    report.os, "rmdir", side_effect=AssertionError("rmdir")
+                ):
+                    status, errors = self.run_publication_failure(
+                        "input-acceptance", [False]
+                    )
+
                 recoveries = list(self.root.glob(".report-recovery-*"))
-                self.assertTrue(recoveries)
-                self.assertTrue(
-                    any(os.path.realpath(path) in errors for path in recoveries)
+                self.assertEqual(status, 2)
+                self.assertCountEqual(
+                    attempted, [self.results.name, self.markdown.name]
                 )
+                self.assertTrue(self.results.exists())
+                self.assertFalse(self.markdown.exists())
+                self.assertEqual(len(recoveries), 1)
+                self.assertIn(str(self.results), errors)
+                self.assertIn(str(recoveries[0]), errors)
+
+    def test_rollback_bounds_sixty_four_recovery_name_collisions_per_output(self):
+        """Break: recovery-name collision retry could be unbounded or skip an output."""
+        calls: list[str] = []
+
+        def collide(_source_fd, source_name, _destination_fd, _destination_name):
+            calls.append(os.fspath(source_name))
+            raise FileExistsError(errno.EEXIST, "injected collision")
+
+        with mock.patch.object(
+            report, "_rename_no_replace", side_effect=collide
+        ), mock.patch.object(report.os, "unlink", side_effect=AssertionError("unlink")), mock.patch.object(
+            report.os, "rmdir", side_effect=AssertionError("rmdir")
+        ):
+            status, errors = self.run_publication_failure("input-acceptance", [False])
+
+        self.assertEqual(status, 2)
+        self.assertEqual(calls.count(self.results.name), 64)
+        self.assertEqual(calls.count(self.markdown.name), 64)
+        self.assertTrue(self.results.exists())
+        self.assertTrue(self.markdown.exists())
+        self.assertIn(str(self.results), errors)
+        self.assertIn(str(self.markdown), errors)
+
+    def test_rollback_snapshots_each_public_object_type_at_the_atomic_move(self):
+        """Break: rollback inspection/restoration could move or misreport the accepted snapshot."""
+        atomic_move = report._rename_no_replace
+        for target in (self.results, self.markdown):
+            for kind in ("file", "symlink", "hardlink", "directory"):
+                with self.subTest(target=target.name, kind=kind):
+                    for path in (self.results, self.markdown):
+                        self.remove_path(path)
+                    for path in self.root.glob(".report-recovery-*"):
+                        self.remove_path(path)
+                    replacement, replacement_inode = self.make_replacement(
+                        f"snapshot-{target.name}-{kind}", kind
+                    )
+                    moved: dict[str, Path] = {}
+                    injected = False
+
+                    def install_snapshot(source_fd, source_name, destination_fd, destination_name):
+                        nonlocal injected
+                        source_name = os.fspath(source_name)
+                        destination_name = os.fspath(destination_name)
+                        if not injected and source_name == target.name:
+                            injected = True
+                            target.unlink()
+                            os.rename(replacement, target)
+                        result = atomic_move(
+                            source_fd, source_name, destination_fd, destination_name
+                        )
+                        moved[source_name] = self.root / destination_name
+                        return result
+
+                    with mock.patch.object(
+                        report, "_rename_no_replace", side_effect=install_snapshot
+                    ), mock.patch.object(report.os, "unlink", wraps=os.unlink) as unlink, mock.patch.object(
+                        report.os, "rmdir", wraps=os.rmdir
+                    ) as rmdir:
+                        status, errors = self.run_publication_failure(
+                            "input-acceptance", [False]
+                        )
+
+                    recovery = moved[target.name]
+                    self.assertEqual(status, 2)
+                    self.assertTrue(injected)
+                    self.assertFalse(target.exists() or target.is_symlink())
+                    self.assertEqual(recovery.lstat().st_ino, replacement_inode)
+                    self.assertIn(str(recovery), errors)
+                    self.assertEqual(unlink.call_count, 1)
+                    self.assertEqual(rmdir.call_count, 0)
 
 
 class ReportCliTests(unittest.TestCase):
