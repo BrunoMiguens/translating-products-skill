@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -530,6 +532,63 @@ class ReportInputIdentityTests(unittest.TestCase):
         replacement.write_bytes(encoded)
         replacement.replace(target)
 
+    def remove_path(self, path: Path) -> None:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+    def run_publication_failure(
+        self,
+        failure: str,
+        armed: list[bool],
+    ) -> tuple[int, str]:
+        errors = io.StringIO()
+        if failure == "second-publication":
+            original = report._write_fd
+            calls = 0
+
+            def fail_second(descriptor: int, encoded: bytes) -> None:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    armed[0] = True
+                    raise OSError("injected second publication failure")
+                original(descriptor, encoded)
+
+            patcher = mock.patch.object(report, "_write_fd", side_effect=fail_second)
+        else:
+            def fail_input(_value) -> None:
+                armed[0] = True
+                raise BenchmarkError("injected input acceptance failure")
+
+            patcher = mock.patch.object(
+                report, "_verify_held_input", side_effect=fail_input
+            )
+        with patcher, mock.patch("sys.stderr", errors):
+            status = report.main(self.argv())
+        return status, errors.getvalue()
+
+    def make_replacement(self, label: str, kind: str) -> tuple[Path, int]:
+        path = self.root / f"replacement-{label}"
+        self.remove_path(path)
+        source = self.root / f"source-{label}"
+        self.remove_path(source)
+        if kind == "file":
+            path.write_bytes(b"replacement-file")
+        elif kind == "symlink":
+            source.write_bytes(b"symlink-target")
+            path.symlink_to(source.name)
+        elif kind == "hardlink":
+            source.write_bytes(b"hardlink-source")
+            os.link(source, path)
+        elif kind == "directory":
+            path.mkdir()
+            (path / "sentinel").write_bytes(b"replacement-directory")
+        else:
+            raise AssertionError(kind)
+        return path, path.lstat().st_ino
+
     def test_held_score_and_provenance_replacements_roll_back_publication(self):
         """Break: same-byte input replacement during rendering could still publish a pair."""
         for name, path in (("scores", self.scores), ("provenance", self.provenance)):
@@ -730,6 +789,169 @@ class ReportInputIdentityTests(unittest.TestCase):
                                 status = report.main(arguments)
                         self.assertEqual(status, 2)
                         self.assertTrue(injected)
+
+    def test_rollback_never_deletes_a_swap_after_precleanup_stat(self):
+        """Break: stat-then-unlink cleanup could delete an attacker replacement inode."""
+        real_stat = os.stat
+        for failure in ("second-publication", "input-acceptance"):
+            for target in (self.results, self.markdown):
+                with self.subTest(failure=failure, target=target.name):
+                    for path in (self.results, self.markdown):
+                        self.remove_path(path)
+                    replacement, replacement_ino = self.make_replacement(
+                        f"prestat-{failure}-{target.name}", "file"
+                    )
+                    displaced = self.root / f"displaced-{failure}-{target.name}"
+                    self.remove_path(displaced)
+                    armed = [False]
+                    injected = False
+
+                    def swap_after_stat(path, *args, **kwargs):
+                        nonlocal injected
+                        metadata = real_stat(path, *args, **kwargs)
+                        if (
+                            armed[0]
+                            and not injected
+                            and kwargs.get("dir_fd") is not None
+                            and os.fspath(path) == target.name
+                        ):
+                            injected = True
+                            target.replace(displaced)
+                            replacement.replace(target)
+                        return metadata
+
+                    with mock.patch.object(report.os, "stat", side_effect=swap_after_stat):
+                        status, _ = self.run_publication_failure(failure, armed)
+                    self.assertEqual(status, 2)
+                    surviving = [
+                        path
+                        for path in self.root.rglob("*")
+                        if path.lstat().st_ino == replacement_ino
+                    ]
+                    self.assertTrue(
+                        surviving,
+                        "rollback deleted the attacker replacement inode",
+                    )
+
+    def test_rollback_restores_each_replacement_type_quarantined_before_rename(self):
+        """Break: quarantine cleanup could lose file, symlink, hard-link, or directory replacements."""
+        real_rename = os.rename
+        for failure in ("second-publication", "input-acceptance"):
+            for target in (self.results, self.markdown):
+                for kind in ("file", "symlink", "hardlink", "directory"):
+                    with self.subTest(
+                        failure=failure, target=target.name, kind=kind
+                    ):
+                        for path in (self.results, self.markdown):
+                            self.remove_path(path)
+                        replacement, replacement_ino = self.make_replacement(
+                            f"before-{failure}-{target.name}-{kind}", kind
+                        )
+                        armed = [False]
+                        injected = False
+
+                        def replace_before_quarantine(path, destination, *args, **kwargs):
+                            nonlocal injected
+                            if (
+                                armed[0]
+                                and not injected
+                                and kwargs.get("src_dir_fd") is not None
+                                and kwargs.get("dst_dir_fd") is not None
+                                and os.fspath(path) == target.name
+                            ):
+                                injected = True
+                                target.unlink()
+                                real_rename(replacement, target)
+                            return real_rename(path, destination, *args, **kwargs)
+
+                        with mock.patch.object(
+                            report.os, "rename", side_effect=replace_before_quarantine
+                        ):
+                            status, _ = self.run_publication_failure(failure, armed)
+                        self.assertEqual(status, 2)
+                        self.assertTrue(injected)
+                        self.assertTrue(target.exists() or target.is_symlink())
+                        self.assertEqual(target.lstat().st_ino, replacement_ino)
+
+    def test_rollback_preserves_replacement_installed_after_quarantine_rename(self):
+        """Break: cleanup after quarantine could overwrite a newly occupied public name."""
+        real_rename = os.rename
+        for failure in ("second-publication", "input-acceptance"):
+            for target in (self.results, self.markdown):
+                with self.subTest(failure=failure, target=target.name):
+                    for path in (self.results, self.markdown):
+                        self.remove_path(path)
+                    armed = [False]
+                    injected = False
+
+                    def occupy_after_quarantine(path, destination, *args, **kwargs):
+                        nonlocal injected
+                        result = real_rename(path, destination, *args, **kwargs)
+                        if (
+                            armed[0]
+                            and not injected
+                            and kwargs.get("src_dir_fd") is not None
+                            and kwargs.get("dst_dir_fd") is not None
+                            and os.fspath(path) == target.name
+                        ):
+                            injected = True
+                            target.write_bytes(b"post-quarantine replacement")
+                        return result
+
+                    with mock.patch.object(
+                        report.os, "rename", side_effect=occupy_after_quarantine
+                    ):
+                        status, _ = self.run_publication_failure(failure, armed)
+                    self.assertEqual(status, 2)
+                    self.assertTrue(injected)
+                    self.assertEqual(target.read_bytes(), b"post-quarantine replacement")
+
+    def test_rollback_reports_recoverable_quarantine_when_restore_name_is_occupied(self):
+        """Break: a failed exclusive restore could delete or hide the quarantined replacement."""
+        real_rename = os.rename
+        for failure in ("second-publication", "input-acceptance"):
+            for target in (self.results, self.markdown):
+                with self.subTest(failure=failure, target=target.name):
+                    for path in (self.results, self.markdown):
+                        self.remove_path(path)
+                    replacement, replacement_ino = self.make_replacement(
+                        f"occupied-{failure}-{target.name}", "file"
+                    )
+                    armed = [False]
+                    injected = False
+
+                    def occupy_restore_name(path, destination, *args, **kwargs):
+                        nonlocal injected
+                        if (
+                            armed[0]
+                            and not injected
+                            and kwargs.get("src_dir_fd") is not None
+                            and kwargs.get("dst_dir_fd") is not None
+                            and os.fspath(path) == target.name
+                        ):
+                            injected = True
+                            target.unlink()
+                            real_rename(replacement, target)
+                            result = real_rename(path, destination, *args, **kwargs)
+                            target.write_bytes(b"occupied-public-name")
+                            return result
+                        return real_rename(path, destination, *args, **kwargs)
+
+                    with mock.patch.object(
+                        report.os, "rename", side_effect=occupy_restore_name
+                    ):
+                        status, errors = self.run_publication_failure(failure, armed)
+                    self.assertEqual(status, 2)
+                    self.assertTrue(injected)
+                    self.assertEqual(target.read_bytes(), b"occupied-public-name")
+                    quarantined = [
+                        path
+                        for directory in self.root.glob(".report-quarantine-*")
+                        for path in directory.iterdir()
+                        if path.lstat().st_ino == replacement_ino
+                    ]
+                    self.assertEqual(len(quarantined), 1)
+                    self.assertIn(str(quarantined[0]), errors)
 
 
 class ReportCliTests(unittest.TestCase):

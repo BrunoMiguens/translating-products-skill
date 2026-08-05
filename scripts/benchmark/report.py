@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import math
 import os
 import re
+import secrets
 import stat
 import sys
 import unicodedata
@@ -1106,6 +1109,21 @@ class _HeldOutput:
             self.descriptor = -1
 
 
+@dataclass
+class _Quarantine:
+    parent_path: Path
+    parent_descriptor: int
+    parent_identity: tuple[int, int]
+    name: str
+    descriptor: int
+    identity: tuple[int, int]
+    preserved: bool = False
+
+    @property
+    def path(self) -> Path:
+        return self.parent_path / self.name
+
+
 def _file_metadata(value: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
     return (
         value.st_dev,
@@ -1348,19 +1366,249 @@ def _accept_output_set(
     _verify_output_set(values)
 
 
-def _unlink_created_if_still_bound(
-    parent_descriptor: int,
-    name: str,
-    identity: tuple[int, int],
+def _create_quarantine(output: _HeldOutput) -> _Quarantine:
+    for _ in range(64):
+        name = f".report-quarantine-{secrets.token_hex(16)}"
+        try:
+            os.mkdir(name, 0o700, dir_fd=output.parent_descriptor)
+        except FileExistsError:
+            continue
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=output.parent_descriptor,
+            )
+            os.fchmod(descriptor, 0o700)
+            held = os.fstat(descriptor)
+            linked = os.stat(
+                name,
+                dir_fd=output.parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(held.st_mode)
+                or stat.S_IMODE(held.st_mode) != 0o700
+                or (held.st_dev, held.st_ino) != (linked.st_dev, linked.st_ino)
+                or (held.st_dev, held.st_ino) == output.identity
+            ):
+                raise BenchmarkError("rollback quarantine integrity check failed")
+            return _Quarantine(
+                parent_path=output.path.parent,
+                parent_descriptor=output.parent_descriptor,
+                parent_identity=output.parent_identity,
+                name=name,
+                descriptor=descriptor,
+                identity=(held.st_dev, held.st_ino),
+            )
+        except Exception:
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            # The name was unpredictable and created by this invocation. If it
+            # cannot be safely removed, leave it for recovery rather than risk
+            # deleting a replacement.
+            try:
+                linked = os.stat(
+                    name,
+                    dir_fd=output.parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISDIR(linked.st_mode):
+                    os.rmdir(name, dir_fd=output.parent_descriptor)
+            except OSError:
+                pass
+            raise
+    raise BenchmarkError("cannot allocate an unpredictable rollback quarantine")
+
+
+def _rename_no_replace(
+    source_descriptor: int,
+    source_name: str,
+    destination_descriptor: int,
+    destination_name: str,
 ) -> None:
+    library = ctypes.CDLL(None, use_errno=True)
+    source = os.fsencode(source_name)
+    destination = os.fsencode(destination_name)
+    if sys.platform == "darwin" and hasattr(library, "renameatx_np"):
+        function = library.renameatx_np
+        function.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        function.restype = ctypes.c_int
+        result = function(
+            source_descriptor,
+            source,
+            destination_descriptor,
+            destination,
+            0x00000004,  # RENAME_EXCL
+        )
+    elif hasattr(library, "renameat2"):
+        function = library.renameat2
+        function.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        function.restype = ctypes.c_int
+        result = function(
+            source_descriptor,
+            source,
+            destination_descriptor,
+            destination,
+            0x00000001,  # RENAME_NOREPLACE
+        )
+    else:
+        raise OSError(errno.ENOTSUP, "exclusive rename is unavailable")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _restore_quarantined_replacement(
+    quarantine: _Quarantine,
+    quarantine_name: str,
+    output: _HeldOutput,
+    metadata: os.stat_result,
+) -> Path | None:
     try:
-        linked = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
-        if (linked.st_dev, linked.st_ino) == identity:
-            os.unlink(name, dir_fd=parent_descriptor)
-    except FileNotFoundError:
-        pass
+        if stat.S_ISDIR(metadata.st_mode):
+            _rename_no_replace(
+                quarantine.descriptor,
+                quarantine_name,
+                output.parent_descriptor,
+                output.path.name,
+            )
+        else:
+            os.link(
+                quarantine_name,
+                output.path.name,
+                src_dir_fd=quarantine.descriptor,
+                dst_dir_fd=output.parent_descriptor,
+                follow_symlinks=False,
+            )
+            os.unlink(quarantine_name, dir_fd=quarantine.descriptor)
+        return None
     except OSError:
-        pass
+        quarantine.preserved = True
+        return quarantine.path / quarantine_name
+
+
+def _quarantine_public_output(
+    output: _HeldOutput,
+    quarantine: _Quarantine,
+) -> Path | None:
+    quarantine_name = f"output-{secrets.token_hex(16)}"
+    try:
+        os.rename(
+            output.path.name,
+            quarantine_name,
+            src_dir_fd=output.parent_descriptor,
+            dst_dir_fd=quarantine.descriptor,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError:
+        quarantine.preserved = True
+        return output.path
+    try:
+        metadata = os.stat(
+            quarantine_name,
+            dir_fd=quarantine.descriptor,
+            follow_symlinks=False,
+        )
+    except OSError:
+        quarantine.preserved = True
+        return quarantine.path / quarantine_name
+    created_and_acceptable = (
+        (metadata.st_dev, metadata.st_ino) == output.identity
+        and stat.S_ISREG(metadata.st_mode)
+        and stat.S_IMODE(metadata.st_mode) == stat.S_IMODE(output.metadata[2])
+        and metadata.st_nlink == 1
+        and 0 <= metadata.st_size <= len(output.expected)
+    )
+    if created_and_acceptable:
+        try:
+            os.unlink(quarantine_name, dir_fd=quarantine.descriptor)
+            return None
+        except OSError:
+            quarantine.preserved = True
+            return quarantine.path / quarantine_name
+    return _restore_quarantined_replacement(
+        quarantine, quarantine_name, output, metadata
+    )
+
+
+def _cleanup_quarantine(quarantine: _Quarantine) -> Path | None:
+    try:
+        held = os.fstat(quarantine.descriptor)
+        entries = os.listdir(quarantine.descriptor)
+        linked = os.stat(
+            quarantine.name,
+            dir_fd=quarantine.parent_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            quarantine.preserved
+            or entries
+            or not stat.S_ISDIR(held.st_mode)
+            or stat.S_IMODE(held.st_mode) != 0o700
+            or (held.st_dev, held.st_ino) != quarantine.identity
+            or (linked.st_dev, linked.st_ino) != quarantine.identity
+        ):
+            return quarantine.path
+        os.rmdir(quarantine.name, dir_fd=quarantine.parent_descriptor)
+        return None
+    except OSError:
+        return quarantine.path
+    finally:
+        try:
+            os.close(quarantine.descriptor)
+        except OSError:
+            pass
+
+
+def _rollback_created_outputs(outputs: Sequence[_HeldOutput]) -> list[Path]:
+    quarantines: dict[tuple[int, int], _Quarantine] = {}
+    recoverable: list[Path] = []
+    for output in reversed(outputs):
+        quarantine = quarantines.get(output.parent_identity)
+        if quarantine is None:
+            try:
+                quarantine = _create_quarantine(output)
+            except Exception:
+                recoverable.append(output.path)
+                continue
+            quarantines[output.parent_identity] = quarantine
+        recovered = _quarantine_public_output(output, quarantine)
+        if recovered is not None:
+            recoverable.append(recovered)
+    for quarantine in quarantines.values():
+        preserved = _cleanup_quarantine(quarantine)
+        if preserved is not None and preserved not in recoverable:
+            recoverable.append(preserved)
+    return sorted(set(recoverable), key=str)
+
+
+def _rollback_error(error: Exception, outputs: Sequence[_HeldOutput]) -> BenchmarkError:
+    recoverable = _rollback_created_outputs(outputs)
+    message = str(error)
+    if recoverable:
+        locations = ", ".join(str(path) for path in recoverable)
+        message += f"; recoverable quarantine path(s): {locations}"
+    return BenchmarkError(message)
 
 
 def _publish_pair(
@@ -1374,7 +1622,6 @@ def _publish_pair(
     targets = ((Path(results), result_bytes), (Path(markdown), markdown_bytes))
     parents: list[int] = []
     outputs: list[_HeldOutput] = []
-    created: list[tuple[int, str, tuple[int, int]]] = []
     parent_metadata: list[tuple[int, int]] = []
     try:
         for target, _ in targets:
@@ -1387,7 +1634,6 @@ def _publish_pair(
             output_fd = os.open(target.name, flags, 0o600, dir_fd=parent_fd)
             opened = os.fstat(output_fd)
             identity = (opened.st_dev, opened.st_ino)
-            created.append((parent_fd, target.name, identity))
             output = _HeldOutput(
                 path=target,
                 description=("results output" if index == 0 else "Markdown output"),
@@ -1417,14 +1663,11 @@ def _publish_pair(
                 raise BenchmarkError("report output parent changed during publication")
             os.fsync(parent_fd)
         _accept_output_set(outputs, accept)
-    except BenchmarkError:
-        for parent_fd, name, identity in reversed(created):
-            _unlink_created_if_still_bound(parent_fd, name, identity)
-        raise
+    except BenchmarkError as error:
+        raise _rollback_error(error, outputs) from error
     except OSError as error:
-        for parent_fd, name, identity in reversed(created):
-            _unlink_created_if_still_bound(parent_fd, name, identity)
-        raise BenchmarkError(f"cannot publish report output pair: {error}") from error
+        publication_error = OSError(f"cannot publish report output pair: {error}")
+        raise _rollback_error(publication_error, outputs) from error
     finally:
         for value in outputs:
             try:
