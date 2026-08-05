@@ -6,7 +6,7 @@ import os
 import random
 import stat
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +31,7 @@ from .prepare import verify_dataset_manifest
 from .review_app import MQM_DIMENSIONS, ReviewStore
 from .run import RunResult
 from .schema import CONDITIONS, DIFFICULTIES, SCHEMA_VERSION, SURFACES, TASKS
+from .validate import CHECKS
 
 
 SEVERITY_POINTS = {"critical": 25, "major": 5, "minor": 1, "neutral": 0}
@@ -49,7 +50,7 @@ _ITEM_FIELDS = {
 _VALIDATION_FIELDS = {
     "run_id", "case_id", "condition", "attempt", "status", "findings",
     "validator_errors", "applicable_checks", "passed_checks", "failed_checks",
-    "validator_error_checks",
+    "validator_error_checks", "applicable_invariants",
 }
 _FINDING_FIELDS = {
     "invariant", "severity", "expected", "observed", "affected_span", "message",
@@ -372,6 +373,7 @@ def _validate_validations(values: object) -> tuple[list[dict], dict[str, dict]]:
     records: list[dict] = []
     by_run: dict[str, dict] = {}
     identities: set[tuple[str, str, int]] = set()
+    declarations_by_case: dict[str, tuple[str, ...]] = {}
     for index, value in enumerate(values):
         if not isinstance(value, Mapping) or set(value) != _VALIDATION_FIELDS:
             raise BenchmarkError(f"validation {index} fields are invalid")
@@ -386,6 +388,36 @@ def _validate_validations(values: object) -> tuple[list[dict], dict[str, dict]]:
         if status not in {"passed", "failed", "validator_error"}:
             raise BenchmarkError(f"validation {index} status is invalid")
         record["findings"] = _validate_findings(record.get("findings"), f"validation {index}")
+        applicable_invariants = record.get("applicable_invariants")
+        if (
+            not isinstance(applicable_invariants, list)
+            or any(
+                type(invariant) is not str or invariant not in CHECKS
+                for invariant in applicable_invariants
+            )
+        ):
+            raise BenchmarkError(
+                f"validation {index} applicable_invariants are invalid"
+            )
+        declaration = tuple(applicable_invariants)
+        prior_declaration = declarations_by_case.setdefault(case_id, declaration)
+        if Counter(prior_declaration) != Counter(declaration):
+            raise BenchmarkError(
+                f"validation {index} applicable invariants differ within case"
+            )
+        declared_counts = Counter(declaration)
+        finding_counts = Counter(
+            finding["invariant"] for finding in record["findings"]
+        )
+        undeclared = sorted(
+            invariant for invariant, count in finding_counts.items()
+            if count > declared_counts[invariant]
+        )
+        if undeclared:
+            raise BenchmarkError(
+                f"validation {index} finding is not declared applicable: "
+                f"{undeclared!r}"
+            )
         errors = record.get("validator_errors")
         if not isinstance(errors, list) or any(type(error) is not str for error in errors):
             raise BenchmarkError(f"validation {index} validator_errors are invalid")
@@ -398,6 +430,34 @@ def _validate_validations(values: object) -> tuple[list[dict], dict[str, dict]]:
         ]
         if counts[0] != sum(counts[1:]):
             raise BenchmarkError(f"validation {index} check counts are inconsistent")
+        if len(declaration) != counts[0]:
+            raise BenchmarkError(
+                f"validation {index} invariant applicability count is inconsistent"
+            )
+        validator_error_counts = Counter(
+            invariant
+            for error in errors
+            for invariant in declared_counts
+            if error.startswith(f"{invariant}:")
+        )
+        if (
+            sum(finding_counts.values()) != counts[2]
+            or sum(validator_error_counts.values()) != counts[3]
+            or any(
+                finding_counts[invariant] + validator_error_counts[invariant]
+                > declared_counts[invariant]
+                for invariant in declared_counts
+            )
+            or sum(
+                declared_counts[invariant]
+                - finding_counts[invariant]
+                - validator_error_counts[invariant]
+                for invariant in declared_counts
+            ) != counts[1]
+        ):
+            raise BenchmarkError(
+                f"validation {index} per-invariant check counts are inconsistent"
+            )
         expected_status = (
             "validator_error" if counts[3] else ("failed" if counts[2] else "passed")
         )
@@ -820,6 +880,13 @@ def _preference_scorecard(items: Sequence[Mapping[str, object]], seed: int) -> d
         Pair(item["case_id"], item["attempt"], float(outcome), 0.0)
         for item, outcome in zip(items, outcomes)
     ]
+    non_tied_interval = paired_bootstrap(
+        pairs,
+        lambda sampled: non_tied_win_rate([
+            pair.suite_value - pair.normal_value for pair in sampled
+        ]),
+        seed=seed,
+    )
     return {
         "available": True,
         "case_attempts": len(items),
@@ -828,7 +895,8 @@ def _preference_scorecard(items: Sequence[Mapping[str, object]], seed: int) -> d
         "ties": sum(value == 0 for value in outcomes),
         "ordinal_sum": sum(outcomes),
         "non_tied_win_rate": non_tied_win_rate(outcomes),
-        "paired_bootstrap": paired_bootstrap(pairs, _paired_mean_difference, seed=seed),
+        "paired_bootstrap": non_tied_interval,
+        "paired_bootstrap_estimand": "non_tied_win_rate",
     }
 
 
@@ -851,14 +919,6 @@ def _scorecards(
 
     dimensions: dict[str, dict] = {}
     for dimension in sorted(MQM_DIMENSIONS):
-        has_observation = any(
-            finding["dimension"] == dimension
-            for item in primaries
-            for finding in item["mqm"]
-        )
-        if not has_observation:
-            dimensions[dimension] = {"available": False}
-            continue
         totals = {condition: 0 for condition in CONDITIONS}
         pairs: list[Pair] = []
         for item in primaries:
@@ -883,9 +943,9 @@ def _scorecards(
         }
 
     invariant_names = sorted({
-        finding["invariant"]
+        invariant
         for validation in validations
-        for finding in validation["findings"]
+        for invariant in validation["applicable_invariants"]
     })
     invariants: dict[str, dict] = {}
     validations_by_identity = {
@@ -893,23 +953,61 @@ def _scorecards(
         for record in validations
     }
     for invariant in invariant_names:
+        applicable = {condition: 0 for condition in CONDITIONS}
+        passed = {condition: 0 for condition in CONDITIONS}
         failures = {condition: 0 for condition in CONDITIONS}
-        pairs = []
+        validator_errors = {condition: 0 for condition in CONDITIONS}
+        for record in validations:
+            condition = record["condition"]
+            applicable_count = record["applicable_invariants"].count(invariant)
+            failure_count = sum(
+                finding["invariant"] == invariant
+                for finding in record["findings"]
+            )
+            validator_error_count = sum(
+                error.startswith(f"{invariant}:")
+                for error in record["validator_errors"]
+            )
+            applicable[condition] += applicable_count
+            failures[condition] += failure_count
+            validator_errors[condition] += validator_error_count
+            passed[condition] += (
+                applicable_count - failure_count - validator_error_count
+            )
+
+        pairs: list[Pair] = []
         for item in primaries:
             per_condition = {}
             for condition in item["labels"].values():
                 record = validations_by_identity[(item["case_id"], item["attempt"], condition)]
-                count = sum(finding["invariant"] == invariant for finding in record["findings"])
-                failures[condition] += count
-                per_condition[condition] = count
+                if invariant not in record["applicable_invariants"]:
+                    continue
+                per_condition[condition] = sum(
+                    finding["invariant"] == invariant
+                    for finding in record["findings"]
+                )
+            if not {"normal", "suite"} <= set(per_condition):
+                continue
             pairs.append(Pair(
                 item["case_id"], item["attempt"],
                 float(per_condition["normal"]), float(per_condition["suite"]),
             ))
+        paired_failures = paired_bootstrap(
+            pairs, _paired_mean_difference, seed=seed
+        )
         invariants[invariant] = {
             "available": True,
+            "applicable": applicable,
+            "passed": passed,
             "failures": failures,
-            "paired_difference": paired_bootstrap(pairs, _paired_mean_difference, seed=seed),
+            "validator_errors": validator_errors,
+            "pass_rate": {
+                condition: _rate(passed[condition], applicable[condition])
+                for condition in CONDITIONS
+            },
+            "paired_case_attempts": len(pairs),
+            "paired_failure_difference_normal_minus_suite": paired_failures,
+            "paired_difference": paired_failures,
         }
     return {
         "overall": _preference_scorecard(primaries, seed),
@@ -1497,6 +1595,7 @@ def verify_locked_inputs(paths: ScorePaths) -> None:
 def _normalized_validations(
     evidence_dir: Path,
     runs: Sequence[Mapping[str, object]],
+    cases: Sequence[Mapping[str, object]],
 ) -> list[dict]:
     fields = {
         "schema_version", "run_id", "case_id", "status", "output", "findings",
@@ -1509,6 +1608,23 @@ def _normalized_validations(
         limit=_MAX_DOCUMENT_INPUT_BYTES,
     )
     runs_by_id = {run["run_id"]: run for run in runs}
+    invariants_by_case: dict[str, list[str]] = {}
+    for case in cases:
+        checks = case.get("automatic_checks")
+        if not isinstance(checks, list):
+            raise BenchmarkError(
+                f"case {case.get('id')} automatic_checks must be a list"
+            )
+        invariants: list[str] = []
+        for index, check in enumerate(checks):
+            check_type = check.get("type") if isinstance(check, Mapping) else None
+            if type(check_type) is not str or check_type not in CHECKS:
+                raise BenchmarkError(
+                    f"case {case.get('id')} automatic check {index} "
+                    "has no scoreable invariant identity"
+                )
+            invariants.append(check_type)
+        invariants_by_case[case["id"]] = invariants
     result: list[dict] = []
     seen: set[str] = set()
     for index, record in enumerate(records):
@@ -1535,6 +1651,7 @@ def _normalized_validations(
             "passed_checks": record["passed_checks"],
             "failed_checks": record["failed_checks"],
             "validator_error_checks": record["validator_error_checks"],
+            "applicable_invariants": list(invariants_by_case[record["case_id"]]),
         })
     if set(runs_by_id) != seen:
         missing = sorted(set(runs_by_id) - seen)
@@ -1628,7 +1745,9 @@ def _normalized_scoring_evidence(paths: ScorePaths, loaded: Mapping[str, object]
             for run in loaded["runs"]
         ],
         "items": items,
-        "validations": _normalized_validations(Path(paths.evidence_dir), loaded["runs"]),
+        "validations": _normalized_validations(
+            Path(paths.evidence_dir), loaded["runs"], loaded["cases"]
+        ),
         "seeded_errors": normalized_seeded,
         "review_mappings": _optional_jsonl(Path(paths.evidence_dir), "review-mappings.jsonl"),
         "learned_metrics": _optional_jsonl(Path(paths.evidence_dir), "learned-metrics.jsonl"),

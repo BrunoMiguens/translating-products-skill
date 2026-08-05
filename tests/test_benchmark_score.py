@@ -23,10 +23,11 @@ from scripts.benchmark.common import (
     sha256_bytes,
 )
 from scripts.benchmark.prepare import build_dataset_manifest, build_run_manifest
-from scripts.benchmark.review_app import ReviewStore
+from scripts.benchmark.review_app import MQM_DIMENSIONS, ReviewStore
 from scripts.benchmark.score import (
     Pair,
     ScorePaths,
+    _normalized_validations,
     evaluate_gates,
     paired_bootstrap,
     quantile,
@@ -47,8 +48,14 @@ def validation(
     applicable: int = 1,
     passed: int = 1,
     findings: list[dict] | None = None,
+    invariants: list[str] | None = None,
 ) -> dict:
     findings = [] if findings is None else findings
+    invariants = (
+        ["placeholder_multiset"] * applicable
+        if invariants is None
+        else invariants
+    )
     failed = 1 if findings else 0
     return {
         "run_id": run_id,
@@ -62,6 +69,7 @@ def validation(
         "passed_checks": passed if not findings else max(0, passed - 1),
         "failed_checks": failed,
         "validator_error_checks": 0,
+        "applicable_invariants": invariants,
     }
 
 
@@ -261,6 +269,7 @@ class ScoreTests(unittest.TestCase):
         for record in zero["validations"]:
             record["applicable_checks"] = 0
             record["passed_checks"] = 0
+            record["applicable_invariants"] = []
         metrics = score_evidence(zero)
         self.assertEqual(metrics["translation"]["suite_structural_pass_rate"], 0.0)
         self.assertFalse(evaluate_gates(metrics)["translation"]["passed"])
@@ -425,6 +434,206 @@ class ScoreTests(unittest.TestCase):
             scorecards["invariant"]["placeholder_multiset"],
         )
         self.assertEqual(scorecards["overall"]["paired_bootstrap"]["seed"], 20260804)
+
+    def test_scorecard_interval_estimates_the_displayed_non_tied_win_rate(self):
+        """Break: a win-rate card could display an ordinal-difference interval."""
+        evidence = base_evidence()
+        evidence["items"][1]["comparisons"]["A:B"] = "right_clear"
+
+        scorecards = score_evidence(evidence)["scorecards"]
+
+        for scorecard in (
+            scorecards["overall"],
+            scorecards["task"]["translation"],
+        ):
+            self.assertEqual(scorecard["non_tied_win_rate"], 0.5)
+            self.assertEqual(scorecard["paired_bootstrap"]["estimate"], 0.5)
+            self.assertEqual(
+                scorecard["paired_bootstrap_estimand"], "non_tied_win_rate"
+            )
+        self.assertEqual(
+            scorecards["surface"]["web"]["paired_bootstrap"]["estimate"],
+            1.0,
+        )
+        self.assertEqual(
+            scorecards["surface"]["marketing"]["paired_bootstrap"]["estimate"],
+            0.0,
+        )
+
+    def test_complete_zero_error_queue_emits_every_mqm_dimension_as_known_zero(self):
+        """Break: absence of MQM errors could be reported as missing review evidence."""
+        evidence = base_evidence()
+        for item_value in evidence["items"]:
+            item_value["mqm"] = []
+            item_value["major_or_worse"] = {
+                label: False for label in item_value["labels"]
+            }
+
+        dimensions = score_evidence(evidence)["scorecards"]["error_dimension"]
+
+        self.assertEqual(list(dimensions), sorted(MQM_DIMENSIONS))
+        for dimension in sorted(MQM_DIMENSIONS):
+            self.assertEqual(dimensions[dimension]["available"], True)
+            self.assertEqual(
+                dimensions[dimension]["mqm_points"],
+                {"normal": 0, "suite": 0, "context_only": 0},
+            )
+            self.assertEqual(
+                dimensions[dimension]["paired_difference"]["estimate"], 0.0
+            )
+
+    def test_invariant_scorecards_preserve_declared_partial_applicability(self):
+        """Break: all-pass or partially applicable checks could vanish from scores."""
+        evidence = base_evidence()
+        for record in evidence["validations"]:
+            declared = (
+                ["url_multiset", "placeholder_multiset"]
+                if record["case_id"] == "translation-1"
+                else ["placeholder_multiset"]
+            )
+            record["applicable_invariants"] = declared
+            record["applicable_checks"] = len(declared)
+            record["passed_checks"] = len(declared)
+        failed = next(
+            record for record in evidence["validations"]
+            if record["run_id"] == "t2-s"
+        )
+        failed.update({
+            "status": "failed",
+            "findings": [{
+                "invariant": "placeholder_multiset",
+                "severity": "major",
+                "expected": ["{name}"],
+                "observed": [],
+                "affected_span": None,
+                "message": "placeholder changed",
+            }],
+            "passed_checks": 0,
+            "failed_checks": 1,
+        })
+
+        invariants = score_evidence(evidence)["scorecards"]["invariant"]
+
+        self.assertEqual(
+            list(invariants), ["placeholder_multiset", "url_multiset"]
+        )
+        self.assertEqual(
+            invariants["placeholder_multiset"]["applicable"],
+            {"normal": 2, "suite": 2, "context_only": 1},
+        )
+        self.assertEqual(
+            invariants["placeholder_multiset"]["passed"],
+            {"normal": 2, "suite": 1, "context_only": 1},
+        )
+        self.assertEqual(
+            invariants["placeholder_multiset"]["failures"],
+            {"normal": 0, "suite": 1, "context_only": 0},
+        )
+        self.assertEqual(
+            invariants["placeholder_multiset"]["pass_rate"],
+            {"normal": 1.0, "suite": 0.5, "context_only": 1.0},
+        )
+        self.assertEqual(
+            invariants["placeholder_multiset"][
+                "paired_failure_difference_normal_minus_suite"
+            ]["estimate"],
+            -0.5,
+        )
+        self.assertEqual(
+            invariants["placeholder_multiset"]["paired_case_attempts"], 2
+        )
+        self.assertEqual(
+            invariants["url_multiset"]["applicable"],
+            {"normal": 1, "suite": 1, "context_only": 1},
+        )
+        self.assertEqual(
+            invariants["url_multiset"]["passed"],
+            {"normal": 1, "suite": 1, "context_only": 1},
+        )
+        self.assertEqual(
+            invariants["url_multiset"]["failures"],
+            {"normal": 0, "suite": 0, "context_only": 0},
+        )
+        self.assertEqual(
+            invariants["url_multiset"][
+                "paired_failure_difference_normal_minus_suite"
+            ]["estimate"],
+            0.0,
+        )
+
+    def test_invariant_failures_must_name_a_declared_applicable_check(self):
+        """Break: failure rows could invent applicability absent from declarations."""
+        evidence = base_evidence()
+        for record in evidence["validations"]:
+            record["applicable_invariants"] = []
+            record["applicable_checks"] = 0
+            record["passed_checks"] = 0
+        failed = next(
+            record for record in evidence["validations"]
+            if record["run_id"] == "t2-s"
+        )
+        failed.update({
+            "status": "failed",
+            "findings": [{
+                "invariant": "markdown_structure",
+                "severity": "major",
+                "expected": {},
+                "observed": {},
+                "affected_span": None,
+                "message": "undeclared",
+            }],
+            "passed_checks": 0,
+            "failed_checks": 1,
+        })
+
+        with self.assertRaisesRegex(BenchmarkError, "not declared applicable"):
+            score_evidence(evidence)
+
+    def test_filesystem_normalizer_sources_invariants_from_case_declarations(self):
+        """Break: filesystem scoring could discard all-pass check declarations."""
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_dir = Path(temporary)
+            runs = [
+                {
+                    "run_id": f"run-{condition}",
+                    "case_id": "case-1",
+                    "condition": condition,
+                    "attempt": 1,
+                    "output": "Olá {name}",
+                }
+                for condition in ("normal", "suite")
+            ]
+            for run in runs:
+                append_jsonl_fsync(evidence_dir / "validation.jsonl", {
+                    "schema_version": 1,
+                    "run_id": run["run_id"],
+                    "case_id": "case-1",
+                    "status": "passed",
+                    "output": run["output"],
+                    "findings": [],
+                    "validator_errors": [],
+                    "applicable_checks": 2,
+                    "passed_checks": 2,
+                    "failed_checks": 0,
+                    "validator_error_checks": 0,
+                })
+            cases = [{
+                "id": "case-1",
+                "automatic_checks": [
+                    {"type": "url_multiset", "severity": "critical"},
+                    {"type": "placeholder_multiset", "severity": "major"},
+                ],
+            }]
+
+            normalized = _normalized_validations(evidence_dir, runs, cases)
+
+        self.assertEqual(
+            [record["applicable_invariants"] for record in normalized],
+            [
+                ["url_multiset", "placeholder_multiset"],
+                ["url_multiset", "placeholder_multiset"],
+            ],
+        )
 
     def test_operational_diagnostics_use_per_run_latency_usage_cost_tools_and_research(self):
         """Break: normalized scoring could discard the run telemetry required for diagnosis."""
