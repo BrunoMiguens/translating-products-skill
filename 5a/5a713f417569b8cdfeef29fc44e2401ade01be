@@ -1,0 +1,32 @@
+scripts/benchmark/review_ui/styles.css
+  s_51f69c54a42bb0::t_d5d5b2c6f0b099 52,146
+  s_51f69c54a42bb0::t_00c6ac4100a74e 1-51,53-145,147-169
+scripts/benchmark/review_ui/app.js
+  s_51f69c54a42bb0::t_00c6ac4100a74e 1-205,210-311,313-491
+  s_51f69c54a42bb0::t_d5d5b2c6f0b099 206-209,312
+scripts/benchmark/review_app.py
+  s_51f69c54a42bb0::t_c56d38c3333e1f 382,384-388
+  s_51f69c54a42bb0::t_463e40c34f1b55 1-65,70-77,80-113,115-169,172-239,242-247,251,255,258-310,312-315,318-329,334,337,339-342,352-381,383,389-400,415-446,478-583,586-612,615-652,654,662-766,771-807,823-875
+  s_51f69c54a42bb0::t_1eb54f33e44e4e 66-69,78-79,114,170-171,330-333,335-336,338,343-351,653,655-661,767-770,808-822
+  s_51f69c54a42bb0::t_d5d5b2c6f0b099 240-241,248-250,252-254,256-257,311,316-317,401-414,447-477,584-585,613-614
+tests/test_benchmark_review_app.py
+  s_51f69c54a42bb0::t_5b711e5c8c7275 1-302
+scripts/benchmark/review_ui/index.html
+  s_51f69c54a42bb0::t_00c6ac4100a74e 1-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "5a5a713f417569b8cdfeef29fc44e2401ade01be",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
