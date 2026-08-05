@@ -658,16 +658,43 @@ class BlindingCliTests(unittest.TestCase):
         *,
         section: str | None = None,
     ) -> bytes:
-        dataset_manifest_path = self.dataset / "dataset-manifest.json"
-        dataset_manifest = json.loads(dataset_manifest_path.read_text(encoding="utf-8"))
-        container = dataset_manifest if section is None else dataset_manifest[section]
-        placeholder = "__RAW_MANIFEST_STRING__"
-        container[field] = placeholder
-        encoded = canonical_bytes(dataset_manifest)
-        encoded = encoded.replace(
-            canonical_bytes(placeholder).rstrip(b"\n"),
+        return self._set_raw_dataset_manifest_value(
+            field,
             raw_json_string,
+            section=section,
+        )
+
+    @staticmethod
+    def _replace_json_field(
+        encoded: bytes,
+        field: str,
+        raw_json_value: bytes,
+        *,
+        section: str | None = None,
+    ) -> bytes:
+        value = json.loads(encoded.decode("utf-8"))
+        container = value if section is None else value[section]
+        placeholder = "__RAW_MANIFEST_VALUE__"
+        container[field] = placeholder
+        return canonical_bytes(value).replace(
+            canonical_bytes(placeholder).rstrip(b"\n"),
+            raw_json_value,
             1,
+        )
+
+    def _set_raw_dataset_manifest_value(
+        self,
+        field: str,
+        raw_json_value: bytes,
+        *,
+        section: str | None = None,
+    ) -> bytes:
+        dataset_manifest_path = self.dataset / "dataset-manifest.json"
+        encoded = self._replace_json_field(
+            dataset_manifest_path.read_bytes(),
+            field,
+            raw_json_value,
+            section=section,
         )
         dataset_manifest_path.write_bytes(encoded)
         run_manifest_path = self.evidence / "run-manifest.json"
@@ -1090,6 +1117,95 @@ class BlindingCliTests(unittest.TestCase):
             timeout=2,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_canonical_json_parsers_convert_integer_and_recursion_resource_failures(self):
+        """Break: valid JSON resource failures must remain benchmark input errors."""
+        malformed = (
+            ("oversized positive", b"9" * 5000),
+            ("oversized negative", b"-" + b"9" * 5000),
+            ("deep array", b"[" * 2000 + b"0" + b"]" * 2000),
+            ("deep object", b'{"nested":' * 1200 + b"0" + b"}" * 1200),
+        )
+        for label, raw_value in malformed:
+            json_bytes = b'{"value":' + raw_value + b"}\n"
+            jsonl_bytes = b'{"value":' + raw_value + b"}\n"
+            before_fds = len(os.listdir("/dev/fd"))
+            with self.subTest(parser="JSON", case=label), self.assertRaises(BenchmarkError):
+                blind._parse_canonical_json(json_bytes, "test JSON")
+            self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
+            with self.subTest(parser="JSONL", case=label), self.assertRaises(BenchmarkError):
+                blind._parse_canonical_jsonl(jsonl_bytes, "test JSONL")
+            self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
+
+    def test_canonical_json_parsers_preserve_ordinary_boundary_integers(self):
+        """Break: resource limits must not change exact canonical bounded numbers."""
+        encoded = (
+            b'{"maximum":9223372036854775807,'
+            b'"minimum":-9223372036854775808}\n'
+        )
+        expected = {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+        }
+
+        self.assertEqual(blind._parse_canonical_json(encoded, "test JSON"), expected)
+        self.assertEqual(blind._parse_canonical_jsonl(encoded, "test JSONL"), [expected])
+
+    def test_module_cli_converts_json_resource_failures_for_every_input_format(self):
+        """Break: dataset, run-manifest, and JSONL failures must be status-2 diagnostics."""
+        dataset_path = self.dataset / "dataset-manifest.json"
+        run_manifest_path = self.evidence / "run-manifest.json"
+        runs_path = self.evidence / "runs.jsonl"
+        originals = {
+            dataset_path: dataset_path.read_bytes(),
+            run_manifest_path: run_manifest_path.read_bytes(),
+            runs_path: runs_path.read_bytes(),
+        }
+        malformed = (
+            ("oversized positive", b"9" * 5000),
+            ("oversized negative", b"-" + b"9" * 5000),
+            ("deep array", b"[" * 2000 + b"0" + b"]" * 2000),
+            ("deep object", b'{"nested":' * 1200 + b"0" + b"}" * 1200),
+        )
+        resources = ("dataset manifest", "run manifest", "runs.jsonl")
+        for resource_index, resource in enumerate(resources):
+            for case_index, (label, raw_value) in enumerate(malformed):
+                for path, encoded in originals.items():
+                    path.write_bytes(encoded)
+                if resource == "dataset manifest":
+                    self._set_raw_dataset_manifest_value("schema_version", raw_value)
+                elif resource == "run manifest":
+                    run_manifest_path.write_bytes(self._replace_json_field(
+                        run_manifest_path.read_bytes(),
+                        "schema_version",
+                        raw_value,
+                    ))
+                else:
+                    lines = runs_path.read_bytes().splitlines(keepends=True)
+                    lines[0] = self._replace_json_field(
+                        lines[0],
+                        "schema_version",
+                        raw_value,
+                    )
+                    runs_path.write_bytes(b"".join(lines))
+                public_dir = self.root / f"public-json-{resource_index}-{case_index}"
+                private_dir = self.root / f"private-json-{resource_index}-{case_index}"
+                public_dir.mkdir()
+                private_dir.mkdir()
+                review = public_dir / "bundle.json"
+                key = private_dir / "key.json"
+                before_fds = len(os.listdir("/dev/fd"))
+
+                completed = self.run_cli(review, key, timeout=2)
+
+                with self.subTest(resource=resource, case=label):
+                    self.assertEqual(completed.returncode, 2, completed.stdout)
+                    self.assertEqual(completed.stdout, "")
+                    self.assertEqual(completed.stderr.count("error: "), 1, completed.stderr)
+                    self.assertNotIn("Traceback", completed.stderr)
+                    self.assertFalse(review.exists())
+                    self.assertFalse(key.exists())
+                    self.assertEqual(len(os.listdir("/dev/fd")), before_fds)
 
     def test_nul_path_validation_happens_before_the_anchor_is_opened(self):
         """Break: cleanup must not substitute for validating every component up front."""

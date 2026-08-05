@@ -1375,11 +1375,53 @@ def _canonical_input_bytes(value: object, description: str) -> bytes:
         ) from error
 
 
+_MAX_JSON_INTEGER_DIGITS = 4096
+_MAX_JSON_NESTING = 256
+
+
+def _bounded_json_integer(token: str) -> int:
+    digits = token[1:] if token.startswith("-") else token
+    if len(digits) > _MAX_JSON_INTEGER_DIGITS:
+        raise ValueError(
+            f"JSON integer exceeds {_MAX_JSON_INTEGER_DIGITS} digits"
+        )
+    return int(token)
+
+
+def _validate_json_nesting(value: object, description: str) -> None:
+    pending = [(value, 0)]
+    while pending:
+        current, depth = pending.pop()
+        if depth > _MAX_JSON_NESTING:
+            raise BenchmarkError(
+                f"invalid {description}: JSON nesting exceeds {_MAX_JSON_NESTING} levels"
+            )
+        if isinstance(current, dict):
+            pending.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            pending.extend((item, depth + 1) for item in current)
+
+
+def _parse_json_text(text: str, description: str) -> object:
+    try:
+        value = json.loads(text, parse_int=_bounded_json_integer)
+    except (
+        json.JSONDecodeError,
+        ValueError,
+        RecursionError,
+        OverflowError,
+    ) as error:
+        raise BenchmarkError(f"invalid {description}: {error}") from error
+    _validate_json_nesting(value, description)
+    return value
+
+
 def _parse_canonical_json(encoded: bytes, description: str) -> object:
     try:
-        value = json.loads(encoded.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        text = encoded.decode("utf-8")
+    except UnicodeDecodeError as error:
         raise BenchmarkError(f"invalid {description}: {error}") from error
+    value = _parse_json_text(text, description)
     if _canonical_input_bytes(value, description) != encoded:
         raise BenchmarkError(f"{description} must use canonical JSON bytes")
     return value
@@ -1397,12 +1439,7 @@ def _parse_canonical_jsonl(encoded: bytes, description: str) -> list[dict]:
         )
     records: list[dict] = []
     for line_number, line in enumerate(lines, start=1):
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise BenchmarkError(
-                f"invalid {description} line {line_number}: {error}"
-            ) from error
+        record = _parse_json_text(line, f"{description} line {line_number}")
         if not isinstance(record, dict):
             raise BenchmarkError(f"{description} line {line_number} must be an object")
         records.append(record)
