@@ -1,0 +1,1379 @@
+from __future__ import annotations
+
+import argparse
+import math
+import os
+import random
+import stat
+import sys
+from collections import defaultdict
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from .blind import (
+    _parse_canonical_json,
+    _parse_canonical_jsonl,
+    _validate_condition_key,
+    _validate_prepared_manifest,
+    _validate_run_record,
+    build_blind_bundle,
+    scan_visible_bundle,
+)
+from .common import (
+    BenchmarkError,
+    atomic_write_json,
+    canonical_bytes,
+    sha256_bytes,
+    sha256_file,
+)
+from .prepare import verify_dataset_manifest
+from .review_app import ReviewStore
+from .run import RunResult
+from .schema import CONDITIONS, SCHEMA_VERSION, TASKS
+
+
+SEVERITY_POINTS = {"critical": 25, "major": 5, "minor": 1, "neutral": 0}
+PREFERENCE_ORDINAL = {
+    "left_clear": 2,
+    "left_slight": 1,
+    "tie": 0,
+    "right_slight": -1,
+    "right_clear": -2,
+}
+
+_ITEM_FIELDS = {
+    "item_id", "case_id", "attempt", "task", "repeat_of", "labels",
+    "comparisons", "mqm", "major_or_worse", "word_counts",
+}
+_VALIDATION_FIELDS = {
+    "run_id", "case_id", "condition", "attempt", "status", "findings",
+    "validator_errors", "applicable_checks", "passed_checks", "failed_checks",
+    "validator_error_checks",
+}
+_FINDING_FIELDS = {
+    "invariant", "severity", "expected", "observed", "affected_span", "message",
+}
+_MAPPING_FIELDS = {
+    "run_id", "seeded_error_id", "reported", "corrected", "introduced_error",
+    "adjudicator", "note",
+}
+_LEARNED_FIELDS = {"run_id", "metric", "value"}
+_LEARNED_METRICS = {"comet", "xcomet", "chrf"}
+_MAX_SMALL_INPUT_BYTES = 1024 * 1024
+_MAX_DOCUMENT_INPUT_BYTES = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class ScorePaths:
+    dataset_dir: Path
+    evidence_dir: Path
+    review_bundle: Path
+    condition_key: Path
+    annotations: Path
+    annotation_lock: Path
+
+
+@dataclass(frozen=True)
+class Pair:
+    case_id: str
+    attempt: int
+    suite_value: float
+    normal_value: float
+
+
+def _exact_int(value: object, description: str, *, minimum: int | None = None) -> int:
+    if type(value) is not int or (minimum is not None and value < minimum):
+        qualifier = f" at least {minimum}" if minimum is not None else ""
+        raise BenchmarkError(f"{description} must be an integer{qualifier}")
+    return value
+
+
+def _text(value: object, description: str, *, nonempty: bool = True) -> str:
+    if type(value) is not str or (nonempty and not value):
+        raise BenchmarkError(f"{description} must be {'non-empty ' if nonempty else ''}text")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise BenchmarkError(f"{description} must contain valid Unicode") from error
+    return value
+
+
+def _finite(value: object, description: str) -> float:
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise BenchmarkError(f"{description} must be a finite number")
+    return float(value)
+
+
+def _rate(numerator: int | float, denominator: int | float) -> float:
+    return float(numerator / denominator) if denominator else 0.0
+
+
+def quantile(values: Sequence[float], probability: float) -> float:
+    """Return the linearly interpolated sample quantile on [0, 1]."""
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)) or not values:
+        raise BenchmarkError("quantile requires observations")
+    probability_value = _finite(probability, "quantile probability")
+    if not 0.0 <= probability_value <= 1.0:
+        raise BenchmarkError("quantile probability must be between zero and one")
+    ordered = sorted(_finite(value, "quantile observation") for value in values)
+    position = probability_value * (len(ordered) - 1)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
+def paired_bootstrap(
+    pairs: Sequence[Pair],
+    statistic: Callable[[Sequence[Pair]], float],
+    *,
+    seed: int,
+    draws: int = 10000,
+) -> dict:
+    if not isinstance(pairs, Sequence) or isinstance(pairs, (str, bytes)) or not pairs:
+        raise BenchmarkError("paired bootstrap requires observations")
+    _exact_int(seed, "bootstrap seed")
+    _exact_int(draws, "bootstrap draws", minimum=1)
+    checked: list[Pair] = []
+    identities: set[tuple[str, int]] = set()
+    for pair in pairs:
+        if not isinstance(pair, Pair):
+            raise BenchmarkError("paired bootstrap observations must be Pair values")
+        _text(pair.case_id, "bootstrap pair case_id")
+        _exact_int(pair.attempt, "bootstrap pair attempt", minimum=1)
+        _finite(pair.suite_value, "bootstrap suite value")
+        _finite(pair.normal_value, "bootstrap normal value")
+        identity = (pair.case_id, pair.attempt)
+        if identity in identities:
+            raise BenchmarkError(f"duplicate bootstrap pair identity: {identity!r}")
+        identities.add(identity)
+        checked.append(pair)
+    if not callable(statistic):
+        raise BenchmarkError("paired bootstrap statistic must be callable")
+
+    def calculate(sample: Sequence[Pair]) -> float:
+        try:
+            value = statistic(sample)
+        except Exception as error:
+            raise BenchmarkError(f"paired bootstrap statistic failed: {error}") from error
+        return _finite(value, "paired bootstrap statistic")
+
+    estimate = calculate(checked)
+    rng = random.Random(seed)
+    sampled_values: list[float] = []
+    for _ in range(draws):
+        sample = [checked[rng.randrange(len(checked))] for _ in checked]
+        sampled_values.append(calculate(sample))
+    sampled_values.sort()
+    return {
+        "estimate": estimate,
+        "lower_95": quantile(sampled_values, 0.025),
+        "upper_95": quantile(sampled_values, 0.975),
+        "seed": seed,
+        "draws": draws,
+    }
+
+
+def non_tied_win_rate(outcomes: Sequence[int | float]) -> float:
+    wins = sum(value > 0 for value in outcomes)
+    losses = sum(value < 0 for value in outcomes)
+    return _rate(wins, wins + losses)
+
+
+def _comparison_keys(labels: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
+        f"{left}:{right}"
+        for index, left in enumerate(labels)
+        for right in labels[index + 1 :]
+    )
+
+
+def _preference_edges(labels: Sequence[str], comparisons: Mapping[str, str]) -> dict[str, set[str]]:
+    parent = {label: label for label in labels}
+
+    def find(label: str) -> str:
+        while parent[label] != label:
+            parent[label] = parent[parent[label]]
+            label = parent[label]
+        return label
+
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for key, value in comparisons.items():
+        if value == "tie":
+            left, right = key.split(":")
+            union(left, right)
+    edges: dict[str, set[str]] = defaultdict(set)
+    for key, value in comparisons.items():
+        ordinal = PREFERENCE_ORDINAL[value]
+        if not ordinal:
+            continue
+        left, right = key.split(":")
+        better, worse = (left, right) if ordinal > 0 else (right, left)
+        better_root, worse_root = find(better), find(worse)
+        if better_root == worse_root:
+            raise BenchmarkError("comparison cycle contradicts a tie")
+        edges[better_root].add(worse_root)
+    return edges
+
+
+def _reject_comparison_cycle(labels: Sequence[str], comparisons: Mapping[str, str]) -> None:
+    edges = _preference_edges(labels, comparisons)
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node: str) -> None:
+        if node in visiting:
+            raise BenchmarkError("contradictory three-way comparison cycle")
+        if node in visited:
+            return
+        visiting.add(node)
+        for child in edges.get(node, ()):
+            visit(child)
+        visiting.remove(node)
+        visited.add(node)
+
+    for node in labels:
+        visit(node)
+
+
+def _validate_item(value: object, index: int) -> dict:
+    if not isinstance(value, Mapping) or set(value) != _ITEM_FIELDS:
+        raise BenchmarkError(f"score item {index} fields are invalid")
+    result = dict(value)
+    _text(result.get("item_id"), f"score item {index} item_id")
+    _text(result.get("case_id"), f"score item {index} case_id")
+    _exact_int(result.get("attempt"), f"score item {index} attempt", minimum=1)
+    task = _text(result.get("task"), f"score item {index} task")
+    if task not in TASKS:
+        raise BenchmarkError(f"score item {index} task is invalid")
+    repeat_of = result.get("repeat_of")
+    if repeat_of is not None:
+        _text(repeat_of, f"score item {index} repeat_of")
+    labels = result.get("labels")
+    if not isinstance(labels, Mapping):
+        raise BenchmarkError(f"score item {index} labels must be an object")
+    expected_labels = tuple("ABC"[:len(labels)])
+    if tuple(labels) != expected_labels or len(labels) not in (2, 3):
+        raise BenchmarkError(f"score item {index} anonymous labels are invalid")
+    conditions = tuple(labels.values())
+    if (
+        any(type(condition) is not str or condition not in CONDITIONS for condition in conditions)
+        or len(set(conditions)) != len(conditions)
+        or not {"normal", "suite"} <= set(conditions)
+        or (len(conditions) == 3 and set(conditions) != set(CONDITIONS))
+    ):
+        raise BenchmarkError(f"score item {index} condition mapping is invalid")
+    comparisons = result.get("comparisons")
+    expected_keys = _comparison_keys(expected_labels)
+    if not isinstance(comparisons, Mapping) or set(comparisons) != set(expected_keys):
+        raise BenchmarkError(f"score item {index} comparison fields are invalid")
+    for key in expected_keys:
+        if type(comparisons[key]) is not str or comparisons[key] not in PREFERENCE_ORDINAL:
+            raise BenchmarkError(f"score item {index} comparison {key} is invalid")
+    _reject_comparison_cycle(expected_labels, comparisons)
+
+    major = result.get("major_or_worse")
+    if not isinstance(major, Mapping) or set(major) != set(expected_labels):
+        raise BenchmarkError(f"score item {index} major_or_worse fields are invalid")
+    if any(type(major[label]) is not bool for label in expected_labels):
+        raise BenchmarkError(f"score item {index} major_or_worse values must be booleans")
+    observed_major = {label: False for label in expected_labels}
+    mqm = result.get("mqm")
+    if not isinstance(mqm, list):
+        raise BenchmarkError(f"score item {index} mqm must be a list")
+    for finding_index, finding in enumerate(mqm):
+        if not isinstance(finding, Mapping) or set(finding) != {"output", "severity"}:
+            raise BenchmarkError(f"score item {index} mqm entry {finding_index} fields are invalid")
+        output = finding.get("output")
+        severity = finding.get("severity")
+        if type(output) is not str or output not in labels:
+            raise BenchmarkError(f"score item {index} mqm output is invalid")
+        if type(severity) is not str or severity not in SEVERITY_POINTS:
+            raise BenchmarkError(f"score item {index} mqm severity is invalid")
+        if severity in {"critical", "major"}:
+            observed_major[output] = True
+    if any(major[label] is not observed_major[label] for label in expected_labels):
+        raise BenchmarkError(f"score item {index} major_or_worse does not match MQM")
+    words = result.get("word_counts")
+    if not isinstance(words, Mapping) or set(words) != set(expected_labels):
+        raise BenchmarkError(f"score item {index} word_counts fields are invalid")
+    for label in expected_labels:
+        _exact_int(words[label], f"score item {index} word count {label}", minimum=0)
+    return result
+
+
+def _condition_ordinal(item: Mapping[str, object], left_condition: str, right_condition: str) -> int:
+    labels = item["labels"]
+    by_condition = {condition: label for label, condition in labels.items()}
+    left_label = by_condition[left_condition]
+    right_label = by_condition[right_condition]
+    ordered = tuple(labels)
+    if ordered.index(left_label) < ordered.index(right_label):
+        key, sign = f"{left_label}:{right_label}", 1
+    else:
+        key, sign = f"{right_label}:{left_label}", -1
+    return sign * PREFERENCE_ORDINAL[item["comparisons"][key]]
+
+
+def _condition_major(item: Mapping[str, object]) -> dict[str, bool]:
+    return {
+        condition: item["major_or_worse"][label]
+        for label, condition in item["labels"].items()
+    }
+
+
+def _validate_findings(value: object, description: str) -> list[dict]:
+    if not isinstance(value, list):
+        raise BenchmarkError(f"{description} findings must be a list")
+    result: list[dict] = []
+    for index, finding in enumerate(value):
+        if not isinstance(finding, Mapping) or set(finding) != _FINDING_FIELDS:
+            raise BenchmarkError(f"{description} finding {index} fields are invalid")
+        invariant = _text(finding.get("invariant"), f"{description} finding invariant")
+        severity = finding.get("severity")
+        if type(severity) is not str or severity not in SEVERITY_POINTS:
+            raise BenchmarkError(f"{description} finding severity is invalid")
+        _text(finding.get("message"), f"{description} finding message", nonempty=False)
+        span = finding.get("affected_span")
+        if span is not None and (
+            not isinstance(span, (list, tuple))
+            or len(span) != 2
+            or any(type(point) is not int or point < 0 for point in span)
+            or span[1] < span[0]
+        ):
+            raise BenchmarkError(f"{description} finding affected_span is invalid")
+        result.append({**dict(finding), "invariant": invariant})
+    return result
+
+
+def _validate_validations(values: object) -> tuple[list[dict], dict[str, dict]]:
+    if not isinstance(values, list):
+        raise BenchmarkError("validations must be a list")
+    records: list[dict] = []
+    by_run: dict[str, dict] = {}
+    identities: set[tuple[str, str, int]] = set()
+    for index, value in enumerate(values):
+        if not isinstance(value, Mapping) or set(value) != _VALIDATION_FIELDS:
+            raise BenchmarkError(f"validation {index} fields are invalid")
+        record = dict(value)
+        run_id = _text(record.get("run_id"), f"validation {index} run_id")
+        case_id = _text(record.get("case_id"), f"validation {index} case_id")
+        condition = _text(record.get("condition"), f"validation {index} condition")
+        if condition not in CONDITIONS:
+            raise BenchmarkError(f"validation {index} condition is invalid")
+        attempt = _exact_int(record.get("attempt"), f"validation {index} attempt", minimum=1)
+        status = _text(record.get("status"), f"validation {index} status")
+        if status not in {"passed", "failed", "validator_error"}:
+            raise BenchmarkError(f"validation {index} status is invalid")
+        record["findings"] = _validate_findings(record.get("findings"), f"validation {index}")
+        errors = record.get("validator_errors")
+        if not isinstance(errors, list) or any(type(error) is not str for error in errors):
+            raise BenchmarkError(f"validation {index} validator_errors are invalid")
+        counts = [
+            _exact_int(record.get(field), f"validation {index} {field}", minimum=0)
+            for field in (
+                "applicable_checks", "passed_checks", "failed_checks",
+                "validator_error_checks",
+            )
+        ]
+        if counts[0] != sum(counts[1:]):
+            raise BenchmarkError(f"validation {index} check counts are inconsistent")
+        expected_status = (
+            "validator_error" if counts[3] else ("failed" if counts[2] else "passed")
+        )
+        if status != expected_status:
+            raise BenchmarkError(f"validation {index} status is inconsistent")
+        if run_id in by_run:
+            raise BenchmarkError(f"duplicate validation run id: {run_id}")
+        identity = (case_id, condition, attempt)
+        if identity in identities:
+            raise BenchmarkError(f"duplicate validation identity: {identity!r}")
+        identities.add(identity)
+        by_run[run_id] = record
+        records.append(record)
+    return records, by_run
+
+
+def _structural_summary(
+    validations: Sequence[Mapping[str, object]],
+    task_identities: set[tuple[str, int]],
+) -> tuple[dict[str, float], dict[str, int], int]:
+    totals = {condition: [0, 0] for condition in CONDITIONS}
+    critical_by_identity: dict[tuple[str, int, str], set[str]] = defaultdict(set)
+    critical_counts = {condition: 0 for condition in CONDITIONS}
+    for record in validations:
+        identity = (record["case_id"], record["attempt"])
+        if identity not in task_identities:
+            continue
+        condition = record["condition"]
+        totals[condition][0] += record["passed_checks"]
+        totals[condition][1] += record["applicable_checks"]
+        for finding in record["findings"]:
+            if finding["severity"] == "critical":
+                critical_counts[condition] += 1
+                critical_by_identity[(identity[0], identity[1], condition)].add(
+                    finding["invariant"]
+                )
+    rates = {
+        condition: _rate(passed, applicable)
+        for condition, (passed, applicable) in totals.items()
+    }
+    regressions = 0
+    for case_id, attempt in task_identities:
+        normal = critical_by_identity[(case_id, attempt, "normal")]
+        suite = critical_by_identity[(case_id, attempt, "suite")]
+        regressions += len(suite - normal)
+    return rates, critical_counts, regressions
+
+
+def _review_metrics(
+    mappings: object,
+    seeded_errors: Mapping[str, object],
+    validations: Sequence[Mapping[str, object]],
+    review_identities: set[tuple[str, int]],
+    validations_by_run: Mapping[str, Mapping[str, object]],
+) -> dict:
+    if mappings is None:
+        return {"available": False, "reason": "review mappings unavailable", "unresolved": 0}
+    if not isinstance(mappings, list):
+        raise BenchmarkError("review_mappings must be a list or null")
+    inventory: dict[str, dict] = {}
+    for case_id, errors in seeded_errors.items():
+        _text(case_id, "seeded-error case id")
+        if not isinstance(errors, list) or not errors:
+            raise BenchmarkError(f"seeded errors for {case_id} must be a non-empty list")
+        for error in errors:
+            if not isinstance(error, Mapping) or set(error) != {
+                "id", "severity", "correction_required"
+            }:
+                raise BenchmarkError(f"normalized seeded error for {case_id} has invalid fields")
+            error_id = _text(error.get("id"), f"seeded error for {case_id} id")
+            severity = error.get("severity")
+            if type(severity) is not str or severity not in SEVERITY_POINTS:
+                raise BenchmarkError(f"seeded error {error_id} severity is invalid")
+            if type(error.get("correction_required")) is not bool:
+                raise BenchmarkError(f"seeded error {error_id} correction_required must be boolean")
+            if error_id in inventory:
+                raise BenchmarkError(f"duplicate seeded error id: {error_id}")
+            inventory[error_id] = {**dict(error), "case_id": case_id}
+
+    seen: set[tuple[str, str]] = set()
+    known: dict[tuple[str, str], dict] = {}
+    unresolved = 0
+    for index, mapping in enumerate(mappings):
+        if not isinstance(mapping, Mapping) or set(mapping) != _MAPPING_FIELDS:
+            raise BenchmarkError(f"review mapping {index} fields are invalid")
+        record = dict(mapping)
+        run_id = _text(record.get("run_id"), f"review mapping {index} run_id")
+        error_id = _text(record.get("seeded_error_id"), f"review mapping {index} seeded_error_id")
+        if run_id not in validations_by_run:
+            raise BenchmarkError(f"review mapping {index} has unknown run id")
+        validation = validations_by_run[run_id]
+        if (validation["case_id"], validation["attempt"]) not in review_identities:
+            raise BenchmarkError(f"review mapping {index} does not name a review run")
+        for field in ("reported", "corrected", "introduced_error"):
+            if type(record.get(field)) is not bool:
+                raise BenchmarkError(f"review mapping {index} {field} must be a boolean")
+        _text(record.get("adjudicator"), f"review mapping {index} adjudicator")
+        _text(record.get("note"), f"review mapping {index} note", nonempty=False)
+        identity = (run_id, error_id)
+        if identity in seen:
+            raise BenchmarkError(f"duplicate review mapping: {identity!r}")
+        seen.add(identity)
+        seeded = inventory.get(error_id)
+        if seeded is None or seeded["case_id"] != validation["case_id"]:
+            unresolved += 1
+            continue
+        known[identity] = record
+
+    expected = {
+        (record["run_id"], error["id"])
+        for record in validations
+        if (record["case_id"], record["attempt"]) in review_identities
+        for error in seeded_errors.get(record["case_id"], ())
+    }
+    if set(known) != expected:
+        missing = sorted(expected - set(known))
+        unknown = sorted(set(known) - expected)
+        raise BenchmarkError(
+            f"review mapping identities mismatch: missing={missing!r}, unknown={unknown!r}"
+        )
+
+    counters: dict[str, dict[str, int]] = {
+        condition: defaultdict(int) for condition in CONDITIONS
+    }
+    for (run_id, error_id), mapping in known.items():
+        condition = validations_by_run[run_id]["condition"]
+        seeded = inventory[error_id]
+        required = seeded["correction_required"]
+        counters[condition]["known"] += 1
+        counters[condition]["introduced"] += int(mapping["introduced_error"])
+        if required:
+            counters[condition]["required"] += 1
+            counters[condition]["recalled"] += int(mapping["reported"])
+            counters[condition]["corrected"] += int(mapping["corrected"])
+            if seeded["severity"] == "critical" and not mapping["reported"]:
+                counters[condition]["critical_misses"] += 1
+        else:
+            counters[condition]["bait"] += 1
+            counters[condition]["bait_corrected"] += int(mapping["corrected"])
+        if mapping["reported"]:
+            counters[condition]["reported"] += 1
+            counters[condition]["true_reported"] += int(required)
+
+    structural, _, regressions = _structural_summary(validations, review_identities)
+    result: dict[str, object] = {"available": True, "unresolved": unresolved}
+    result["required_error_recall"] = {
+        condition: _rate(values["recalled"], values["required"])
+        for condition, values in counters.items()
+        if values["known"]
+    }
+    result["reported_error_precision"] = {
+        condition: _rate(values["true_reported"], values["reported"])
+        for condition, values in counters.items()
+        if values["known"]
+    }
+    result["correction_success_rate"] = {
+        condition: _rate(values["corrected"], values["required"])
+        for condition, values in counters.items()
+        if values["known"]
+    }
+    result["false_positive_correction_rate"] = {
+        condition: _rate(values["bait_corrected"], values["bait"])
+        for condition, values in counters.items()
+        if values["known"]
+    }
+    result["introduced_error_rate"] = {
+        condition: _rate(values["introduced"], values["known"])
+        for condition, values in counters.items()
+        if values["known"]
+    }
+    result["critical_misses"] = {
+        condition: values["critical_misses"]
+        for condition, values in counters.items()
+        if values["known"]
+    }
+    result["structural_pass_rate"] = {
+        condition: structural[condition]
+        for condition, values in counters.items()
+        if values["known"]
+    }
+    result["critical_invariant_regressions"] = regressions
+    return result
+
+
+def _learned_metrics(values: object, validations_by_run: Mapping[str, Mapping[str, object]]) -> dict:
+    if values is None:
+        return {"available": False, "reason": "learned metrics unavailable"}
+    if not isinstance(values, list):
+        raise BenchmarkError("learned_metrics must be a list or null")
+    observations: dict[tuple[str, str], float] = {}
+    grouped: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for index, value in enumerate(values):
+        if not isinstance(value, Mapping) or set(value) != _LEARNED_FIELDS:
+            raise BenchmarkError(f"learned metric {index} fields are invalid")
+        run_id = _text(value.get("run_id"), f"learned metric {index} run_id")
+        metric = _text(value.get("metric"), f"learned metric {index} metric")
+        if metric not in _LEARNED_METRICS:
+            raise BenchmarkError(f"learned metric {index} name is invalid")
+        score = _finite(value.get("value"), f"learned metric {index} value")
+        if run_id not in validations_by_run:
+            raise BenchmarkError(f"learned metric {index} has unknown run id")
+        identity = (run_id, metric)
+        if identity in observations:
+            raise BenchmarkError(f"duplicate learned metric: {identity!r}")
+        observations[identity] = score
+        grouped[metric][validations_by_run[run_id]["condition"]].append(score)
+    return {
+        "available": True,
+        "means": {
+            metric: {
+                condition: sum(scores) / len(scores)
+                for condition, scores in sorted(by_condition.items())
+            }
+            for metric, by_condition in sorted(grouped.items())
+        },
+    }
+
+
+def _consistency(items: Sequence[Mapping[str, object]]) -> dict:
+    by_id = {item["item_id"]: item for item in items}
+    repeats = [item for item in items if item["repeat_of"] is not None]
+    exact = 0
+    quadratic = 0.0
+    major_equal = major_total = 0
+    for repeat in repeats:
+        original = by_id.get(repeat["repeat_of"])
+        if original is None or original["repeat_of"] is not None:
+            raise BenchmarkError(f"repeat {repeat['item_id']} has invalid original")
+        if (
+            repeat["case_id"], repeat["attempt"], repeat["task"]
+        ) != (
+            original["case_id"], original["attempt"], original["task"]
+        ):
+            raise BenchmarkError(f"repeat {repeat['item_id']} identity differs from original")
+        original_ordinal = _condition_ordinal(original, "suite", "normal")
+        repeat_ordinal = _condition_ordinal(repeat, "suite", "normal")
+        exact += int(original_ordinal == repeat_ordinal)
+        quadratic += 1.0 - ((original_ordinal - repeat_ordinal) / 4.0) ** 2
+        original_major = _condition_major(original)
+        repeat_major = _condition_major(repeat)
+        for condition in sorted(set(original_major) & set(repeat_major)):
+            major_equal += int(original_major[condition] == repeat_major[condition])
+            major_total += 1
+    count = len(repeats)
+    return {
+        "repeats": count,
+        "exact_five_level_agreement": _rate(exact, count) if count else None,
+        "quadratic_weighted_agreement": _rate(quadratic, count) if count else None,
+        "quadratic_weighted_agreement_method": "direct_mean_not_chance_corrected_kappa",
+        "major_or_worse_agreement": _rate(major_equal, major_total) if count else None,
+    }
+
+
+def score_evidence(evidence: Mapping[str, object]) -> dict:
+    """Score an exact, verified and condition-decoded benchmark evidence document."""
+    fields = {
+        "schema_version", "bootstrap_seed", "items", "validations",
+        "seeded_errors", "review_mappings", "learned_metrics",
+    }
+    if not isinstance(evidence, Mapping) or set(evidence) != fields:
+        raise BenchmarkError("scoring evidence fields are invalid")
+    if type(evidence.get("schema_version")) is not int or evidence["schema_version"] != SCHEMA_VERSION:
+        raise BenchmarkError("scoring evidence schema version mismatch")
+    seed = _exact_int(evidence.get("bootstrap_seed"), "bootstrap seed")
+    raw_items = evidence.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise BenchmarkError("scoring evidence items must be a non-empty list")
+    items = [_validate_item(value, index) for index, value in enumerate(raw_items)]
+    by_item: dict[str, dict] = {}
+    primary_identities: set[tuple[str, int]] = set()
+    expected_validation_identities: set[tuple[str, str, int]] = set()
+    for item in items:
+        item_id = item["item_id"]
+        if item_id in by_item:
+            raise BenchmarkError(f"duplicate score item id: {item_id}")
+        by_item[item_id] = item
+        if item["repeat_of"] is None:
+            primary_identity = (item["case_id"], item["attempt"])
+            if primary_identity in primary_identities:
+                raise BenchmarkError(f"duplicate primary case-attempt: {primary_identity!r}")
+            primary_identities.add(primary_identity)
+            expected_validation_identities.update(
+                (item["case_id"], condition, item["attempt"])
+                for condition in item["labels"].values()
+            )
+    validations, validations_by_run = _validate_validations(evidence.get("validations"))
+    actual_validation_identities = {
+        (record["case_id"], record["condition"], record["attempt"])
+        for record in validations
+    }
+    if actual_validation_identities != expected_validation_identities:
+        missing = sorted(expected_validation_identities - actual_validation_identities)
+        unknown = sorted(actual_validation_identities - expected_validation_identities)
+        raise BenchmarkError(
+            f"validation identities mismatch: missing={missing!r}, unknown={unknown!r}"
+        )
+
+    seeded_errors = evidence.get("seeded_errors")
+    if not isinstance(seeded_errors, Mapping):
+        raise BenchmarkError("seeded_errors must be an object")
+    translation_items = [
+        item for item in items
+        if item["repeat_of"] is None and item["task"] == "translation"
+    ]
+    review_items = [
+        item for item in items
+        if item["repeat_of"] is None and item["task"] == "review"
+    ]
+    translation_identities = {(item["case_id"], item["attempt"]) for item in translation_items}
+    review_identities = {(item["case_id"], item["attempt"]) for item in review_items}
+
+    outcomes = [_condition_ordinal(item, "suite", "normal") for item in translation_items]
+    bootstrap_pairs = [
+        Pair(item["case_id"], item["attempt"], float(outcome), 0.0)
+        for item, outcome in zip(translation_items, outcomes)
+    ]
+    if bootstrap_pairs:
+        bootstrap = paired_bootstrap(
+            bootstrap_pairs,
+            lambda pairs: non_tied_win_rate(
+                [pair.suite_value - pair.normal_value for pair in pairs]
+            ),
+            seed=seed,
+        )
+    else:
+        bootstrap = {
+            "estimate": 0.0, "lower_95": 0.0, "upper_95": 0.0,
+            "seed": seed, "draws": 0,
+        }
+    mqm_points = {condition: 0 for condition in CONDITIONS}
+    critical_mqm = {condition: 0 for condition in CONDITIONS}
+    words = {condition: 0 for condition in CONDITIONS}
+    mqm_pairs: list[dict] = []
+    for item in translation_items:
+        per_item = {condition: 0 for condition in item["labels"].values()}
+        for label, condition in item["labels"].items():
+            words[condition] += item["word_counts"][label]
+        for finding in item["mqm"]:
+            condition = item["labels"][finding["output"]]
+            points = SEVERITY_POINTS[finding["severity"]]
+            mqm_points[condition] += points
+            per_item[condition] += points
+            critical_mqm[condition] += int(finding["severity"] == "critical")
+        mqm_pairs.append({
+            "case_id": item["case_id"],
+            "attempt": item["attempt"],
+            "suite": per_item["suite"],
+            "normal": per_item["normal"],
+        })
+    structural, structural_critical, translation_regressions = _structural_summary(
+        validations, translation_identities
+    )
+    translation = {
+        "case_attempts": len(translation_items),
+        "suite_wins": sum(outcome > 0 for outcome in outcomes),
+        "normal_wins": sum(outcome < 0 for outcome in outcomes),
+        "ties": sum(outcome == 0 for outcome in outcomes),
+        "ordinal_sum": sum(outcomes),
+        "non_tied_win_rate": non_tied_win_rate(outcomes),
+        "bootstrap": bootstrap,
+        "bootstrap_lower": bootstrap["lower_95"],
+        "mqm_case_attempt_points": mqm_pairs,
+        "mqm_points": mqm_points,
+        "mqm_points_per_1000_words": {
+            condition: 1000.0 * _rate(mqm_points[condition], words[condition])
+            for condition in CONDITIONS
+        },
+        "mqm_reduction": (
+            _rate(mqm_points["normal"] - mqm_points["suite"], mqm_points["normal"])
+            if mqm_points["normal"] else 0.0
+        ),
+        "suite_critical": critical_mqm["suite"] + structural_critical["suite"],
+        "normal_critical": critical_mqm["normal"] + structural_critical["normal"],
+        "structural_pass_rate": structural,
+        "suite_structural_pass_rate": structural["suite"],
+        "critical_invariant_regressions": translation_regressions,
+    }
+    review = _review_metrics(
+        evidence.get("review_mappings"),
+        seeded_errors,
+        validations,
+        review_identities,
+        validations_by_run,
+    )
+    return {
+        "translation": translation,
+        "review": review,
+        "consistency": _consistency(items),
+        "learned_metrics": _learned_metrics(
+            evidence.get("learned_metrics"), validations_by_run
+        ),
+    }
+
+
+_TRANSLATION_GATE_INPUTS = {
+    "non_tied_win_rate", "bootstrap_lower", "mqm_reduction", "suite_critical",
+    "normal_critical", "suite_structural_pass_rate",
+    "critical_invariant_regressions",
+}
+_TRANSLATION_SCORE_FIELDS = _TRANSLATION_GATE_INPUTS | {
+    "case_attempts", "suite_wins", "normal_wins", "ties", "ordinal_sum",
+    "bootstrap", "mqm_case_attempt_points", "mqm_points",
+    "mqm_points_per_1000_words", "structural_pass_rate",
+}
+_REVIEW_GATE_INPUTS = {
+    "available", "required_error_recall", "false_positive_correction_rate",
+    "correction_success_rate", "introduced_error_rate", "critical_misses",
+    "structural_pass_rate", "critical_invariant_regressions",
+}
+
+
+def evaluate_gates(metrics: Mapping[str, object]) -> dict:
+    """Apply the pre-registered gates exactly, with no override mechanism."""
+    allowed_top = {"translation", "review", "consistency", "learned_metrics"}
+    if (
+        not isinstance(metrics, Mapping)
+        or not {"translation", "review"} <= set(metrics)
+        or not set(metrics) <= allowed_top
+    ):
+        raise BenchmarkError("gate metrics fields are invalid")
+    translation = metrics.get("translation")
+    if (
+        not isinstance(translation, Mapping)
+        or not _TRANSLATION_GATE_INPUTS <= set(translation)
+        or not set(translation) <= _TRANSLATION_SCORE_FIELDS
+    ):
+        raise BenchmarkError("translation gate fields are invalid")
+    values = {
+        name: _finite(translation.get(name), f"translation {name}")
+        for name in _TRANSLATION_GATE_INPUTS
+    }
+    translation_checks = {
+        "non_tied_win_rate_at_least_60pct": values["non_tied_win_rate"] >= 0.60,
+        "bootstrap_lower_above_50pct": values["bootstrap_lower"] > 0.50,
+        "mqm_reduction_at_least_25pct": values["mqm_reduction"] >= 0.25,
+        "no_critical_or_hard_failure_increase": (
+            values["suite_critical"] <= values["normal_critical"]
+        ),
+        "suite_structural_at_least_99pct": (
+            values["suite_structural_pass_rate"] >= 0.99
+        ),
+        "no_critical_invariant_regression": (
+            values["critical_invariant_regressions"] == 0
+        ),
+    }
+    translation_gate = {
+        "passed": all(translation_checks.values()),
+        "checks": translation_checks,
+    }
+
+    review = metrics.get("review")
+    if not isinstance(review, Mapping) or type(review.get("available")) is not bool:
+        raise BenchmarkError("review gate fields are invalid")
+    if not review["available"]:
+        if set(review) - {"available", "reason", "unresolved"}:
+            raise BenchmarkError("unavailable review gate fields are invalid")
+        review_gate = {
+            "available": False,
+            "passed": None,
+            "checks": {},
+            "reason": "review mappings unavailable",
+        }
+        overall = {"passed": None, "verdict": "unavailable"}
+        return {"translation": translation_gate, "review": review_gate, "overall": overall}
+    if not _REVIEW_GATE_INPUTS <= set(review):
+        raise BenchmarkError("review gate fields are invalid")
+
+    def condition_values(name: str) -> tuple[float, float]:
+        value = review.get(name)
+        if not isinstance(value, Mapping) or not {"suite", "normal"} <= set(value):
+            raise BenchmarkError(f"review {name} must contain suite and normal")
+        return (
+            _finite(value["suite"], f"review {name} suite"),
+            _finite(value["normal"], f"review {name} normal"),
+        )
+
+    suite_recall, normal_recall = condition_values("required_error_recall")
+    suite_false_positive, normal_false_positive = condition_values(
+        "false_positive_correction_rate"
+    )
+    suite_correction, normal_correction = condition_values("correction_success_rate")
+    suite_introduced, normal_introduced = condition_values("introduced_error_rate")
+    suite_misses, normal_misses = condition_values("critical_misses")
+    suite_structural, normal_structural = condition_values("structural_pass_rate")
+    regressions = _finite(
+        review.get("critical_invariant_regressions"),
+        "review critical_invariant_regressions",
+    )
+    review_checks = {
+        "required_error_recall_improvement_at_least_15pp": (
+            suite_recall - normal_recall >= 0.15
+        ),
+        "false_positive_correction_increase_at_most_5pp": (
+            suite_false_positive - normal_false_positive <= 0.05
+        ),
+        "correction_success_strictly_improves": suite_correction > normal_correction,
+        "introduced_error_rate_does_not_increase": suite_introduced <= normal_introduced,
+        "critical_misses_are_fewer": suite_misses < normal_misses,
+        "structural_checks_do_not_regress": (
+            suite_structural >= normal_structural and regressions == 0
+        ),
+    }
+    review_gate = {
+        "available": True,
+        "passed": all(review_checks.values()),
+        "checks": review_checks,
+    }
+    passed = translation_gate["passed"] and review_gate["passed"]
+    return {
+        "translation": translation_gate,
+        "review": review_gate,
+        "overall": {"passed": passed, "verdict": "passed" if passed else "failed"},
+    }
+
+
+def _read_bounded(path: Path, description: str, *, limit: int) -> bytes:
+    path = Path(path)
+    try:
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            raise BenchmarkError(f"refusing symlink {description}: {path}")
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BenchmarkError(f"{description} must be a regular file")
+        if metadata.st_size > limit:
+            raise BenchmarkError(f"{description} exceeds {limit} bytes")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise BenchmarkError(f"{description} must be a regular file")
+            encoded = source.read(limit + 1)
+        if len(encoded) > limit:
+            raise BenchmarkError(f"{description} exceeds {limit} bytes")
+        return encoded
+    except BenchmarkError:
+        raise
+    except OSError as error:
+        raise BenchmarkError(f"cannot read {description}: {error}") from error
+
+
+def _canonical_json_file(path: Path, description: str, *, limit: int) -> object:
+    return _parse_canonical_json(_read_bounded(path, description, limit=limit), description)
+
+
+def _canonical_jsonl_file(path: Path, description: str, *, limit: int) -> list[dict]:
+    return _parse_canonical_jsonl(_read_bounded(path, description, limit=limit), description)
+
+
+def _load_runs(
+    evidence_dir: Path,
+    run_manifest: Mapping[str, object],
+) -> list[dict]:
+    schedule = run_manifest.get("schedule")
+    if not isinstance(schedule, Mapping) or set(schedule) != {"run_ids", "sha256"}:
+        raise BenchmarkError("run manifest has no canonical schedule")
+    run_ids = schedule.get("run_ids")
+    if not isinstance(run_ids, list):
+        raise BenchmarkError("run manifest schedule run_ids must be a list")
+    records = _canonical_jsonl_file(
+        evidence_dir / "runs.jsonl", "runs.jsonl", limit=_MAX_DOCUMENT_INPUT_BYTES
+    )
+    by_id: dict[str, dict] = {}
+    for record in records:
+        try:
+            run = RunResult.from_record(record)
+        except (TypeError, ValueError) as error:
+            raise BenchmarkError(f"malformed run record: {error}") from error
+        run_id = run.run_id
+        if run_id in by_id:
+            raise BenchmarkError(f"duplicate run id: {run_id}")
+        by_id[run_id] = record
+    if set(by_id) != set(run_ids) or len(run_ids) != len(set(run_ids)):
+        missing = sorted(set(run_ids) - set(by_id))
+        unknown = sorted(set(by_id) - set(run_ids))
+        raise BenchmarkError(f"complete run identities mismatch: missing={missing!r}, unknown={unknown!r}")
+    result: list[dict] = []
+    raw_cache: dict[str, str] = {}
+    for run_id in run_ids:
+        record = by_id[run_id]
+        digest = record["output_sha256"]
+        expected_path = f"raw/{digest}.txt"
+        if record["raw_output_path"] != expected_path:
+            raise BenchmarkError(f"run {run_id} raw output is not content-addressed")
+        if digest not in raw_cache:
+            encoded = _read_bounded(
+                evidence_dir / expected_path,
+                f"raw output {digest}",
+                limit=_MAX_DOCUMENT_INPUT_BYTES,
+            )
+            if sha256_bytes(encoded) != digest:
+                raise BenchmarkError(f"raw output hash mismatch: {expected_path}")
+            try:
+                raw_cache[digest] = encoded.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise BenchmarkError(f"raw output is not UTF-8: {expected_path}") from error
+        complete = {**record, "output": raw_cache[digest]}
+        _validate_run_record(complete)
+        result.append(complete)
+    return result
+
+
+def _verify_annotation_paths(paths: ScorePaths) -> dict[str, dict]:
+    annotations = Path(paths.annotations)
+    annotation_lock = Path(paths.annotation_lock)
+    if (
+        annotations.name != "annotations.jsonl"
+        or annotation_lock.name != "annotation-lock.json"
+        or annotations.parent.resolve() != annotation_lock.parent.resolve()
+    ):
+        raise BenchmarkError("annotation paths must name canonical artifacts in one directory")
+    _read_bounded(annotations, "annotations", limit=_MAX_DOCUMENT_INPUT_BYTES)
+    _read_bounded(annotation_lock, "annotation lock", limit=_MAX_SMALL_INPUT_BYTES)
+    state_path = annotations.parent / "annotation-state.json"
+    _read_bounded(state_path, "annotation state", limit=_MAX_DOCUMENT_INPUT_BYTES)
+    store = ReviewStore(paths.review_bundle, annotations.parent)
+    try:
+        if not store.locked or len(store.latest) != len(store.bundle["items"]):
+            raise BenchmarkError("annotation lock covers an incomplete queue")
+        if store.events_path.resolve() != annotations.resolve():
+            raise BenchmarkError("annotation event path mismatch")
+        if store.lock_path.resolve() != annotation_lock.resolve():
+            raise BenchmarkError("annotation lock path mismatch")
+        return {item_id: dict(record) for item_id, record in store.latest.items()}
+    finally:
+        store.close()
+
+
+def _load_verified_condition_key(
+    paths: ScorePaths,
+    *,
+    bundle: Mapping[str, object],
+    cases: Sequence[Mapping[str, object]],
+    runs: Sequence[Mapping[str, object]],
+    prepared_provenance: Mapping[str, object],
+) -> dict:
+    """Load private labels only after the caller has verified the annotation lock."""
+    key = _canonical_json_file(
+        paths.condition_key,
+        "condition key",
+        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    )
+    if not isinstance(key, dict):
+        raise BenchmarkError("condition key must be an object")
+    provenance = key.get("provenance")
+    if not isinstance(provenance, Mapping):
+        raise BenchmarkError("condition key provenance is malformed")
+    seed = provenance.get("blinding_seed")
+    _exact_int(seed, "condition key blinding seed")
+    expected_bundle, expected_key = build_blind_bundle(
+        runs,
+        cases,
+        seed,
+        prepared_provenance=prepared_provenance,
+    )
+    if canonical_bytes(bundle) != canonical_bytes(expected_bundle):
+        raise BenchmarkError("review bundle differs from regenerated frozen evidence")
+    _validate_condition_key(
+        key,
+        bundle,
+        expected_key=expected_key,
+        prepared_provenance=prepared_provenance,
+    )
+    return key
+
+
+def _load_verified_inputs(paths: ScorePaths) -> dict:
+    if not isinstance(paths, ScorePaths):
+        raise BenchmarkError("score paths must be ScorePaths")
+    dataset_dir = Path(paths.dataset_dir)
+    evidence_dir = Path(paths.evidence_dir)
+    # Apply resource bounds before invoking legacy semantic verifiers whose
+    # readers predate the bounded canonical parser.
+    for path, description, limit in (
+        (dataset_dir / "dataset-manifest.json", "dataset manifest", _MAX_DOCUMENT_INPUT_BYTES),
+        (dataset_dir / "cases.jsonl", "cases.jsonl", _MAX_DOCUMENT_INPUT_BYTES),
+        (dataset_dir / "seeded-errors.json", "seeded-errors.json", _MAX_DOCUMENT_INPUT_BYTES),
+        (dataset_dir / "reference-signoff.json", "reference signoff", _MAX_DOCUMENT_INPUT_BYTES),
+        (evidence_dir / "run-manifest.json", "run manifest", _MAX_DOCUMENT_INPUT_BYTES),
+        (evidence_dir / "runs.jsonl", "runs.jsonl", _MAX_DOCUMENT_INPUT_BYTES),
+        (Path(paths.review_bundle), "review bundle", _MAX_DOCUMENT_INPUT_BYTES),
+    ):
+        _read_bounded(path, description, limit=limit)
+    verify_dataset_manifest(dataset_dir)
+    run_manifest, prepared = _validate_prepared_manifest(dataset_dir, evidence_dir)
+    cases = _canonical_jsonl_file(
+        dataset_dir / "cases.jsonl", "cases.jsonl", limit=_MAX_DOCUMENT_INPUT_BYTES
+    )
+    seeded_errors = _canonical_json_file(
+        dataset_dir / "seeded-errors.json",
+        "seeded-errors.json",
+        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    )
+    runs = _load_runs(evidence_dir, run_manifest)
+    bundle = _canonical_json_file(
+        paths.review_bundle,
+        "review bundle",
+        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    )
+    if not isinstance(bundle, dict):
+        raise BenchmarkError("review bundle must be an object")
+    scan_visible_bundle(bundle)
+
+    # This is the trust boundary: lock, hashes, event history, latest revisions,
+    # and queue completeness are verified before the condition key is opened.
+    latest = _verify_annotation_paths(paths)
+    key = _load_verified_condition_key(
+        paths,
+        bundle=bundle,
+        cases=cases,
+        runs=runs,
+        prepared_provenance=prepared,
+    )
+    verify_dataset_manifest(dataset_dir)
+    current_manifest, current_prepared = _validate_prepared_manifest(dataset_dir, evidence_dir)
+    if current_manifest != run_manifest or current_prepared != prepared:
+        raise BenchmarkError("frozen inputs changed during scoring verification")
+    return {
+        "run_manifest": run_manifest,
+        "prepared": prepared,
+        "cases": cases,
+        "seeded_errors": seeded_errors,
+        "runs": runs,
+        "bundle": bundle,
+        "key": key,
+        "latest": latest,
+    }
+
+
+def verify_locked_inputs(paths: ScorePaths) -> None:
+    """Verify every frozen and locked artifact before condition decoding."""
+    _load_verified_inputs(paths)
+
+
+def _normalized_validations(
+    evidence_dir: Path,
+    runs: Sequence[Mapping[str, object]],
+) -> list[dict]:
+    fields = {
+        "schema_version", "run_id", "case_id", "status", "output", "findings",
+        "validator_errors", "applicable_checks", "passed_checks", "failed_checks",
+        "validator_error_checks",
+    }
+    records = _canonical_jsonl_file(
+        evidence_dir / "validation.jsonl",
+        "validation.jsonl",
+        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    )
+    runs_by_id = {run["run_id"]: run for run in runs}
+    result: list[dict] = []
+    seen: set[str] = set()
+    for index, record in enumerate(records):
+        if set(record) != fields:
+            raise BenchmarkError(f"validation source {index} fields are invalid")
+        if type(record.get("schema_version")) is not int or record["schema_version"] != SCHEMA_VERSION:
+            raise BenchmarkError(f"validation source {index} schema version mismatch")
+        run_id = record.get("run_id")
+        if type(run_id) is not str or run_id not in runs_by_id or run_id in seen:
+            raise BenchmarkError(f"validation source {index} run id is invalid or duplicate")
+        seen.add(run_id)
+        run = runs_by_id[run_id]
+        if record.get("case_id") != run["case_id"] or record.get("output") != run["output"]:
+            raise BenchmarkError(f"validation source {index} does not match frozen run")
+        result.append({
+            "run_id": run_id,
+            "case_id": record["case_id"],
+            "condition": run["condition"],
+            "attempt": run["attempt"],
+            "status": record["status"],
+            "findings": record["findings"],
+            "validator_errors": record["validator_errors"],
+            "applicable_checks": record["applicable_checks"],
+            "passed_checks": record["passed_checks"],
+            "failed_checks": record["failed_checks"],
+            "validator_error_checks": record["validator_error_checks"],
+        })
+    if set(runs_by_id) != seen:
+        missing = sorted(set(runs_by_id) - seen)
+        raise BenchmarkError(f"validation identities mismatch: missing={missing!r}, unknown=[]")
+    return result
+
+
+def _optional_jsonl(evidence_dir: Path, name: str) -> list[dict] | None:
+    path = evidence_dir / name
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise BenchmarkError(f"cannot inspect optional {name}: {error}") from error
+    return _canonical_jsonl_file(path, name, limit=_MAX_DOCUMENT_INPUT_BYTES)
+
+
+def _normalized_scoring_evidence(paths: ScorePaths, loaded: Mapping[str, object]) -> dict:
+    cases_by_id = {case["id"]: case for case in loaded["cases"]}
+    bundle_by_id = {item["id"]: item for item in loaded["bundle"]["items"]}
+    key_items = loaded["key"]["items"]
+    latest = loaded["latest"]
+    items: list[dict] = []
+    if set(bundle_by_id) != set(key_items) or set(bundle_by_id) != set(latest):
+        raise BenchmarkError("locked annotation item IDs do not match blinded evidence")
+    for item_id in [item["id"] for item in loaded["bundle"]["items"]]:
+        visible = bundle_by_id[item_id]
+        hidden = key_items[item_id]
+        annotation = latest[item_id]
+        case_id = hidden["case_id"]
+        if case_id not in cases_by_id:
+            raise BenchmarkError(f"condition key has unknown case id: {case_id}")
+        labels = dict(hidden["labels"])
+        items.append({
+            "item_id": item_id,
+            "case_id": case_id,
+            "attempt": hidden["attempt"],
+            "task": cases_by_id[case_id]["task"],
+            "repeat_of": hidden.get("repeat_of"),
+            "labels": labels,
+            "comparisons": dict(annotation["comparisons"]),
+            "mqm": [
+                {"output": finding["output"], "severity": finding["severity"]}
+                for finding in annotation["mqm"]
+            ],
+            "major_or_worse": dict(annotation["major_or_worse"]),
+            "word_counts": {
+                label: len(visible["outputs"][label].split())
+                for label in labels
+            },
+        })
+    normalized_seeded = {
+        case_id: [
+            {
+                "id": error["id"],
+                "severity": error["severity"],
+                "correction_required": error["correction_required"],
+            }
+            for error in errors
+        ]
+        for case_id, errors in loaded["seeded_errors"].items()
+    }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "bootstrap_seed": loaded["run_manifest"]["bootstrap_seed"],
+        "items": items,
+        "validations": _normalized_validations(Path(paths.evidence_dir), loaded["runs"]),
+        "seeded_errors": normalized_seeded,
+        "review_mappings": _optional_jsonl(Path(paths.evidence_dir), "review-mappings.jsonl"),
+        "learned_metrics": _optional_jsonl(Path(paths.evidence_dir), "learned-metrics.jsonl"),
+    }
+
+
+def _input_fingerprint(paths: ScorePaths) -> tuple[tuple[str, int, int, int, int, str], ...]:
+    candidates: set[Path] = {
+        Path(paths.review_bundle),
+        Path(paths.condition_key),
+        Path(paths.annotations),
+        Path(paths.annotation_lock),
+        Path(paths.annotations).parent / "annotation-state.json",
+    }
+    for root in (Path(paths.dataset_dir), Path(paths.evidence_dir)):
+        try:
+            if root.is_symlink() or not root.is_dir():
+                raise BenchmarkError(f"scoring input root must be a real directory: {root}")
+            for path in root.rglob("*"):
+                if path.is_symlink():
+                    raise BenchmarkError(f"scoring input tree must not contain symlinks: {path}")
+                if path.is_file():
+                    candidates.add(path)
+        except BenchmarkError:
+            raise
+        except OSError as error:
+            raise BenchmarkError(f"cannot enumerate scoring input tree {root}: {error}") from error
+    result: list[tuple[str, int, int, int, int, str]] = []
+    for path in sorted(candidates, key=lambda value: str(value)):
+        try:
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise BenchmarkError(f"scoring input must be a regular file: {path}")
+            result.append((
+                str(path.resolve()),
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                sha256_file(path),
+            ))
+        except BenchmarkError:
+            raise
+        except OSError as error:
+            raise BenchmarkError(f"cannot fingerprint scoring input {path}: {error}") from error
+    return tuple(result)
+
+
+def score_paths(paths: ScorePaths) -> dict:
+    before = _input_fingerprint(paths)
+    loaded = _load_verified_inputs(paths)
+    metrics = score_evidence(_normalized_scoring_evidence(paths, loaded))
+    provenance = {
+        "dataset_sha256": loaded["prepared"]["dataset_sha256"],
+        "dataset_manifest_sha256": loaded["prepared"]["dataset_manifest_sha256"],
+        "run_manifest_sha256": loaded["prepared"]["run_manifest_sha256"],
+        "review_bundle_sha256": sha256_file(Path(paths.review_bundle)),
+        "condition_key_sha256": sha256_file(Path(paths.condition_key)),
+        "annotations_sha256": sha256_file(Path(paths.annotations)),
+        "annotation_lock_sha256": sha256_file(Path(paths.annotation_lock)),
+        "validation_sha256": sha256_file(Path(paths.evidence_dir) / "validation.jsonl"),
+        "bootstrap_seed": loaded["run_manifest"]["bootstrap_seed"],
+    }
+    for key, name in (
+        ("review_mappings_sha256", "review-mappings.jsonl"),
+        ("learned_metrics_sha256", "learned-metrics.jsonl"),
+    ):
+        path = Path(paths.evidence_dir) / name
+        provenance[key] = sha256_file(path) if path.exists() else None
+    document = {
+        "schema_version": SCHEMA_VERSION,
+        "provenance": provenance,
+        "metrics": metrics,
+        "gates": evaluate_gates(metrics),
+    }
+    if _input_fingerprint(paths) != before:
+        raise BenchmarkError("scoring inputs changed while the document was calculated")
+    return document
+
+
+def _refuse_output_alias(output: Path, inputs: Sequence[Path]) -> None:
+    output = Path(output)
+    try:
+        resolved_output = output.resolve()
+        for path in inputs:
+            path = Path(path)
+            aliases = resolved_output == path.resolve()
+            if not aliases and output.exists() and path.exists():
+                aliases = os.path.samefile(output, path)
+            if aliases:
+                raise BenchmarkError(f"score output aliases consumed input: {path}")
+    except BenchmarkError:
+        raise
+    except OSError as error:
+        raise BenchmarkError(f"cannot validate score output path: {error}") from error
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Score locked PT-PT benchmark evidence.")
+    parser.add_argument("--dataset", required=True, type=Path)
+    parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument("--review-bundle", required=True, type=Path)
+    parser.add_argument("--condition-key", required=True, type=Path)
+    parser.add_argument("--annotations", required=True, type=Path)
+    parser.add_argument("--annotation-lock", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    paths = ScorePaths(
+        dataset_dir=arguments.dataset,
+        evidence_dir=arguments.evidence,
+        review_bundle=arguments.review_bundle,
+        condition_key=arguments.condition_key,
+        annotations=arguments.annotations,
+        annotation_lock=arguments.annotation_lock,
+    )
+    try:
+        optional_inputs = [
+            arguments.evidence / "review-mappings.jsonl",
+            arguments.evidence / "learned-metrics.jsonl",
+        ]
+        _refuse_output_alias(arguments.output, [
+            arguments.dataset / "dataset-manifest.json",
+            arguments.dataset / "cases.jsonl",
+            arguments.dataset / "seeded-errors.json",
+            arguments.evidence / "run-manifest.json",
+            arguments.evidence / "runs.jsonl",
+            arguments.evidence / "validation.jsonl",
+            arguments.review_bundle,
+            arguments.condition_key,
+            arguments.annotations,
+            arguments.annotation_lock,
+            *(path for path in optional_inputs if path.exists()),
+        ])
+        document = score_paths(paths)
+        atomic_write_json(arguments.output, document)
+        sys.stdout.buffer.write(canonical_bytes({
+            "output": str(arguments.output),
+            "sha256": sha256_file(arguments.output),
+        }))
+        return 0
+    except BenchmarkError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
