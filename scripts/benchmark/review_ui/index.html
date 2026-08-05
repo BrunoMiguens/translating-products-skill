@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PT-PT benchmark review</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="session-rail" aria-labelledby="session-heading">
+      <div class="proof-rule" aria-hidden="true"><span id="proof-fill"></span></div>
+      <div class="session-content">
+        <header>
+          <p class="eyebrow">Blind PT-PT review</p>
+          <h1 id="session-heading">Review session</h1>
+        </header>
+
+        <section aria-labelledby="progress-heading">
+          <h2 id="progress-heading" class="rail-label">Progress</h2>
+          <p id="progress-count" class="progress-count">0 / 198</p>
+          <progress id="queue-progress" max="198" value="0">0 of 198 saved</progress>
+          <p id="queue-summary" class="rail-copy">Loading the blinded queue…</p>
+        </section>
+
+        <section class="status-region" aria-labelledby="save-state-heading">
+          <h2 id="save-state-heading" class="rail-label">Current revision</h2>
+          <p id="save-status" class="save-status" role="status" aria-live="polite">Not loaded</p>
+          <p id="error-status" class="error-status" role="alert"></p>
+        </section>
+
+        <nav class="queue-navigation" aria-label="Presentation navigation">
+          <button id="previous-item" type="button">Previous</button>
+          <button id="next-item" type="button">Next</button>
+          <p class="shortcut-hint"><kbd>[</kbd> / <kbd>]</kbd> outside text fields</p>
+        </nav>
+
+        <section class="lock-region" aria-labelledby="lock-heading">
+          <h2 id="lock-heading" class="rail-label">Final lock</h2>
+          <form id="lock-form">
+            <label for="reviewer-id">Reviewer identity</label>
+            <input id="reviewer-id" name="reviewer_id" type="text" required maxlength="200" autocomplete="off">
+            <button id="lock-annotations" class="lock-button" type="submit" disabled>Lock annotations</button>
+          </form>
+          <p id="lock-status" class="rail-copy" aria-live="polite">Available after all 198 presentations are saved.</p>
+        </section>
+      </div>
+    </aside>
+
+    <main id="review-workspace" class="review-workspace" tabindex="-1">
+      <header class="item-header">
+        <div>
+          <p class="eyebrow">Presentation</p>
+          <h2 id="item-position">Loading…</h2>
+        </div>
+        <p id="item-id" class="item-id"></p>
+      </header>
+
+      <section class="reading-block" aria-labelledby="source-heading">
+        <h2 id="source-heading">Source</h2>
+        <pre id="source-text" class="language-text"></pre>
+      </section>
+
+      <section class="context-grid" aria-label="Product context and constraints">
+        <div class="reading-block">
+          <h2>Context</h2>
+          <dl id="context-content" class="context-list"></dl>
+        </div>
+        <div class="reading-block">
+          <h2>Constraints</h2>
+          <div id="constraints-content" class="metadata-content"></div>
+        </div>
+      </section>
+
+      <section id="candidate-region" class="reading-block" aria-labelledby="candidate-heading" hidden>
+        <h2 id="candidate-heading">Candidate under review</h2>
+        <pre id="candidate-text" class="language-text"></pre>
+      </section>
+
+      <section aria-labelledby="outputs-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Anonymous wording</p>
+            <h2 id="outputs-heading">Outputs</h2>
+          </div>
+          <p>Judge only what is shown. Labels do not identify a condition.</p>
+        </div>
+        <div id="output-list" class="output-list"></div>
+      </section>
+
+      <form id="annotation-form" novalidate>
+        <section class="judgment-section" aria-labelledby="comparisons-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Required</p>
+              <h2 id="comparisons-heading">Pairwise comparisons</h2>
+            </div>
+            <p>Choose one of five preference levels for every pair.</p>
+          </div>
+          <div id="comparison-controls"></div>
+        </section>
+
+        <section class="judgment-grid">
+          <fieldset class="judgment-section" id="confidence-fieldset">
+            <legend>Confidence</legend>
+            <p class="field-help">How certain are you about this presentation?</p>
+            <div class="choice-row">
+              <label><input type="radio" name="confidence" value="high" required> High</label>
+              <label><input type="radio" name="confidence" value="medium"> Medium</label>
+              <label><input type="radio" name="confidence" value="low"> Low</label>
+            </div>
+          </fieldset>
+
+          <fieldset class="judgment-section" id="major-fieldset">
+            <legend>Major or worse</legend>
+            <p class="field-help">Derived from critical and major MQM rows.</p>
+            <div id="major-controls" class="choice-row"></div>
+          </fieldset>
+        </section>
+
+        <section class="judgment-section" aria-labelledby="mqm-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Evidence</p>
+              <h2 id="mqm-heading">MQM annotations</h2>
+            </div>
+            <button id="add-mqm" class="secondary-button" type="button">Add MQM row</button>
+          </div>
+          <p class="field-help">Offsets count decoded Python characters: the first character is 0 and an emoji counts as one.</p>
+          <div id="mqm-empty" class="empty-message">No MQM errors recorded.</div>
+          <div id="mqm-rows" class="mqm-rows"></div>
+        </section>
+
+        <section class="judgment-section note-region" aria-labelledby="note-heading">
+          <label id="note-heading" for="review-note">Reviewer note <span class="optional">optional</span></label>
+          <textarea id="review-note" name="note" rows="4" placeholder="Record a concise linguistic rationale when useful."></textarea>
+        </section>
+
+        <footer class="save-region">
+          <p id="validation-summary" class="validation-summary" role="alert"></p>
+          <button id="save-annotation" class="primary-button" type="submit">Save revision</button>
+        </footer>
+      </form>
+    </main>
+  </div>
+  <noscript>This offline reviewer requires JavaScript to render the blinded queue and save annotations.</noscript>
+</body>
+</html>
