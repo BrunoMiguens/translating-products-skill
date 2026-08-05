@@ -6,19 +6,47 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Mapping, Sequence
+import unicodedata
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .blind import _parse_canonical_json
-from .common import BenchmarkError, canonical_bytes, sha256_bytes
+from .common import BenchmarkError, canonical_bytes, sha256_bytes, sha256_file
 from .review_app import MQM_DIMENSIONS
 from .schema import CONDITIONS, DIFFICULTIES, SCHEMA_VERSION, SURFACES, TASKS
 from .score import evaluate_gates
 
 
 _MAX_SCORE_BYTES = 8 * 1024 * 1024
+_MAX_PROVENANCE_BYTES = 8 * 1024 * 1024
 _MAX_CELL_CHARS = 200
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_UTC_TIMESTAMP = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+)
+_REPORT_CODE_VERSION = "report-v1"
+_SCORING_CODE_VERSION = "score-v1"
+_PROVENANCE_TOP_FIELDS = {
+    "schema", "scores_sha256", "benchmark", "git", "input_hashes",
+    "execution", "seeds", "attempt_history", "raw_outputs",
+    "result_bindings", "review_bindings", "code_versions",
+}
+_INPUT_HASH_FIELDS = {
+    "dataset_sha256", "dataset_manifest_sha256", "run_manifest_sha256",
+    "source_sha256", "prompt_sha256", "context_sha256", "rubric_sha256",
+    "configuration_sha256",
+}
+_ATTEMPT_FIELDS = {
+    "run_id", "attempt", "outcome", "retry_of", "retry_reason",
+    "started_at", "completed_at",
+}
+_ATTEMPT_OUTCOMES = {
+    "success", "refusal", "timeout", "malformed_output", "tool_misuse",
+    "infrastructure_failure",
+}
 _HEADINGS = (
     "# PT-PT Translation Benchmark Report",
     "## Verdict and scope",
@@ -348,25 +376,295 @@ def _validate_score_document(value: object) -> Mapping[str, object]:
     return document
 
 
+def _digest(value: object, description: str) -> str:
+    digest = _text(value, description)
+    if _SHA256.fullmatch(digest) is None:
+        raise BenchmarkError(f"{description} must be a SHA-256 digest")
+    return digest
+
+
+def _unavailable(value: object, description: str) -> Mapping[str, object]:
+    record = _object(value, {"status", "reason"}, description)
+    if record["status"] != "unavailable":
+        raise BenchmarkError(f"{description} status must be unavailable")
+    _text(record["reason"], f"{description} reason")
+    return record
+
+
+def _seed_binding(value: object, description: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise BenchmarkError(f"{description} must be an object")
+    if value.get("status") == "unavailable":
+        return _unavailable(value, description)
+    record = _object(value, {"status", "value"}, description)
+    if record["status"] != "available":
+        raise BenchmarkError(f"{description} status is invalid")
+    _integer(record["value"], f"{description} value")
+    return record
+
+
+def _digest_binding(value: object, description: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise BenchmarkError(f"{description} must be an object")
+    if value.get("status") == "unavailable":
+        return _unavailable(value, description)
+    record = _object(value, {"status", "sha256"}, description)
+    if record["status"] != "available":
+        raise BenchmarkError(f"{description} status is invalid")
+    _digest(record["sha256"], f"{description} sha256")
+    return record
+
+
+def _timestamp_binding(value: object, description: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise BenchmarkError(f"{description} must be an object")
+    if value.get("status") == "unavailable":
+        return _unavailable(value, description)
+    record = _object(value, {"status", "value"}, description)
+    if record["status"] != "available":
+        raise BenchmarkError(f"{description} status is invalid")
+    timestamp = _text(record["value"], f"{description} value")
+    if _UTC_TIMESTAMP.fullmatch(timestamp) is None:
+        raise BenchmarkError(f"{description} value must be canonical UTC")
+    try:
+        datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as error:
+        raise BenchmarkError(f"{description} value must be canonical UTC") from error
+    return record
+
+
+def _execution_identity(
+    value: object,
+    description: str,
+    available_fields: set[str],
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise BenchmarkError(f"{description} must be an object")
+    if value.get("status") == "unavailable":
+        return _unavailable(value, description)
+    record = _object(value, {"status"} | available_fields, description)
+    if record["status"] != "available":
+        raise BenchmarkError(f"{description} status is invalid")
+    for field in sorted(available_fields):
+        _text(record[field], f"{description} {field}")
+    return record
+
+
+def _validate_report_provenance(
+    value: object,
+    score_document: Mapping[str, object],
+    score_bytes: bytes,
+) -> Mapping[str, object]:
+    provenance = _object(value, _PROVENANCE_TOP_FIELDS, "report provenance")
+    if provenance["schema"] != "report-provenance-v1":
+        raise BenchmarkError("report provenance schema mismatch")
+    if _digest(provenance["scores_sha256"], "report provenance scores SHA-256") != sha256_bytes(score_bytes):
+        raise BenchmarkError("report provenance scores SHA-256 does not match exact score bytes")
+
+    benchmark = _object(
+        provenance["benchmark"], {"benchmark_schema_version", "dataset_version"},
+        "report provenance benchmark",
+    )
+    if (
+        type(benchmark["benchmark_schema_version"]) is not int
+        or benchmark["benchmark_schema_version"] != score_document["schema_version"]
+    ):
+        raise BenchmarkError("report provenance benchmark schema version mismatch")
+    if benchmark["dataset_version"] != "pt-pt-v1":
+        raise BenchmarkError("report provenance dataset version mismatch")
+
+    git = _object(
+        provenance["git"], {"commit_sha", "tree_state", "diff_snapshot"},
+        "report provenance git",
+    )
+    commit = _text(git["commit_sha"], "report provenance git commit")
+    if _GIT_COMMIT.fullmatch(commit) is None:
+        raise BenchmarkError("report provenance git commit is invalid")
+    if git["tree_state"] not in {"clean", "snapshot"}:
+        raise BenchmarkError("report provenance git tree_state is invalid")
+    if git["tree_state"] == "clean":
+        _unavailable(git["diff_snapshot"], "clean-tree diff snapshot")
+    else:
+        _digest_binding(git["diff_snapshot"], "dirty-tree diff snapshot")
+        if git["diff_snapshot"]["status"] != "available":
+            raise BenchmarkError("snapshot tree state requires a diff snapshot digest")
+
+    input_hashes = _object(
+        provenance["input_hashes"], _INPUT_HASH_FIELDS,
+        "report provenance input hashes",
+    )
+    for name in sorted(_INPUT_HASH_FIELDS):
+        _digest(input_hashes[name], f"report provenance input hash {name}")
+    score_provenance = score_document["provenance"]
+    for name in ("dataset_sha256", "dataset_manifest_sha256", "run_manifest_sha256"):
+        if input_hashes[name] != score_provenance[name]:
+            raise BenchmarkError(f"report provenance {name} does not match score provenance")
+
+    execution = _object(
+        provenance["execution"], {"host", "runner", "model", "generation_settings"},
+        "report provenance execution",
+    )
+    _execution_identity(execution["host"], "execution host", {"name", "version"})
+    _execution_identity(
+        execution["runner"], "execution runner",
+        {"name", "version", "invocation_mode"},
+    )
+    _execution_identity(
+        execution["model"], "execution model",
+        {"provider", "name", "version"},
+    )
+    settings = execution["generation_settings"]
+    if not isinstance(settings, list):
+        raise BenchmarkError("generation settings must be a list")
+    setting_names: list[str] = []
+    for index, setting in enumerate(settings):
+        record = _object(
+            setting, {"name", "value"}, f"generation setting {index}"
+        )
+        setting_names.append(_text(record["name"], f"generation setting {index} name"))
+        setting_value = record["value"]
+        if setting_value is None or type(setting_value) is bool:
+            pass
+        elif type(setting_value) in (int, float):
+            _number(setting_value, f"generation setting {index} value")
+        elif type(setting_value) is str:
+            _text(setting_value, f"generation setting {index} value", nonempty=False)
+        else:
+            raise BenchmarkError(f"generation setting {index} value must be a JSON scalar")
+    if setting_names != sorted(set(setting_names)):
+        raise BenchmarkError("generation settings must have unique sorted names")
+
+    seeds = _object(
+        provenance["seeds"], {"schedule", "blinding", "bootstrap"},
+        "report provenance seeds",
+    )
+    for name in ("schedule", "blinding", "bootstrap"):
+        _seed_binding(seeds[name], f"report provenance {name} seed")
+    if (
+        seeds["bootstrap"].get("status") != "available"
+        or seeds["bootstrap"].get("value") != score_provenance["bootstrap_seed"]
+    ):
+        raise BenchmarkError("report provenance bootstrap seed does not match score provenance")
+
+    attempts = provenance["attempt_history"]
+    if not isinstance(attempts, list):
+        raise BenchmarkError("report provenance attempt_history must be a list")
+    attempt_ids: list[str] = []
+    retry_targets: list[str] = []
+    for index, attempt in enumerate(attempts):
+        record = _object(attempt, _ATTEMPT_FIELDS, f"attempt history {index}")
+        run_id = _text(record["run_id"], f"attempt history {index} run_id")
+        attempt_ids.append(run_id)
+        _integer(record["attempt"], f"attempt history {index} attempt", minimum=1)
+        if record["outcome"] not in _ATTEMPT_OUTCOMES:
+            raise BenchmarkError(f"attempt history {index} outcome is invalid")
+        retry_of = record["retry_of"]
+        retry_reason = record["retry_reason"]
+        if retry_of is None:
+            if retry_reason is not None:
+                raise BenchmarkError(f"attempt history {index} retry reason has no retry target")
+        else:
+            retry_targets.append(_text(retry_of, f"attempt history {index} retry_of"))
+            _text(retry_reason, f"attempt history {index} retry_reason")
+        started = _timestamp_binding(record["started_at"], f"attempt history {index} started_at")
+        completed = _timestamp_binding(record["completed_at"], f"attempt history {index} completed_at")
+        if started.get("status") == "available" and completed.get("status") == "available":
+            start_value = datetime.strptime(started["value"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            end_value = datetime.strptime(completed["value"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            if end_value < start_value:
+                raise BenchmarkError(f"attempt history {index} completion precedes start")
+    if attempt_ids != sorted(set(attempt_ids)):
+        raise BenchmarkError("attempt history run IDs must be unique and sorted")
+    if any(target not in set(attempt_ids) for target in retry_targets):
+        raise BenchmarkError("attempt history retry target is unknown")
+
+    raw_outputs = provenance["raw_outputs"]
+    if not isinstance(raw_outputs, list):
+        raise BenchmarkError("report provenance raw_outputs must be a list")
+    raw_ids: list[str] = []
+    for index, raw in enumerate(raw_outputs):
+        record = _object(raw, {"run_id", "sha256"}, f"raw output binding {index}")
+        raw_ids.append(_text(record["run_id"], f"raw output binding {index} run_id"))
+        _digest(record["sha256"], f"raw output binding {index} sha256")
+    if raw_ids != sorted(set(raw_ids)):
+        raise BenchmarkError("raw output bindings must have unique sorted run IDs")
+    if any(run_id not in set(attempt_ids) for run_id in raw_ids):
+        raise BenchmarkError("raw output binding has no attempt history record")
+
+    result_bindings = _object(
+        provenance["result_bindings"],
+        {"structural_sha256", "learned_metrics", "review_mappings"},
+        "report provenance result bindings",
+    )
+    if _digest(result_bindings["structural_sha256"], "structural result binding") != score_provenance["validation_sha256"]:
+        raise BenchmarkError("structural result binding does not match score provenance")
+    for field, score_field in (
+        ("learned_metrics", "learned_metrics_sha256"),
+        ("review_mappings", "review_mappings_sha256"),
+    ):
+        binding = _digest_binding(result_bindings[field], f"{field} result binding")
+        expected = score_provenance[score_field]
+        if expected is None:
+            if binding.get("status") != "unavailable":
+                raise BenchmarkError(f"{field} binding must be unavailable")
+        elif binding.get("status") != "available" or binding.get("sha256") != expected:
+            raise BenchmarkError(f"{field} binding does not match score provenance")
+
+    review_bindings = _object(
+        provenance["review_bindings"],
+        {"blind_bundle_sha256", "annotations_sha256", "annotation_lock_sha256"},
+        "report provenance review bindings",
+    )
+    for field, score_field in (
+        ("blind_bundle_sha256", "review_bundle_sha256"),
+        ("annotations_sha256", "annotations_sha256"),
+        ("annotation_lock_sha256", "annotation_lock_sha256"),
+    ):
+        if _digest(review_bindings[field], f"review binding {field}") != score_provenance[score_field]:
+            raise BenchmarkError(f"report provenance {field} does not match score provenance")
+
+    code_versions = _object(
+        provenance["code_versions"], {"scoring", "report"},
+        "report provenance code versions",
+    )
+    score_module = Path(__file__).with_name("score.py")
+    for field, version, source in (
+        ("scoring", _SCORING_CODE_VERSION, score_module),
+        ("report", _REPORT_CODE_VERSION, Path(__file__)),
+    ):
+        record = _object(
+            code_versions[field], {"version", "sha256"},
+            f"{field} code version",
+        )
+        if record["version"] != version:
+            raise BenchmarkError(f"{field} code version mismatch")
+        if _digest(record["sha256"], f"{field} code sha256") != sha256_file(source):
+            raise BenchmarkError(f"{field} code SHA-256 does not match executing code")
+    return provenance
+
+
 def _cell(value: object) -> str:
     raw = str(value)
     truncated = len(raw) > _MAX_CELL_CHARS
     raw = raw[:_MAX_CELL_CHARS]
     result: list[str] = []
-    for character in raw:
+    for index, character in enumerate(raw):
         codepoint = ord(character)
-        if codepoint < 32 or codepoint == 127:
-            result.append(f"\\u{codepoint:04X}")
-        elif character == "|":
-            result.append("\\|")
-        elif character == "\\":
-            result.append("\\\\")
-        elif character == "<":
-            result.append("&lt;")
-        elif character == ">":
-            result.append("&gt;")
-        else:
+        category = unicodedata.category(character)
+        underscore_inside_word = (
+            character == "_"
+            and index > 0
+            and index + 1 < len(raw)
+            and raw[index - 1].isalnum()
+            and raw[index + 1].isalnum()
+        )
+        if character in {" ", "-", ",", "%", "="} or underscore_inside_word:
             result.append(character)
+        elif category[0] in {"L", "N"}:
+            result.append(character)
+        else:
+            width = 4 if codepoint <= 0xFFFF else 8
+            result.append(f"U+{codepoint:0{width}X}")
     if truncated:
         result.append("…")
     return "".join(result)
@@ -407,13 +705,32 @@ def _preference_rows(cards: Mapping[str, object], names: Sequence[str], labels: 
     return rows
 
 
-def _render_markdown(document: Mapping[str, object], result_bytes: bytes) -> bytes:
+def _identity_summary(value: Mapping[str, object], fields: Sequence[str]) -> str:
+    if value["status"] == "unavailable":
+        return f"unavailable — {_cell(value['reason'])}"
+    return ", ".join(f"{field}={_cell(value[field])}" for field in fields)
+
+
+def _binding_summary(value: Mapping[str, object]) -> str:
+    if value["status"] == "unavailable":
+        return f"unavailable — {_cell(value['reason'])}"
+    if "sha256" in value:
+        return _cell(value["sha256"])
+    return _cell(value["value"])
+
+
+def _render_markdown(
+    document: Mapping[str, object],
+    report_provenance: Mapping[str, object],
+    result_bytes: bytes,
+) -> bytes:
     metrics = document["metrics"]
     gates = document["gates"]
     translation = metrics["translation"]
     review = metrics["review"]
     cards = metrics["scorecards"]
     operational = metrics["operational"]
+    execution = report_provenance["execution"]
 
     sections: list[str] = [_HEADINGS[0]]
     sections.append(
@@ -424,9 +741,26 @@ def _render_markdown(document: Mapping[str, object], result_bytes: bytes) -> byt
     )
     sections.append(
         _HEADINGS[2]
-        + "\n\n- Dataset: PT-PT v1\n- tested model: unavailable in the canonical Task 7 score document"
-          "\n- Model: unavailable\n- Runner configuration: unavailable"
-          f"\n- Bootstrap seed: `{document['provenance']['bootstrap_seed']}`"
+        + f"\n\n- Dataset: {_cell(report_provenance['benchmark']['dataset_version'])}"
+        + "\n- tested model: "
+        + _identity_summary(execution["model"], ("provider", "name", "version"))
+        + "\n- Model: "
+        + _identity_summary(execution["model"], ("provider", "name", "version"))
+        + "\n- Host: "
+        + _identity_summary(execution["host"], ("name", "version"))
+        + "\n- Runner configuration: "
+        + _identity_summary(
+            execution["runner"], ("name", "version", "invocation_mode")
+        )
+        + "\n- Generation settings: "
+        + (
+            ", ".join(
+                f"{_cell(setting['name'])}={_cell(setting['value'])}"
+                for setting in execution["generation_settings"]
+            )
+            or "none recorded"
+        )
+        + f"\n- Bootstrap seed: {report_provenance['seeds']['bootstrap']['value']}"
     )
 
     gate_rows: list[list[object]] = []
@@ -604,28 +938,72 @@ def _render_markdown(document: Mapping[str, object], result_bytes: bytes) -> byt
         + (_table(("Invariant", "Normal failures", "Suite failures", "Normal validator errors", "Suite validator errors"), hard_rows)
            if hard_rows else "No invariant failures or validator errors are represented in the canonical score document.")
     )
-    provenance_labels = {
-        "dataset_sha256": "Dataset SHA-256",
-        "dataset_manifest_sha256": "Dataset manifest SHA-256",
-        "run_manifest_sha256": "Run manifest SHA-256",
-        "review_bundle_sha256": "Review bundle SHA-256",
-        "condition_key_sha256": "Private condition-key artifact SHA-256",
-        "annotations_sha256": "Annotations SHA-256",
-        "annotation_lock_sha256": "Annotation lock SHA-256",
-        "validation_sha256": "Validation SHA-256",
-        "review_mappings_sha256": "Review mappings SHA-256",
-        "learned_metrics_sha256": "Learned metrics SHA-256",
-    }
-    provenance_rows = [
-        [label, "unavailable" if document["provenance"][name] is None else document["provenance"][name]]
-        for name, label in provenance_labels.items()
+    input_rows = [
+        [name, value]
+        for name, value in sorted(report_provenance["input_hashes"].items())
+    ]
+    seed_rows = [
+        [f"{name.title()} seed", _binding_summary(report_provenance["seeds"][name])]
+        for name in ("schedule", "blinding", "bootstrap")
+    ]
+    attempt_rows = [
+        [
+            value["run_id"], value["attempt"], value["outcome"],
+            "none" if value["retry_of"] is None else value["retry_of"],
+            "none" if value["retry_reason"] is None else value["retry_reason"],
+            _binding_summary(value["started_at"]),
+            _binding_summary(value["completed_at"]),
+        ]
+        for value in report_provenance["attempt_history"]
+    ]
+    raw_rows = [
+        [value["run_id"], value["sha256"]]
+        for value in report_provenance["raw_outputs"]
+    ]
+    result_rows = [
+        ["Structural results", report_provenance["result_bindings"]["structural_sha256"]],
+        ["Learned metrics", _binding_summary(report_provenance["result_bindings"]["learned_metrics"])],
+        ["Review mappings", _binding_summary(report_provenance["result_bindings"]["review_mappings"])],
+        ["Blind review bundle", report_provenance["review_bindings"]["blind_bundle_sha256"]],
+        ["Annotations", report_provenance["review_bindings"]["annotations_sha256"]],
+        ["Annotation lock", report_provenance["review_bindings"]["annotation_lock_sha256"]],
+    ]
+    code_rows = [
+        [name, report_provenance["code_versions"][name]["version"],
+         report_provenance["code_versions"][name]["sha256"]]
+        for name in ("scoring", "report")
     ]
     sections.append(
         _HEADINGS[15]
-        + f"\n\nCanonical results SHA-256: `{sha256_bytes(result_bytes)}`.\n\n"
-        + _table(("Artifact", "Frozen digest"), provenance_rows)
+        + f"\n\nCanonical results SHA-256: {sha256_bytes(result_bytes)}."
+        + f"\n\nScore bytes SHA-256: {report_provenance['scores_sha256']}."
+        + f"\n\nBenchmark schema version: {report_provenance['benchmark']['benchmark_schema_version']}; "
+          f"dataset version: {_cell(report_provenance['benchmark']['dataset_version'])}."
+        + f"\n\nGit commit: {_cell(report_provenance['git']['commit_sha'])}; "
+          f"tree state: {_cell(report_provenance['git']['tree_state'])}; "
+          f"diff snapshot: {_binding_summary(report_provenance['git']['diff_snapshot'])}."
+        + "\n\nFrozen input hashes\n\n"
+        + _table(("Input", "SHA-256"), input_rows)
+        + "\n\nRandomization and bootstrap seeds\n\n"
+        + _table(("Seed", "Value"), seed_rows)
+        + "\n\nAttempt and retry history\n\n"
+        + (
+            _table(
+                ("Run ID", "Attempt", "Outcome", "Retry of", "Retry reason", "Started", "Completed"),
+                attempt_rows,
+            )
+            if attempt_rows else "No attempts recorded."
+        )
+        + "\n\nRaw-output content hashes\n\n"
+        + f"Raw-output count: {len(raw_rows)}.\n\n"
+        + (_table(("Run ID", "SHA-256"), raw_rows) if raw_rows else "No raw outputs recorded.")
+        + "\n\nFrozen result and review bindings\n\n"
+        + _table(("Artifact", "Binding"), result_rows)
+        + "\n\nScoring and report code versions\n\n"
+        + _table(("Component", "Version", "SHA-256"), code_rows)
         + "\n\nReproduce with:\n\n```text\npython3 -m scripts.benchmark.report "
-          "--scores <canonical-scores.json> --results <results.json> --markdown <report.md>\n```"
+          "--scores <canonical-scores.json> --provenance <report-provenance.json> "
+          "--results <results.json> --markdown <report.md>\n```"
     )
     sections.append(
         _HEADINGS[16]
@@ -637,38 +1015,131 @@ def _render_markdown(document: Mapping[str, object], result_bytes: bytes) -> byt
     return ("\n\n".join(sections) + "\n").encode("utf-8")
 
 
-def render_report(score_document: Mapping[str, object]) -> tuple[bytes, bytes]:
+def render_report(
+    score_document: Mapping[str, object],
+    report_provenance: Mapping[str, object],
+    *,
+    score_bytes: bytes | None = None,
+) -> tuple[bytes, bytes]:
     """Validate and render deterministic machine and Markdown benchmark results."""
     document = _validate_score_document(score_document)
-    result_bytes = canonical_bytes(document)
-    return result_bytes, _render_markdown(document, result_bytes)
+    canonical_score = canonical_bytes(document)
+    if score_bytes is None:
+        score_bytes = canonical_score
+    elif score_bytes != canonical_score:
+        raise BenchmarkError("exact score bytes are not canonical Task 7 output")
+    provenance = _validate_report_provenance(
+        report_provenance, document, score_bytes
+    )
+    result_document = {
+        "report_schema_version": 1,
+        "report_provenance": provenance,
+        "score_document": document,
+    }
+    result_bytes = canonical_bytes(result_document)
+    return result_bytes, _render_markdown(document, provenance, result_bytes)
 
 
-def _read_score(path: Path) -> Mapping[str, object]:
-    path = Path(path)
+@dataclass
+class _HeldInput:
+    path: Path
+    description: str
+    descriptor: int
+    identity: tuple[int, int]
+    metadata: tuple[int, int, int, int]
+    encoded: bytes
+    value: Mapping[str, object]
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+
+def _read_descriptor(descriptor: int, limit: int) -> bytes:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    blocks: list[bytes] = []
+    remaining = limit + 1
+    while remaining:
+        block = os.read(descriptor, min(1024 * 1024, remaining))
+        if not block:
+            break
+        blocks.append(block)
+        remaining -= len(block)
+    return b"".join(blocks)
+
+
+def _open_held_input(
+    path: Path,
+    description: str,
+    *,
+    limit: int,
+) -> _HeldInput:
+    path = Path(os.path.abspath(path))
+    descriptor = -1
     try:
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-            raise BenchmarkError("scores input must be a real regular file")
-        if metadata.st_size > _MAX_SCORE_BYTES:
-            raise BenchmarkError(f"scores input exceeds {_MAX_SCORE_BYTES} bytes")
+            raise BenchmarkError(f"{description} must be a real regular file")
+        if metadata.st_nlink != 1:
+            raise BenchmarkError(f"{description} must have exactly one link")
+        if metadata.st_size > limit:
+            raise BenchmarkError(f"{description} exceeds {limit} bytes")
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(descriptor, "rb") as source:
-            before = os.fstat(source.fileno())
-            encoded = source.read(_MAX_SCORE_BYTES + 1)
-            after = os.fstat(source.fileno())
-        if len(encoded) > _MAX_SCORE_BYTES:
-            raise BenchmarkError(f"scores input exceeds {_MAX_SCORE_BYTES} bytes")
+        before = os.fstat(descriptor)
+        encoded = _read_descriptor(descriptor, limit)
+        after = os.fstat(descriptor)
+        if len(encoded) > limit:
+            raise BenchmarkError(f"{description} exceeds {limit} bytes")
         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
         ):
-            raise BenchmarkError("scores input changed while reading")
+            raise BenchmarkError(f"{description} changed while reading")
+        if (before.st_dev, before.st_ino) != (metadata.st_dev, metadata.st_ino):
+            raise BenchmarkError(f"{description} identity changed while opening")
+    except BenchmarkError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise BenchmarkError(f"cannot read {description}: {error}") from error
+    try:
+        value = _parse_canonical_json(encoded, description)
+        if not isinstance(value, Mapping):
+            raise BenchmarkError(f"{description} must be an object")
+        return _HeldInput(
+            path=path,
+            description=description,
+            descriptor=descriptor,
+            identity=(before.st_dev, before.st_ino),
+            metadata=(before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns),
+            encoded=encoded,
+            value=value,
+        )
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _verify_held_input(value: _HeldInput) -> None:
+    try:
+        held = os.fstat(value.descriptor)
+        linked = value.path.lstat()
+        current = (held.st_dev, held.st_ino, held.st_size, held.st_mtime_ns)
+        if (
+            current != value.metadata
+            or not stat.S_ISREG(linked.st_mode)
+            or linked.st_nlink != 1
+            or (linked.st_dev, linked.st_ino) != value.identity
+            or _read_descriptor(value.descriptor, len(value.encoded)) != value.encoded
+        ):
+            raise BenchmarkError(f"{value.description} identity or bytes changed during reporting")
     except BenchmarkError:
         raise
     except OSError as error:
-        raise BenchmarkError(f"cannot read scores input: {error}") from error
-    value = _parse_canonical_json(encoded, "scores input")
-    return _validate_score_document(value)
+        raise BenchmarkError(f"cannot reverify {value.description}: {error}") from error
 
 
 def _symlink_ancestors(path: Path) -> set[Path]:
@@ -703,16 +1174,33 @@ def _resolved_target(path: Path, *, allowed_symlinks: set[Path]) -> Path:
     return parent / path.name
 
 
-def _validate_targets(scores: Path, results: Path, markdown: Path, *, verify_existing: bool) -> tuple[Path, Path]:
-    allowed_symlinks = _symlink_ancestors(Path(scores).parent)
+def _validate_targets(
+    consumed: Sequence[_HeldInput],
+    results: Path,
+    markdown: Path,
+    *,
+    verify_existing: bool,
+) -> tuple[Path, Path, dict[Path, tuple[int, int]]]:
+    allowed_symlinks: set[Path] = set()
+    for value in consumed:
+        allowed_symlinks.update(_symlink_ancestors(value.path.parent))
     results_target = _resolved_target(results, allowed_symlinks=allowed_symlinks)
     markdown_target = _resolved_target(markdown, allowed_symlinks=allowed_symlinks)
-    scores_target = Path(scores).resolve(strict=True)
-    if results_target == markdown_target:
+    if (
+        results_target == markdown_target
+        or str(results_target).casefold() == str(markdown_target).casefold()
+    ):
         raise BenchmarkError("results and Markdown outputs must be distinct paths")
-    if scores_target in {results_target, markdown_target}:
-        raise BenchmarkError("output path aliases consumed scores input")
+    for value in consumed:
+        if (
+            value.path.resolve(strict=True) in {results_target, markdown_target}
+            or str(value.path.resolve(strict=True)).casefold()
+            in {str(results_target).casefold(), str(markdown_target).casefold()}
+        ):
+            raise BenchmarkError(f"output path aliases consumed {value.description}")
+    consumed_identities = {value.identity: value.description for value in consumed}
     identities: set[tuple[int, int]] = set()
+    output_identities: dict[Path, tuple[int, int]] = {}
     for target, description in ((results_target, "results output"), (markdown_target, "Markdown output")):
         try:
             metadata = target.lstat()
@@ -727,10 +1215,15 @@ def _validate_targets(scores: Path, results: Path, markdown: Path, *, verify_exi
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             raise BenchmarkError(f"{description} must be an exclusive regular file")
         identity = (metadata.st_dev, metadata.st_ino)
+        if identity in consumed_identities:
+            raise BenchmarkError(
+                f"{description} aliases consumed {consumed_identities[identity]}"
+            )
         if identity in identities:
             raise BenchmarkError("results and Markdown outputs alias one file")
         identities.add(identity)
-    return results_target, markdown_target
+        output_identities[target] = identity
+    return results_target, markdown_target, output_identities
 
 
 def _write_fd(descriptor: int, encoded: bytes) -> None:
@@ -742,7 +1235,14 @@ def _write_fd(descriptor: int, encoded: bytes) -> None:
         offset += written
 
 
-def _publish_pair(results: Path, result_bytes: bytes, markdown: Path, markdown_bytes: bytes) -> None:
+def _publish_pair(
+    results: Path,
+    result_bytes: bytes,
+    markdown: Path,
+    markdown_bytes: bytes,
+    *,
+    accept: Callable[[], None] | None = None,
+) -> None:
     targets = ((Path(results), result_bytes), (Path(markdown), markdown_bytes))
     parents: list[int] = []
     outputs: list[int] = []
@@ -775,6 +1275,8 @@ def _publish_pair(results: Path, result_bytes: bytes, markdown: Path, markdown_b
             if (current.st_dev, current.st_ino) != parent_metadata[index]:
                 raise BenchmarkError("report output parent changed during publication")
             os.fsync(parent_fd)
+        if accept is not None:
+            accept()
     except BenchmarkError:
         for parent_fd, name in reversed(created):
             try:
@@ -802,12 +1304,24 @@ def _publish_pair(results: Path, result_bytes: bytes, markdown: Path, markdown_b
                 pass
 
 
-def _read_exact(path: Path, expected: bytes, description: str) -> None:
+def _read_exact(
+    path: Path,
+    expected: bytes,
+    description: str,
+    *,
+    expected_identity: tuple[int, int],
+) -> None:
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as source:
             metadata = os.fstat(source.fileno())
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            linked = path.lstat()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or (metadata.st_dev, metadata.st_ino) != expected_identity
+                or (linked.st_dev, linked.st_ino) != expected_identity
+            ):
                 raise BenchmarkError(f"{description} must be an exclusive regular file")
             encoded = source.read(len(expected) + 1)
         if encoded != expected:
@@ -821,6 +1335,7 @@ def _read_exact(path: Path, expected: bytes, description: str) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Render canonical PT-PT benchmark reports.")
     parser.add_argument("--scores", required=True, type=Path)
+    parser.add_argument("--provenance", required=True, type=Path)
     parser.add_argument("--results", required=True, type=Path)
     parser.add_argument("--markdown", required=True, type=Path)
     parser.add_argument("--verify-existing", action="store_true")
@@ -829,18 +1344,48 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    held: list[_HeldInput] = []
     try:
-        document = _read_score(arguments.scores)
-        result_bytes, markdown_bytes = render_report(document)
-        results, markdown = _validate_targets(
-            arguments.scores, arguments.results, arguments.markdown,
+        scores_input = _open_held_input(
+            arguments.scores, "scores input", limit=_MAX_SCORE_BYTES
+        )
+        held.append(scores_input)
+        provenance_input = _open_held_input(
+            arguments.provenance,
+            "report provenance input",
+            limit=_MAX_PROVENANCE_BYTES,
+        )
+        held.append(provenance_input)
+        if scores_input.identity == provenance_input.identity:
+            raise BenchmarkError("scores and report provenance inputs alias one file")
+        document = _validate_score_document(scores_input.value)
+        result_bytes, markdown_bytes = render_report(
+            document,
+            provenance_input.value,
+            score_bytes=scores_input.encoded,
+        )
+        results, markdown, output_identities = _validate_targets(
+            held, arguments.results, arguments.markdown,
             verify_existing=arguments.verify_existing,
         )
+        def accept_inputs() -> None:
+            for value in held:
+                _verify_held_input(value)
         if arguments.verify_existing:
-            _read_exact(results, result_bytes, "results output")
-            _read_exact(markdown, markdown_bytes, "Markdown output")
+            _read_exact(
+                results, result_bytes, "results output",
+                expected_identity=output_identities[results],
+            )
+            _read_exact(
+                markdown, markdown_bytes, "Markdown output",
+                expected_identity=output_identities[markdown],
+            )
+            accept_inputs()
         else:
-            _publish_pair(results, result_bytes, markdown, markdown_bytes)
+            _publish_pair(
+                results, result_bytes, markdown, markdown_bytes,
+                accept=accept_inputs,
+            )
         sys.stdout.buffer.write(canonical_bytes({
             "results": str(arguments.results),
             "markdown": str(arguments.markdown),
@@ -849,6 +1394,9 @@ def main(argv: list[str] | None = None) -> int:
     except (BenchmarkError, ValueError, RecursionError, OverflowError, TypeError, UnicodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    finally:
+        for value in reversed(held):
+            value.close()
 
 
 if __name__ == "__main__":
