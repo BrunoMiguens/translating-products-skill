@@ -18,12 +18,71 @@ const state = {
   index: 0,
   dirty: false,
   saving: false,
+  editGeneration: 0,
 };
 
 const byId = (id) => document.getElementById(id);
 
 function pythonLength(text) {
   return Array.from(text).length;
+}
+
+function validPythonSpan(text, start, end) {
+  return Number.isInteger(start)
+    && Number.isInteger(end)
+    && start >= 0
+    && end > start
+    && end <= pythonLength(text);
+}
+
+function nextRevision(itemId, reviewState) {
+  return (reviewState.latest[itemId]?.revision || 0) + 1;
+}
+
+function isTextEntry(target) {
+  if (!target || typeof target !== "object") return false;
+  const tagName = typeof target.tagName === "string" ? target.tagName.toUpperCase() : "";
+  return target.isContentEditable === true || ["INPUT", "TEXTAREA", "SELECT"].includes(tagName);
+}
+
+function shortcutDirection(event) {
+  if (event.defaultPrevented || isTextEntry(event.target)) return 0;
+  if (event.key === "[") return -1;
+  if (event.key === "]") return 1;
+  return 0;
+}
+
+function allowNavigation(dirty, confirmDiscard) {
+  return !dirty || confirmDiscard();
+}
+
+function shouldWarnBeforeUnload(uiState) {
+  return uiState.dirty === true || uiState.saving === true;
+}
+
+function lockAllowed(reviewState, uiState) {
+  return reviewState.total === 198
+    && reviewState.remaining === 0
+    && reviewState.locked === false
+    && uiState.dirty === false
+    && uiState.saving === false;
+}
+
+function interactionLocked(reviewState, uiState) {
+  return reviewState.locked === true || uiState.saving === true;
+}
+
+function saveSettlement(submittedGeneration, currentGeneration, formChanged = false) {
+  const newerEdits = submittedGeneration !== currentGeneration || formChanged;
+  return { dirty: newerEdits, newerEdits };
+}
+
+function applyProgress(queueProgress, proofProgress, reviewState) {
+  queueProgress.max = reviewState.total;
+  queueProgress.value = reviewState.completed;
+  queueProgress.textContent = `${reviewState.completed} of ${reviewState.total} saved`;
+  proofProgress.max = reviewState.total;
+  proofProgress.value = reviewState.completed;
 }
 
 function displayValue(value) {
@@ -42,9 +101,14 @@ function setSaveStatus(message, statusName) {
 }
 
 function markDirty() {
-  if (state.review?.locked || state.saving) return;
+  if (state.review?.locked) return;
+  state.editGeneration += 1;
   state.dirty = true;
-  setSaveStatus("Unsaved changes", "dirty");
+  setSaveStatus(
+    state.saving ? "Saving snapshot · newer edits pending" : "Unsaved changes",
+    "dirty",
+  );
+  if (state.review) updateProgress();
 }
 
 function labelsFor(item) {
@@ -265,6 +329,13 @@ function setFormLocked(locked) {
   });
 }
 
+function setInteractionState() {
+  const locked = interactionLocked(state.review, state);
+  setFormLocked(locked);
+  byId("previous-item").disabled = locked || state.index === 0;
+  byId("next-item").disabled = locked || state.index === state.bundle.items.length - 1;
+}
+
 function renderCurrent() {
   const item = state.bundle.items[state.index];
   const latest = state.review.latest[item.id] || null;
@@ -284,16 +355,15 @@ function renderCurrent() {
     input.checked = latest?.confidence === input.value;
   });
   byId("review-note").value = latest?.note || "";
-  byId("previous-item").disabled = state.index === 0;
-  byId("next-item").disabled = state.index === state.bundle.items.length - 1;
   byId("validation-summary").textContent = "";
   setError();
   state.dirty = false;
+  state.editGeneration += 1;
   setSaveStatus(
     latest ? `Saved · revision ${latest.revision}` : "Not yet saved",
     latest ? "saved" : "empty",
   );
-  setFormLocked(state.review.locked);
+  setInteractionState();
   byId("review-workspace").focus({ preventScroll: true });
 }
 
@@ -301,18 +371,14 @@ function updateProgress() {
   const { completed, total, remaining, locked } = state.review;
   byId("progress-count").textContent = `${completed} / ${total}`;
   const progress = byId("queue-progress");
-  progress.max = total;
-  progress.value = completed;
-  progress.textContent = `${completed} of ${total} saved`;
+  const proofProgress = byId("proof-progress");
+  applyProgress(progress, proofProgress, state.review);
   byId("queue-summary").textContent = locked
     ? "Annotations locked. This session is read-only."
     : `${remaining} presentation${remaining === 1 ? "" : "s"} remaining.`;
-  const percentage = total ? (completed / total) * 100 : 0;
-  const proofFill = byId("proof-fill");
-  proofFill.style.setProperty("--progress", `${percentage}%`);
-  const lockEnabled = total === 198 && remaining === 0 && !locked;
+  const lockEnabled = lockAllowed(state.review, state);
   byId("lock-annotations").disabled = !lockEnabled;
-  byId("reviewer-id").disabled = locked;
+  byId("reviewer-id").disabled = locked || state.saving;
   byId("lock-status").textContent = locked
     ? `Locked by ${state.review.lock_record?.reviewer_id || "reviewer"}.`
     : lockEnabled
@@ -331,7 +397,7 @@ function collectMqm(item) {
       note: row.querySelector(".mqm-note-input").value,
     };
     const length = pythonLength(item.outputs[finding.output]);
-    if (!Number.isInteger(finding.start) || !Number.isInteger(finding.end) || finding.start < 0 || finding.end <= finding.start || finding.end > length) {
+    if (!validPythonSpan(item.outputs[finding.output], finding.start, finding.end)) {
       throw new Error(`MQM row ${index + 1} needs a span inside output ${finding.output} (0–${length}).`);
     }
     if (!finding.note.trim()) throw new Error(`MQM row ${index + 1} needs a finding note.`);
@@ -341,7 +407,6 @@ function collectMqm(item) {
 
 function collectAnnotation() {
   const item = state.bundle.items[state.index];
-  const latest = state.review.latest[item.id] || null;
   const comparisons = {};
   for (const [left, right] of pairsFor(labelsFor(item))) {
     const key = `${left}:${right}`;
@@ -358,7 +423,7 @@ function collectAnnotation() {
   ]));
   return {
     item_id: item.id,
-    revision: (latest?.revision || 0) + 1,
+    revision: nextRevision(item.id, state.review),
     comparisons,
     confidence: confidence.value,
     mqm,
@@ -386,8 +451,10 @@ async function saveCurrent(event) {
     byId("validation-summary").textContent = error.message;
     return;
   }
+  const submittedGeneration = state.editGeneration;
   state.saving = true;
-  byId("save-annotation").disabled = true;
+  setInteractionState();
+  updateProgress();
   setSaveStatus("Saving revision…", "saving");
   try {
     const payload = await requestJson("/api/annotations", {
@@ -395,27 +462,46 @@ async function saveCurrent(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(annotation),
     });
+    let formChanged = true;
+    try {
+      formChanged = JSON.stringify(collectAnnotation()) !== JSON.stringify(annotation);
+    } catch (_error) {
+      formChanged = true;
+    }
+    const settlement = saveSettlement(
+      submittedGeneration, state.editGeneration, formChanged,
+    );
     state.review = payload.state;
     state.review.latest[annotation.item_id] = payload.annotation;
-    state.dirty = false;
-    setSaveStatus(`Saved · revision ${payload.annotation.revision}`, "saved");
+    state.dirty = settlement.dirty;
+    setSaveStatus(
+      settlement.newerEdits
+        ? `Saved revision ${payload.annotation.revision} · newer edits unsaved`
+        : `Saved · revision ${payload.annotation.revision}`,
+      settlement.newerEdits ? "dirty" : "saved",
+    );
     updateProgress();
   } catch (error) {
+    state.dirty = true;
     setError(error.message);
     setSaveStatus("Save failed · changes retained", "dirty");
   } finally {
     state.saving = false;
-    byId("save-annotation").disabled = state.review.locked;
+    setInteractionState();
+    updateProgress();
   }
 }
 
 function canLeaveCurrent() {
-  return !state.dirty || window.confirm("This presentation has unsaved changes. Leave without saving them?");
+  return allowNavigation(
+    state.dirty,
+    () => window.confirm("This presentation has unsaved changes. Leave without saving them?"),
+  );
 }
 
 function moveBy(amount) {
   const next = state.index + amount;
-  if (next < 0 || next >= state.bundle.items.length || !canLeaveCurrent()) return;
+  if (state.saving || next < 0 || next >= state.bundle.items.length || !canLeaveCurrent()) return;
   state.index = next;
   renderCurrent();
   window.scrollTo({ top: 0, behavior: "auto" });
@@ -423,7 +509,14 @@ function moveBy(amount) {
 
 async function lockAnnotations(event) {
   event.preventDefault();
-  if (byId("lock-annotations").disabled) return;
+  if (!lockAllowed(state.review, state)) {
+    setError(
+      state.dirty
+        ? "Save or discard the visible unsaved revision before locking."
+        : "Locking is available only after all 198 presentations are saved.",
+    );
+    return;
+  }
   const reviewerId = byId("reviewer-id").value;
   if (!reviewerId.trim()) {
     setError("Enter the reviewer identity before locking.");
@@ -431,6 +524,9 @@ async function lockAnnotations(event) {
     return;
   }
   if (!window.confirm("Lock all annotations now? No further revisions can be saved.")) return;
+  state.saving = true;
+  setInteractionState();
+  updateProgress();
   try {
     const payload = await requestJson("/api/lock", {
       method: "POST",
@@ -445,11 +541,11 @@ async function lockAnnotations(event) {
     setFormLocked(true);
   } catch (error) {
     setError(error.message);
+  } finally {
+    state.saving = false;
+    setInteractionState();
+    updateProgress();
   }
-}
-
-function isTextEntry(target) {
-  return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 }
 
 function installEvents() {
@@ -461,12 +557,14 @@ function installEvents() {
   byId("next-item").addEventListener("click", () => moveBy(1));
   byId("lock-form").addEventListener("submit", lockAnnotations);
   document.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented || isTextEntry(event.target)) return;
-    if (event.key === "[") { event.preventDefault(); moveBy(-1); }
-    if (event.key === "]") { event.preventDefault(); moveBy(1); }
+    const direction = shortcutDirection(event);
+    if (direction !== 0) {
+      event.preventDefault();
+      moveBy(direction);
+    }
   });
   window.addEventListener("beforeunload", (event) => {
-    if (!state.dirty) return;
+    if (!shouldWarnBeforeUnload(state)) return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -488,4 +586,23 @@ async function start() {
   }
 }
 
-start();
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    allowNavigation,
+    applyProgress,
+    interactionLocked,
+    labelsFor,
+    lockAllowed,
+    nextRevision,
+    pairsFor,
+    pythonLength,
+    saveSettlement,
+    shortcutDirection,
+    shouldWarnBeforeUnload,
+    validPythonSpan,
+  };
+}
+
+if (typeof document !== "undefined" && typeof window !== "undefined") {
+  start();
+}

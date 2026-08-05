@@ -41,6 +41,12 @@ _MQM_FIELDS = frozenset({
     "output", "dimension", "severity", "start", "end", "note",
 })
 _ITEM_ID = re.compile(r"^item-[0-9a-f]{32}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_UTC_TIMESTAMP = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+)
+_HOST = re.compile(r"^(127\.0\.0\.1|localhost):([1-9][0-9]{0,4})$")
+_ASCII_LENGTH = re.compile(r"^[0-9]+$")
 _LOCK_FIELDS = frozenset({
     "schema_version", "reviewer_id", "locked_at", "bundle_sha256",
     "annotations_sha256", "state_sha256",
@@ -60,7 +66,7 @@ def _is_exact_int(value: object) -> bool:
 
 
 def _require_text(value: object, description: str, *, allow_empty: bool = True) -> str:
-    if not isinstance(value, str) or (not allow_empty and not value.strip()):
+    if type(value) is not str or (not allow_empty and not value.strip()):
         qualifier = "non-empty text" if not allow_empty else "text"
         raise BenchmarkError(f"{description} must be {qualifier}")
     try:
@@ -68,6 +74,33 @@ def _require_text(value: object, description: str, *, allow_empty: bool = True) 
     except UnicodeEncodeError as error:
         raise BenchmarkError(f"{description} must contain valid Unicode text") from error
     return value
+
+
+def _require_reviewer_id(value: object) -> str:
+    reviewer_id = _require_text(value, "reviewer_id", allow_empty=False)
+    if reviewer_id != reviewer_id.strip() or len(reviewer_id) > 200:
+        raise BenchmarkError("reviewer_id must be non-empty trimmed text")
+    return reviewer_id
+
+
+def _require_utc_timestamp(value: object, description: str) -> str:
+    timestamp = _require_text(value, description, allow_empty=False)
+    if _UTC_TIMESTAMP.fullmatch(timestamp) is None:
+        raise BenchmarkError(f"{description} must be a canonical UTC timestamp")
+    try:
+        parsed = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as error:
+        raise BenchmarkError(f"{description} must be a canonical UTC timestamp") from error
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != timestamp:
+        raise BenchmarkError(f"{description} must be a canonical UTC timestamp")
+    return timestamp
+
+
+def _require_sha256(value: object, description: str) -> str:
+    digest = _require_text(value, description, allow_empty=False)
+    if _SHA256.fullmatch(digest) is None:
+        raise BenchmarkError(f"{description} must be a SHA-256 digest")
+    return digest
 
 
 def _output_labels(item: Mapping[str, object]) -> tuple[str, ...]:
@@ -113,10 +146,12 @@ def validate_annotation(item: Mapping[str, object], event: Mapping[str, object])
     if unknown_comparisons:
         raise BenchmarkError(f"unknown comparison {next(iter(unknown_comparisons))!r}")
     for key in expected_comparisons:
-        if comparisons[key] not in COMPARISON_VALUES:
+        comparison = _require_text(comparisons[key], f"comparison {key}")
+        if comparison not in COMPARISON_VALUES:
             raise BenchmarkError(f"comparison {key} has invalid value")
 
-    if event.get("confidence") not in CONFIDENCE_VALUES:
+    confidence = _require_text(event.get("confidence"), "confidence")
+    if confidence not in CONFIDENCE_VALUES:
         raise BenchmarkError("confidence must be high, medium, or low")
     _require_text(event.get("note"), "annotation note")
 
@@ -136,12 +171,13 @@ def validate_annotation(item: Mapping[str, object], event: Mapping[str, object])
         prefix = f"mqm entry {index + 1}"
         if not isinstance(finding, Mapping) or set(finding) != _MQM_FIELDS:
             raise BenchmarkError(f"{prefix} has invalid fields")
-        output = finding.get("output")
+        output = _require_text(finding.get("output"), f"{prefix} output")
         if output not in labels:
             raise BenchmarkError(f"{prefix} output must name an anonymous output")
-        if finding.get("dimension") not in MQM_DIMENSIONS:
+        dimension = _require_text(finding.get("dimension"), f"{prefix} dimension")
+        if dimension not in MQM_DIMENSIONS:
             raise BenchmarkError(f"{prefix} has invalid dimension")
-        severity = finding.get("severity")
+        severity = _require_text(finding.get("severity"), f"{prefix} severity")
         if severity not in MQM_SEVERITIES:
             raise BenchmarkError(f"{prefix} has invalid severity")
         start = finding.get("start")
@@ -485,21 +521,70 @@ class ReviewStore:
         )
         if not isinstance(value, dict) or set(value) != _LOCK_FIELDS:
             raise BenchmarkError("annotation lock has invalid fields")
-        if value.get("schema_version") != SCHEMA_VERSION:
+        if type(value.get("schema_version")) is not int or value.get("schema_version") != SCHEMA_VERSION:
             raise BenchmarkError("annotation lock schema version mismatch")
-        _require_text(value.get("reviewer_id"), "annotation lock reviewer_id", allow_empty=False)
-        _require_text(value.get("locked_at"), "annotation lock locked_at", allow_empty=False)
-        if value.get("bundle_sha256") != self._bundle_sha256:
+        _require_reviewer_id(value.get("reviewer_id"))
+        _require_utc_timestamp(value.get("locked_at"), "annotation lock locked_at")
+        if _require_sha256(value.get("bundle_sha256"), "annotation lock bundle_sha256") != self._bundle_sha256:
             raise BenchmarkError("annotation lock bundle hash mismatch")
         for field, artifact_name, message in (
             ("annotations_sha256", "annotations.jsonl", "annotations hash mismatch"),
             ("state_sha256", "annotation-state.json", "state hash mismatch"),
         ):
+            _require_sha256(value.get(field), f"annotation lock {field}")
             if _artifact_stat(self._directory_fd, artifact_name) is None:
                 raise BenchmarkError(f"locked {artifact_name} is missing")
             if value.get(field) != _sha256(_read_artifact(self._directory_fd, artifact_name)):
                 raise BenchmarkError(f"annotation lock {message}")
         return value
+
+    def _validate_state_record(self, state: object) -> dict:
+        fields = {
+            "schema_version", "bundle_sha256", "total", "completed", "remaining",
+            "last_sequence", "latest",
+        }
+        if not isinstance(state, dict) or set(state) != fields:
+            raise BenchmarkError("annotation state has invalid fields")
+        if type(state.get("schema_version")) is not int or state["schema_version"] != SCHEMA_VERSION:
+            raise BenchmarkError("annotation state schema_version must be integer 1")
+        bundle_digest = _require_sha256(
+            state.get("bundle_sha256"), "annotation state bundle_sha256"
+        )
+        if bundle_digest != self._bundle_sha256:
+            raise BenchmarkError("annotation state bundle hash mismatch")
+        for field in ("total", "completed", "remaining", "last_sequence"):
+            if type(state.get(field)) is not int or state[field] < 0:
+                raise BenchmarkError(f"annotation state {field} must be a non-negative integer")
+        latest = state.get("latest")
+        if not isinstance(latest, dict):
+            raise BenchmarkError("annotation state latest must be an object")
+        if state["completed"] != len(latest) or state["completed"] + state["remaining"] != state["total"]:
+            raise BenchmarkError("annotation state counts are inconsistent")
+        if state["total"] != len(self._items):
+            raise BenchmarkError("annotation state total does not match review bundle")
+        if state["last_sequence"] > len(self._history):
+            raise BenchmarkError("annotation state sequence is ahead of event history")
+        for item_id, record in latest.items():
+            _require_text(item_id, "annotation state item id", allow_empty=False)
+            if not isinstance(record, dict) or set(record) != _STORED_FIELDS:
+                raise BenchmarkError("annotation state latest record has invalid fields")
+            if record.get("item_id") != item_id:
+                raise BenchmarkError("annotation state latest item id mismatch")
+            if type(record.get("sequence")) is not int or record["sequence"] < 1:
+                raise BenchmarkError("annotation state latest sequence must be a positive integer")
+            _require_utc_timestamp(record.get("saved_at"), "annotation state latest saved_at")
+            validate_annotation(self.item(item_id), {
+                key: record[key] for key in _ANNOTATION_FIELDS
+            })
+        prefix_latest: dict[str, dict] = {}
+        for record in self._history[:state["last_sequence"]]:
+            prefix_latest[record["item_id"]] = record
+        expected_prefix = {
+            item_id: prefix_latest[item_id] for item_id in sorted(prefix_latest)
+        }
+        if latest != expected_prefix:
+            raise BenchmarkError("annotation state is not a valid event-history prefix")
+        return state
 
     def _load_and_recover(self) -> None:
         existing_lock = self._read_lock_first()
@@ -513,17 +598,13 @@ class ReviewStore:
         for sequence, record in enumerate(records, start=1):
             if set(record) != _STORED_FIELDS:
                 raise BenchmarkError(f"annotation sequence {sequence} has invalid stored fields")
-            if record.get("sequence") != sequence:
+            if type(record.get("sequence")) is not int or record.get("sequence") != sequence:
                 raise BenchmarkError(
                     f"annotation history expected sequence {sequence}, got {record.get('sequence')!r}"
                 )
-            saved_at = record.get("saved_at")
-            if not isinstance(saved_at, str) or not saved_at.endswith("Z"):
-                raise BenchmarkError(f"annotation sequence {sequence} has invalid saved_at")
-            try:
-                datetime.fromisoformat(saved_at.replace("Z", "+00:00"))
-            except ValueError as error:
-                raise BenchmarkError(f"annotation sequence {sequence} has invalid saved_at") from error
+            _require_utc_timestamp(
+                record.get("saved_at"), f"annotation sequence {sequence} saved_at"
+            )
             item_id = record.get("item_id")
             review_item = self.item(item_id)
             annotation = {key: record[key] for key in _ANNOTATION_FIELDS}
@@ -547,6 +628,7 @@ class ReviewStore:
                 _read_artifact(self._directory_fd, "annotation-state.json"),
                 "annotation state",
             )
+            self._validate_state_record(state)
             if state != expected_state:
                 raise BenchmarkError("locked annotation state does not match event history")
             if len(self.latest) != len(self._items):
@@ -554,10 +636,13 @@ class ReviewStore:
             self.lock_record = existing_lock
             return
 
-        if (
-            not state_exists
-            or _read_artifact(self._directory_fd, "annotation-state.json") != expected_state_bytes
-        ):
+        if state_exists:
+            state = _parse_json_bytes(
+                _read_artifact(self._directory_fd, "annotation-state.json"),
+                "annotation state",
+            )
+            self._validate_state_record(state)
+        if not state_exists or state != expected_state:
             _replace_artifact(self._directory_fd, "annotation-state.json", expected_state_bytes)
 
     def public_state(self) -> dict:
@@ -612,13 +697,7 @@ class ReviewStore:
             raise BenchmarkError("annotations are already locked")
         self._assert_bundle_unchanged()
         self._assert_history_unchanged()
-        if (
-            not isinstance(reviewer_id, str)
-            or not reviewer_id.strip()
-            or reviewer_id != reviewer_id.strip()
-            or len(reviewer_id) > 200
-        ):
-            raise BenchmarkError("reviewer_id must be non-empty trimmed text")
+        reviewer_id = _require_reviewer_id(reviewer_id)
         remaining = len(self._items) - len(self.latest)
         if remaining:
             noun = "presentation remains" if remaining == 1 else "presentations remain"
@@ -689,37 +768,59 @@ class _ReviewHandler(BaseHTTPRequestHandler):
     def _error(self, status: int, code: str, message: str) -> None:
         self._json(status, {"error": {"code": code, "message": message}})
 
-    def _valid_host(self) -> bool:
+    def _host_value(self) -> str | None:
         values = self.headers.get_all("Host", failobj=[])
         if len(values) != 1:
-            return False
+            return None
         host_value = values[0]
-        try:
-            parsed = urlsplit(f"http://{host_value}")
-            hostname = parsed.hostname
-            port = parsed.port
-        except ValueError:
-            return False
-        if hostname not in {"127.0.0.1", "localhost"}:
-            return False
-        return port == self.server.server_address[1]
+        matched = _HOST.fullmatch(host_value)
+        if matched is None:
+            return None
+        port_text = matched.group(2)
+        if int(port_text) != self.server.server_address[1]:
+            return None
+        return host_value
+
+    def _valid_host(self) -> bool:
+        return self._host_value() is not None
 
     def _origin_matches(self) -> bool:
         origins = self.headers.get_all("Origin", failobj=[])
-        hosts = self.headers.get_all("Host", failobj=[])
-        return len(origins) == 1 and len(hosts) == 1 and origins[0] == f"http://{hosts[0]}"
+        host = self._host_value()
+        if len(origins) != 1 or host is None:
+            return False
+        origin = origins[0]
+        if origin != f"http://{host}":
+            return False
+        parsed = urlsplit(origin)
+        return (
+            parsed.scheme == "http"
+            and parsed.netloc == host
+            and parsed.path == ""
+            and parsed.query == ""
+            and parsed.fragment == ""
+            and parsed.username is None
+            and parsed.password is None
+        )
 
-    def _route_path(self) -> str | None:
+    def _route_path(self) -> tuple[str | None, bool]:
+        if not self.path.startswith("/") or self.path.startswith("//"):
+            return None, False
         parsed = urlsplit(self.path)
+        if parsed.scheme or parsed.netloc:
+            return None, False
         if parsed.query or parsed.fragment:
-            return None
-        return parsed.path
+            return None, True
+        return parsed.path, True
 
     def do_GET(self) -> None:
         if not self._valid_host():
             self._error(403, "invalid_host", "request host is not this loopback review server")
             return
-        path = self._route_path()
+        path, origin_form = self._route_path()
+        if not origin_form:
+            self._error(400, "invalid_target", "request target must use origin-form")
+            return
         if path == "/api/state":
             self._json(200, self.review_store.api_state())
             return
@@ -736,26 +837,34 @@ class _ReviewHandler(BaseHTTPRequestHandler):
         self._respond(200, body, content_type)
 
     def _read_json_body(self) -> object | None:
-        if self.headers.get("Transfer-Encoding") is not None:
-            self._error(400, "invalid_body", "transfer encoding is not accepted")
+        if self.headers.get_all("Transfer-Encoding", failobj=[]):
+            self._error(400, "invalid_headers", "Transfer-Encoding is not accepted")
             return None
         lengths = self.headers.get_all("Content-Length", failobj=[])
-        if len(lengths) != 1:
+        if not lengths:
             self._error(411, "length_required", "one Content-Length header is required")
             return None
-        try:
-            length = int(lengths[0], 10)
-        except ValueError:
-            self._error(400, "invalid_body", "Content-Length must be an integer")
+        if len(lengths) != 1:
+            self._error(400, "invalid_headers", "duplicate Content-Length headers are not accepted")
             return None
-        if length < 0:
-            self._error(400, "invalid_body", "Content-Length must not be negative")
+        if _ASCII_LENGTH.fullmatch(lengths[0]) is None:
+            self._error(400, "invalid_body", "Content-Length must contain ASCII digits only")
             return None
+        normalized_length = lengths[0].lstrip("0") or "0"
+        if len(normalized_length) > len(str(MAX_BODY_BYTES)):
+            self.close_connection = True
+            self._error(413, "body_too_large", "request body exceeds 1 MiB")
+            return None
+        length = int(normalized_length, 10)
         if length > MAX_BODY_BYTES:
             self.close_connection = True
             self._error(413, "body_too_large", "request body exceeds 1 MiB")
             return None
-        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        content_types = self.headers.get_all("Content-Type", failobj=[])
+        if len(content_types) != 1:
+            self._error(400, "invalid_headers", "one Content-Type header is required")
+            return None
+        content_type = content_types[0].split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             self._error(415, "unsupported_media_type", "Content-Type must be application/json")
             return None
@@ -775,7 +884,10 @@ class _ReviewHandler(BaseHTTPRequestHandler):
         if not self._valid_host():
             self._error(403, "invalid_host", "request host is not this loopback review server")
             return
-        path = self._route_path()
+        path, origin_form = self._route_path()
+        if not origin_form:
+            self._error(400, "invalid_target", "request target must use origin-form")
+            return
         if path not in {"/api/annotations", "/api/lock"}:
             self._error(404, "not_found", "resource not found")
             return
@@ -808,6 +920,11 @@ class _ReviewHandler(BaseHTTPRequestHandler):
     do_OPTIONS = do_PUT
     do_TRACE = do_PUT
     do_CONNECT = do_PUT
+
+    def __getattr__(self, name: str):
+        if name.startswith("do_"):
+            return self.do_PUT
+        raise AttributeError(name)
 
     def do_HEAD(self) -> None:
         body = canonical_bytes({

@@ -5,6 +5,8 @@ import hashlib
 import http.client
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -117,6 +119,35 @@ class AnnotationValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(BenchmarkError, "major_or_worse A"):
             validate_annotation(review_item, event)
 
+    def test_enum_values_require_exact_unicode_text_before_membership(self):
+        review_item = item()
+        mutations = (
+            ("comparison", ["tie"], "comparison A:B"),
+            ("confidence", [], "confidence"),
+            ("dimension", {}, "dimension"),
+            ("severity", ["major"], "severity"),
+            ("confidence", "\ud800", "confidence"),
+        )
+        for field, malformed, message in mutations:
+            with self.subTest(field=field, malformed=repr(malformed)):
+                event = valid_annotation(review_item)
+                if field == "comparison":
+                    event["comparisons"]["A:B"] = malformed
+                elif field == "confidence":
+                    event["confidence"] = malformed
+                else:
+                    event["mqm"] = [{
+                        "output": "A",
+                        "dimension": "accuracy",
+                        "severity": "minor",
+                        "start": 0,
+                        "end": 1,
+                        "note": "Finding",
+                    }]
+                    event["mqm"][0][field] = malformed
+                with self.assertRaisesRegex(BenchmarkError, message):
+                    validate_annotation(review_item, event)
+
 
 class ReviewStoreTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -156,7 +187,14 @@ class ReviewStoreTests(unittest.TestCase):
         review_bundle = bundle(item())
         store = ReviewStore(review_bundle, self.directory)
         stored = store.append(valid_annotation(store.item("item-1")))
-        store.state_path.write_text("{}\n", encoding="utf-8")
+        stale_state = store.public_state()
+        stale_state.update({
+            "completed": 0,
+            "remaining": 1,
+            "last_sequence": 0,
+            "latest": {},
+        })
+        store.state_path.write_bytes(canonical_bytes(stale_state))
 
         recovered = ReviewStore(review_bundle, self.directory)
         self.assertEqual(recovered.latest["item-1"], stored)
@@ -167,6 +205,74 @@ class ReviewStoreTests(unittest.TestCase):
         recovered.events_path.write_bytes(canonical_bytes(records[0]))
         with self.assertRaisesRegex(BenchmarkError, "expected sequence 1"):
             ReviewStore(review_bundle, self.directory)
+
+    def test_replay_requires_exact_integer_and_canonical_timestamp_types(self):
+        mutations = (
+            ("sequence", True, "sequence"),
+            ("revision", True, "revision"),
+            ("saved_at", "2026-08-05T12:00:00.000Z", "saved_at"),
+        )
+        for index, (field, malformed, message) in enumerate(mutations):
+            with self.subTest(field=field):
+                directory = self.directory / f"event-{index}"
+                directory.mkdir()
+                store = ReviewStore(bundle(item()), directory)
+                store.append(valid_annotation(store.item("item-1")))
+                record = read_jsonl(store.events_path)[0]
+                record[field] = malformed
+                store.events_path.write_bytes(canonical_bytes(record))
+                store.close()
+                with self.assertRaisesRegex(BenchmarkError, message):
+                    ReviewStore(bundle(item()), directory)
+
+    def test_malformed_state_and_lock_metadata_fail_closed(self):
+        state_directory = self.directory / "state"
+        state_directory.mkdir()
+        state_store = ReviewStore(bundle(item()), state_directory)
+        malformed_state = state_store.public_state()
+        malformed_state["schema_version"] = True
+        state_store.state_path.write_bytes(canonical_bytes(malformed_state))
+        state_store.close()
+        with self.assertRaisesRegex(BenchmarkError, "state schema_version"):
+            ReviewStore(bundle(item()), state_directory)
+
+        mutations = (
+            ("schema_version", True, "schema version"),
+            ("reviewer_id", " padded ", "reviewer_id"),
+            ("reviewer_id", "\ud800", "invalid annotation lock"),
+            ("locked_at", "not-a-time", "locked_at"),
+            ("locked_at", "2026-08-05T12:00:00.000Z", "locked_at"),
+        )
+        for index, (field, malformed, message) in enumerate(mutations):
+            with self.subTest(field=field, malformed=repr(malformed)):
+                directory = self.directory / f"lock-{index}"
+                directory.mkdir()
+                store = ReviewStore(bundle(item()), directory)
+                store.append(valid_annotation(store.item("item-1")))
+                store.lock(reviewer_id="reviewer")
+                lock = read_json(store.lock_path)
+                lock[field] = malformed
+                try:
+                    store.lock_path.write_bytes(canonical_bytes(lock))
+                except UnicodeEncodeError:
+                    store.lock_path.write_text(
+                        json.dumps(lock, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                store.close()
+                with self.assertRaisesRegex(BenchmarkError, message):
+                    ReviewStore(bundle(item()), directory)
+
+    def test_lock_reviewer_identity_rejects_padding_and_invalid_unicode(self):
+        for index, reviewer_id in enumerate((" padded ", "\ud800", [], 7)):
+            with self.subTest(reviewer_id=repr(reviewer_id)):
+                directory = self.directory / f"identity-{index}"
+                directory.mkdir()
+                store = ReviewStore(bundle(item()), directory)
+                store.append(valid_annotation(store.item("item-1")))
+                with self.assertRaisesRegex(BenchmarkError, "reviewer_id"):
+                    store.lock(reviewer_id=reviewer_id)
+                self.assertFalse(store.lock_path.exists())
 
     def test_complete_queue_locks_exact_bytes_and_disables_writes(self):
         review_bundle = bundle(item("item-1"), item("item-2", three_outputs=False))
@@ -240,6 +346,24 @@ class ReviewHttpTests(unittest.TestCase):
         connection.close()
         return response.status, response_headers, payload
 
+    def raw_request(
+        self,
+        method: str,
+        target: str,
+        headers: list[tuple[str, str]],
+        body: bytes = b"",
+    ):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        connection.putrequest(method, target, skip_host=True, skip_accept_encoding=True)
+        for name, value in headers:
+            connection.putheader(name, value)
+        connection.endheaders(body)
+        response = connection.getresponse()
+        payload = response.read()
+        response_headers = dict(response.getheaders())
+        connection.close()
+        return response.status, response_headers, payload
+
     def test_state_and_static_allowlist_have_restrictive_csp(self):
         status, headers, payload = self.request("GET", "/api/state")
         self.assertEqual(status, 200)
@@ -296,6 +420,129 @@ class ReviewHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         self.assertEqual(json.loads(payload)["lock"]["reviewer_id"], "pt-PT-reviewer")
+
+    def test_malformed_annotation_containers_return_canonical_400_and_keep_serving(self):
+        malformed = valid_annotation(self.store.item("item-1"))
+        malformed["confidence"] = []
+        body = canonical_bytes(malformed)
+        status, headers, payload = self.request(
+            "POST", "/api/annotations", body,
+            Origin=self.origin, **{"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "validation_error")
+        self.assertEqual(payload, canonical_bytes(json.loads(payload)))
+        self.assertFalse(self.store.events_path.exists())
+
+        status, headers, _ = self.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+
+    def test_http_rejects_non_origin_targets_userinfo_hosts_and_non_digit_lengths(self):
+        annotation = canonical_bytes(valid_annotation(self.store.item("item-1")))
+        bad_host = f"user@127.0.0.1:{self.port}"
+        status, headers, payload = self.raw_request(
+            "POST",
+            "/api/annotations",
+            [
+                ("Host", bad_host),
+                ("Origin", f"http://{bad_host}"),
+                ("Content-Type", "application/json"),
+                ("Content-Length", f"+{len(annotation)}"),
+            ],
+            annotation,
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "invalid_host")
+        self.assertFalse(self.store.events_path.exists())
+
+        status, headers, payload = self.raw_request(
+            "GET",
+            f"http://example.test:{self.port}/api/state",
+            [("Host", f"127.0.0.1:{self.port}")],
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "invalid_target")
+
+    def test_duplicate_headers_and_arbitrary_methods_use_canonical_security_errors(self):
+        annotation = canonical_bytes(valid_annotation(self.store.item("item-1")))
+        status, headers, payload = self.raw_request(
+            "POST",
+            "/api/annotations",
+            [
+                ("Host", f"127.0.0.1:{self.port}"),
+                ("Origin", self.origin),
+                ("Content-Type", "application/json"),
+                ("Content-Type", "application/json"),
+                ("Content-Length", str(len(annotation))),
+            ],
+            annotation,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "invalid_headers")
+        self.assertFalse(self.store.events_path.exists())
+
+        status, headers, payload = self.raw_request(
+            "POST",
+            "/api/annotations",
+            [
+                ("Host", f"127.0.0.1:{self.port}"),
+                ("Origin", self.origin),
+                ("Content-Type", "application/json"),
+                ("Content-Length", str(len(annotation))),
+                ("Content-Length", str(len(annotation) + 1)),
+            ],
+            annotation,
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "invalid_headers")
+
+        status, headers, payload = self.raw_request(
+            "POST",
+            "/api/annotations",
+            [
+                ("Host", f"127.0.0.1:{self.port}"),
+                ("Origin", self.origin),
+                ("Content-Type", "application/json"),
+                ("Content-Length", "9" * 5000),
+            ],
+        )
+        self.assertEqual(status, 413)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "body_too_large")
+
+        status, headers, payload = self.raw_request(
+            "BREW",
+            "/api/state",
+            [("Host", f"127.0.0.1:{self.port}")],
+        )
+        self.assertEqual(status, 405)
+        self.assertEqual(headers["Content-Security-Policy"], CSP)
+        self.assertEqual(json.loads(payload)["error"]["code"], "method_not_allowed")
+        self.assertEqual(payload, canonical_bytes(json.loads(payload)))
+
+
+class ReviewUiBehaviorTests(unittest.TestCase):
+    def test_node_behavior_suite_executes_the_shipped_javascript(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node is required for the offline reviewer behavior suite")
+        repository = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [node, "tests/test_benchmark_review_ui.js"],
+            cwd=repository,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=20,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("review UI behavior: PASS", result.stdout)
 
 
 if __name__ == "__main__":
