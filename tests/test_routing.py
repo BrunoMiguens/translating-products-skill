@@ -1,6 +1,10 @@
 import importlib.util
 import ast
 import json
+import os
+import subprocess
+import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -50,7 +54,202 @@ def complete_profile(**overrides):
     return profile
 
 
+def synthetic_skill(
+    name,
+    *,
+    selectors=(),
+    depends_on=(),
+    phases=("refine",),
+    specificity="language",
+    required_context=(),
+    conflicts=(),
+    supersedes=(),
+    category="language",
+):
+    return {
+        "name": name,
+        "version": "1.0.0",
+        "category": category,
+        "capabilities": [],
+        "depends_on": list(depends_on),
+        "selectors": list(selectors),
+        "phases": list(phases),
+        "specificity": specificity,
+        "required_context": list(required_context),
+        "conflicts": list(conflicts),
+        "supersedes": list(supersedes),
+    }
+
+
+def synthetic_catalog(*skills):
+    return {"schema_version": 2, "skills": list(skills)}
+
+
+def errors_across_hash_seeds(profile, catalog):
+    script = textwrap.dedent(
+        """
+        import importlib.util
+        import json
+        import sys
+
+        spec = importlib.util.spec_from_file_location("router", sys.argv[1])
+        router = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(router)
+        payload = json.loads(sys.stdin.read())
+        try:
+            router.route_profile(payload["profile"], payload["catalog"])
+        except ValueError as error:
+            print(error)
+        """
+    )
+    payload = json.dumps({"profile": profile, "catalog": catalog})
+    errors = []
+    for seed in ("1", "2", "3", "4", "5"):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(ROUTER)],
+            input=payload,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        if result.returncode:
+            raise AssertionError(result.stderr)
+        errors.append(result.stdout.strip())
+    return errors
+
+
 class RoutingTests(unittest.TestCase):
+    def test_dependencies_expand_transitively_and_order_before_dependents(self):
+        router = load_module("route_capabilities_dependencies", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "consumer",
+                selectors=({"domains": ["dependency-demo"]},),
+                depends_on=("intermediate",),
+            ),
+            synthetic_skill("intermediate", depends_on=("foundation",)),
+            synthetic_skill("foundation"),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["dependency-demo"]), catalog
+        )
+
+        self.assertEqual(
+            result["selected"], ["foundation", "intermediate", "consumer"]
+        )
+        self.assertEqual(
+            result["phases"]["refine"], ["foundation", "intermediate", "consumer"]
+        )
+        self.assertEqual(
+            result["reasons"]["intermediate"], ["dependency-of:consumer"]
+        )
+        self.assertEqual(
+            result["reasons"]["foundation"], ["dependency-of:intermediate"]
+        )
+
+    def test_cycles_in_a_phase_fail_deterministically(self):
+        router = load_module("route_capabilities_cycle", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "first",
+                selectors=({"domains": ["cycle-demo"]},),
+                depends_on=("second",),
+            ),
+            synthetic_skill("second", depends_on=("first",)),
+        )
+
+        with self.assertRaisesRegex(ValueError, "dependency cycle in phase: refine"):
+            router.route_profile(complete_profile(domains=["cycle-demo"]), catalog)
+
+    def test_supersession_prunes_dependencies_owned_only_by_the_removed_skill(self):
+        router = load_module("route_capabilities_supersession_pruning", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "broader",
+                selectors=({"domains": ["supersession-demo"]},),
+                depends_on=("broader-support",),
+            ),
+            synthetic_skill("broader-support"),
+            synthetic_skill(
+                "narrower",
+                selectors=({"domains": ["supersession-demo"]},),
+                specificity="locale",
+                supersedes=("broader",),
+            ),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["supersession-demo"]), catalog
+        )
+
+        self.assertEqual(result["selected"], ["narrower"])
+
+    def test_supersession_rejects_a_surviving_skill_without_its_dependency(self):
+        router = load_module("route_capabilities_supersession_closure", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "consumer",
+                selectors=({"domains": ["closure-demo"]},),
+                depends_on=("broader",),
+            ),
+            synthetic_skill(
+                "broader",
+                selectors=({"domains": ["closure-demo"]},),
+            ),
+            synthetic_skill(
+                "narrower",
+                selectors=({"domains": ["closure-demo"]},),
+                specificity="locale",
+                supersedes=("broader",),
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "missing selected dependency: consumer, broader"
+        ):
+            router.route_profile(complete_profile(domains=["closure-demo"]), catalog)
+
+    def test_invalid_route_diagnostics_are_manifest_ordered_across_hash_seeds(self):
+        dependency_catalog = synthetic_catalog(
+            synthetic_skill(
+                "first",
+                selectors=({"domains": ["deterministic-demo"]},),
+                depends_on=("missing-first",),
+            ),
+            synthetic_skill(
+                "second",
+                selectors=({"domains": ["deterministic-demo"]},),
+                depends_on=("missing-second",),
+            ),
+        )
+        context_catalog = synthetic_catalog(
+            synthetic_skill(
+                "first",
+                selectors=({"domains": ["deterministic-demo"]},),
+                required_context=("audience",),
+            ),
+            synthetic_skill(
+                "second",
+                selectors=({"domains": ["deterministic-demo"]},),
+                required_context=("purpose",),
+            ),
+        )
+        profile = complete_profile(domains=["deterministic-demo"])
+        missing_context_profile = complete_profile(
+            domains=["deterministic-demo"], audience="", purpose=""
+        )
+
+        self.assertEqual(
+            errors_across_hash_seeds(profile, dependency_catalog),
+            ["unknown dependency: missing-first"] * 5,
+        )
+        self.assertEqual(
+            errors_across_hash_seeds(missing_context_profile, context_catalog),
+            ["first requires context: audience"] * 5,
+        )
+
     def test_profile_routes_from_catalog_without_a_skill_map(self):
         router = load_module("route_capabilities_generic", ROUTER)
         result = router.route_profile(complete_profile(), load_catalog())

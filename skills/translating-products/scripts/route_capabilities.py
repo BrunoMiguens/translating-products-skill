@@ -147,7 +147,7 @@ def expand_dependencies(
     by_name: dict[str, dict],
     reasons: dict[str, list[str]],
 ) -> None:
-    pending = list(selected)
+    pending = [name for name in reversed(by_name) if name in selected]
     while pending:
         name = pending.pop()
         for dependency in by_name[name]["depends_on"]:
@@ -180,6 +180,34 @@ def apply_supersedes(
             removed.add(target)
             reasons[name].append(f"supersedes:{target}")
     return selected - removed
+
+
+def validate_dependency_closure(
+    selected: set[str], by_name: dict[str, dict]
+) -> None:
+    for name in by_name:
+        if name not in selected:
+            continue
+        for dependency in by_name[name]["depends_on"]:
+            if dependency not in selected:
+                raise ValueError(f"missing selected dependency: {name}, {dependency}")
+
+
+def resolve_selection(
+    names: list[str],
+    by_name: dict[str, dict],
+    reasons: dict[str, list[str]],
+) -> set[str]:
+    direct_matches = set(names)
+    while True:
+        selected = set(direct_matches)
+        expand_dependencies(selected, by_name, reasons)
+        retained = apply_supersedes(selected, by_name, reasons)
+        validate_dependency_closure(retained, by_name)
+        removed_direct_matches = direct_matches - retained
+        if not removed_direct_matches:
+            return retained
+        direct_matches.difference_update(removed_direct_matches)
 
 
 def validate_conflicts(selected: set[str], by_name: dict[str, dict]) -> None:
@@ -223,11 +251,11 @@ def route_profile(profile: dict, catalog: dict) -> dict:
     profile = _normalized_profile(profile)
     names, reasons = matching_skill_names(profile, catalog)
     by_name = {item["name"]: item for item in catalog["skills"]}
-    selected = set(names)
-    expand_dependencies(selected, by_name, reasons)
-    selected = apply_supersedes(selected, by_name, reasons)
+    selected = resolve_selection(names, by_name, reasons)
     validate_conflicts(selected, by_name)
-    for name in selected:
+    for name in by_name:
+        if name not in selected:
+            continue
         for field in by_name[name]["required_context"]:
             if not profile.get(field):
                 raise ValueError(f"{name} requires context: {field}")
