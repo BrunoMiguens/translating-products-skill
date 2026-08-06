@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 from pathlib import Path
 import sys
@@ -58,10 +59,9 @@ EXTERNAL_SKILL_FIELDS = frozenset(
         "required_context",
         "conflicts",
         "supersedes",
-        "ownership",
     )
 )
-EXTERNAL_OPTIONAL_FIELDS = frozenset()
+EXTERNAL_OPTIONAL_FIELDS = frozenset(("ownership",))
 EXTERNAL_AUTHORIZATION_FIELDS = (
     "authorized_external_skills",
     "project_authorized_external_skills",
@@ -159,6 +159,8 @@ def validate_external_catalog(catalog: object) -> list[dict]:
     if not isinstance(catalog, dict) or catalog.get("schema_version") != 2:
         raise ValueError("external catalog must use schema_version 2")
     skills = catalog.get("skills")
+    if skills is None and isinstance(catalog.get("skill"), dict):
+        skills = [catalog["skill"]]
     if not isinstance(skills, list):
         raise ValueError("external catalog skills must be a list")
 
@@ -198,6 +200,8 @@ def validate_external_catalog(catalog: object) -> list[dict]:
             "supersedes",
         ):
             _external_string_list(item[field], field, name)
+        if not item["capabilities"] or not item["phases"]:
+            raise ValueError(f"external skill {name} requires non-empty capabilities and phases")
         if not item["selectors"]:
             raise ValueError(f"external skill {name} must declare selectors")
         if not isinstance(item["selectors"], list):
@@ -281,14 +285,6 @@ def _validate_merged_relationships(skills: list[dict], external_names: set[str])
                     raise ValueError(f"external skill {name} has unknown {field}: {target}")
                 if target == name:
                     raise ValueError(f"external skill {name} cannot {field} itself")
-        for dependency in skill["depends_on"]:
-            if min(PHASES.index(phase) for phase in by_name[dependency]["phases"]) > min(
-                PHASES.index(phase) for phase in skill["phases"]
-            ):
-                raise ValueError(
-                    f"external skill {name} depends on later-phase skill: {dependency}"
-                )
-
     graph = {
         name: tuple(by_name[name]["depends_on"] + by_name[name]["supersedes"])
         for name in by_name
@@ -309,6 +305,37 @@ def _validate_merged_relationships(skills: list[dict], external_names: set[str])
 
     for name in sorted(graph):
         visit(name)
+
+
+def _validate_registry_bindings(registry: object, skills: list[dict], suite_version: str) -> None:
+    if registry is None:
+        return
+    by_name = {skill["name"]: skill for skill in skills}
+    seen: set[str] = set()
+    for entry in registry["skills"]:
+        name = entry["name"]
+        if name in seen:
+            raise ValueError(f"duplicate compatibility registry skill: {name}")
+        seen.add(name)
+        skill = by_name.get(name)
+        if skill is None:
+            raise ValueError(f"compatibility registry references unknown skill: {name}")
+        if entry["version_constraint"] != skill["version"]:
+            raise ValueError(f"compatibility registry version mismatch: {name}")
+        if entry["compatible_orchestrator_version"] != suite_version:
+            raise ValueError(f"compatibility registry suite mismatch: {name}")
+        if entry["capabilities"] != skill["capabilities"]:
+            raise ValueError(f"compatibility registry capabilities mismatch: {name}")
+        if entry["dependencies"] != skill["depends_on"] or entry["conflicts"] != skill["conflicts"]:
+            raise ValueError(f"compatibility registry relationships mismatch: {name}")
+        if sorted(entry["authority_scope"]) != sorted(_ownership_map(skill)):
+            raise ValueError(f"compatibility registry authority mismatch: {name}")
+        try:
+            reviewed = date.fromisoformat(entry["review_date"])
+        except ValueError:
+            raise ValueError(f"compatibility registry review date is invalid: {name}") from None
+        if reviewed > date.today():
+            raise ValueError(f"compatibility registry review date is in the future: {name}")
 
 
 def _frontmatter_values(path: Path) -> dict[str, str]:
@@ -388,6 +415,7 @@ def merge_external_catalogs(
             merged_skills.append(skill)
     merged["skills"] = merged_skills
     _validate_merged_relationships(merged_skills, external_names)
+    _validate_registry_bindings(registry, merged_skills, bundled_catalog["suite_version"])
     return merged
 
 

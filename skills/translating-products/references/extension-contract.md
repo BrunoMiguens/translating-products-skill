@@ -25,8 +25,10 @@ writing-system, language, locale, surface, platform, format, domain, or
 quality). `required_context` lists profile fields that must be resolved before
 the skill runs. `conflicts` lists incompatible specialists. `supersedes` is
 only for an explicit replacement of broader guidance. A skill that declares
-`supersedes` must also declare `ownership` as a map from every declared
-capability to the non-empty subset of declared phases it owns. The router
+`ownership`, when present, is a map from every declared capability to the
+non-empty subset of declared phases it owns; when omitted, the router derives
+ownership of every declared capability in every declared phase. A superseding
+skill declares it when the default is not the intended scope. The router
 applies replacement only to shared capability-and-phase slices. It removes the
 broader module only when every one of those slices is covered; otherwise it
 keeps the broader module and returns the scoped override plan. Unrelated
