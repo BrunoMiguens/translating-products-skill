@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from scripts.repo_model import Manifest, SkillRecord, SourceRecord
+from scripts.repo_model import Manifest, Selector, SkillRecord, SourceRecord
 from scripts.render_catalog import (
     InventoryMarkerError,
     render_catalog,
@@ -98,8 +98,8 @@ def manifest_with(
     sources: tuple[SourceRecord, ...] = (),
 ) -> Manifest:
     return Manifest(
-        schema_version=1,
-        suite_version="0.1.0",
+        schema_version=2,
+        suite_version="0.2.0",
         orchestrator="translating-products",
         minimum_skill_versions=minimum_skill_versions or {},
         skills=skills,
@@ -107,7 +107,19 @@ def manifest_with(
     )
 
 
-def skill(name: str, *, depends_on: tuple[str, ...] = ()) -> SkillRecord:
+def skill(
+    name: str,
+    *,
+    depends_on: tuple[str, ...] = (),
+    selectors: tuple[Selector, ...] = (
+        Selector((("capabilities", ("capability:test",)),)),
+    ),
+    phases: tuple[str, ...] = ("translate",),
+    specificity: str = "universal",
+    required_context: tuple[str, ...] = (),
+    conflicts: tuple[str, ...] = (),
+    supersedes: tuple[str, ...] = (),
+) -> SkillRecord:
     return SkillRecord(
         name=name,
         version="0.1.0",
@@ -115,6 +127,12 @@ def skill(name: str, *, depends_on: tuple[str, ...] = ()) -> SkillRecord:
         description="Use when testing repository validation.",
         capabilities=("capability:test",),
         depends_on=depends_on,
+        selectors=selectors,
+        phases=phases,
+        specificity=specificity,
+        required_context=required_context,
+        conflicts=conflicts,
+        supersedes=supersedes,
     )
 
 

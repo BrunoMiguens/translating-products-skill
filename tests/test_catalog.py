@@ -70,9 +70,22 @@ class CatalogTests(unittest.TestCase):
             catalog = json.loads(json_path.read_text(encoding="utf-8"))
 
         self.assertTrue(catalog["skills"])
+        self.assertEqual(catalog["schema_version"], 2)
         self.assertEqual(
             set(catalog["skills"][0]),
-            {"name", "version", "category", "capabilities", "depends_on"},
+            {
+                "name",
+                "version",
+                "category",
+                "capabilities",
+                "depends_on",
+                "selectors",
+                "phases",
+                "specificity",
+                "required_context",
+                "conflicts",
+                "supersedes",
+            },
         )
 
     def test_check_mode_reports_stale_outputs_without_rewriting(self):

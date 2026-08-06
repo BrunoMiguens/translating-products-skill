@@ -1,10 +1,10 @@
 {
-  "schema_version": 1,
-  "suite_version": "0.1.0",
+  "schema_version": 2,
+  "suite_version": "0.2.0",
   "skills": [
     {
       "name": "translating-products",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "orchestrator",
       "capabilities": [
         "orchestrator",
@@ -15,7 +15,21 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "capabilities": [
+            "orchestrator"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect"
+      ],
+      "specificity": "universal",
+      "required_context": [],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-core",
@@ -29,7 +43,24 @@
       ],
       "depends_on": [
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "capabilities": [
+            "core-translation"
+          ]
+        }
+      ],
+      "phases": [
+        "translate"
+      ],
+      "specificity": "universal",
+      "required_context": [
+        "source_locale",
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "reviewing-translations",
@@ -40,7 +71,24 @@
         "terminology-qa",
         "structural-qa"
       ],
-      "depends_on": []
+      "depends_on": [],
+      "selectors": [
+        {
+          "capabilities": [
+            "translation-qa"
+          ]
+        }
+      ],
+      "phases": [
+        "review"
+      ],
+      "specificity": "quality",
+      "required_context": [
+        "source_locale",
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-web",
@@ -56,7 +104,30 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "surfaces": [
+            "web"
+          ]
+        },
+        {
+          "formats": [
+            "html",
+            "markdown"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "surface",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "localizing-software",
@@ -72,7 +143,31 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "surfaces": [
+            "software"
+          ]
+        },
+        {
+          "formats": [
+            "icu",
+            "po",
+            "xliff"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "format",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-mobile",
@@ -87,7 +182,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "surfaces": [
+            "mobile"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "surface",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-ios",
@@ -102,7 +214,29 @@
       "depends_on": [
         "translating-mobile",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "platforms": [
+            "ios"
+          ]
+        },
+        {
+          "formats": [
+            "xcstrings"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "platform",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-android",
@@ -117,7 +251,29 @@
       "depends_on": [
         "translating-mobile",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "platforms": [
+            "android"
+          ]
+        },
+        {
+          "formats": [
+            "android-xml"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "platform",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-flutter",
@@ -132,7 +288,29 @@
       "depends_on": [
         "translating-mobile",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "platforms": [
+            "flutter"
+          ]
+        },
+        {
+          "formats": [
+            "arb"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "platform",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-app-stores",
@@ -147,7 +325,25 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "surfaces": [
+            "app-store",
+            "play-store"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "surface",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-marketing",
@@ -162,7 +358,26 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "surfaces": [
+            "marketing"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "surface",
+      "required_context": [
+        "target_locale",
+        "audience",
+        "purpose"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-documentation",
@@ -176,7 +391,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "surfaces": [
+            "documentation"
+          ]
+        }
+      ],
+      "phases": [
+        "inspect",
+        "integrate"
+      ],
+      "specificity": "surface",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-rtl",
@@ -191,7 +423,29 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "scripts": [
+            "rtl"
+          ]
+        },
+        {
+          "capabilities": [
+            "bidi"
+          ]
+        }
+      ],
+      "phases": [
+        "refine",
+        "integrate"
+      ],
+      "specificity": "writing-system",
+      "required_context": [
+        "target_locale"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-arabic",
@@ -205,7 +459,24 @@
         "translating-core",
         "translating-rtl",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "ar"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-hebrew",
@@ -219,7 +490,24 @@
         "translating-core",
         "translating-rtl",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "he"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-japanese",
@@ -232,7 +520,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "ja"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-chinese",
@@ -246,7 +551,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "zh"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-korean",
@@ -259,7 +581,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "ko"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-portuguese",
@@ -273,7 +612,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "pt"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-spanish",
@@ -287,7 +643,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "es"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-french",
@@ -301,7 +674,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "fr"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     },
     {
       "name": "translating-german",
@@ -316,7 +706,24 @@
       "depends_on": [
         "translating-core",
         "reviewing-translations"
-      ]
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "de"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": []
     }
   ]
 }

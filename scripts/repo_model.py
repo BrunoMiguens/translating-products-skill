@@ -5,6 +5,37 @@ import json
 from pathlib import Path
 
 
+ROUTING_AXES = (
+    "languages",
+    "locales",
+    "scripts",
+    "surfaces",
+    "platforms",
+    "formats",
+    "domains",
+    "capabilities",
+)
+ROUTING_PHASES = ("inspect", "translate", "refine", "integrate", "review")
+SPECIFICITIES = (
+    "universal",
+    "writing-system",
+    "language",
+    "locale",
+    "surface",
+    "platform",
+    "format",
+    "domain",
+    "quality",
+)
+
+@dataclass(frozen=True)
+class Selector:
+    criteria: tuple[tuple[str, tuple[str, ...]], ...]
+
+    def as_dict(self) -> dict[str, tuple[str, ...]]:
+        return dict(self.criteria)
+
+
 @dataclass(frozen=True)
 class SkillRecord:
     name: str
@@ -13,6 +44,12 @@ class SkillRecord:
     description: str
     capabilities: tuple[str, ...]
     depends_on: tuple[str, ...]
+    selectors: tuple[Selector, ...]
+    phases: tuple[str, ...]
+    specificity: str
+    required_context: tuple[str, ...]
+    conflicts: tuple[str, ...]
+    supersedes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -38,6 +75,25 @@ class Manifest:
     sources: tuple[SourceRecord, ...]
 
 
+def _load_selector(raw: dict[str, object]) -> Selector:
+    unknown = sorted(set(raw) - set(ROUTING_AXES))
+    if unknown:
+        raise ValueError("unknown selector axes: " + ", ".join(unknown))
+    criteria = []
+    for axis in ROUTING_AXES:
+        if axis not in raw:
+            continue
+        values = raw[axis]
+        if not isinstance(values, list) or not values or not all(
+            isinstance(value, str) and value.strip() for value in values
+        ):
+            raise ValueError(f"selector {axis} must be a non-empty string list")
+        criteria.append((axis, tuple(values)))
+    if not criteria:
+        raise ValueError("selector must contain at least one routing axis")
+    return Selector(tuple(criteria))
+
+
 def load_manifest(path: Path) -> Manifest:
     raw = json.loads(path.read_text(encoding="utf-8"))
     skills = tuple(
@@ -48,6 +104,12 @@ def load_manifest(path: Path) -> Manifest:
             description=item["description"],
             capabilities=tuple(item["capabilities"]),
             depends_on=tuple(item["depends_on"]),
+            selectors=tuple(_load_selector(selector) for selector in item["selectors"]),
+            phases=tuple(item["phases"]),
+            specificity=item["specificity"],
+            required_context=tuple(item["required_context"]),
+            conflicts=tuple(item["conflicts"]),
+            supersedes=tuple(item["supersedes"]),
         )
         for item in raw["skills"]
     )

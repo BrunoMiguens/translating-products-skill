@@ -27,6 +27,19 @@ AUTHORITY_ORDER = (
 )
 INVENTORY_START = "<!-- skill-inventory:start -->"
 INVENTORY_END = "<!-- skill-inventory:end -->"
+ROUTING_FIELDS = (
+    "name",
+    "version",
+    "category",
+    "capabilities",
+    "depends_on",
+    "selectors",
+    "phases",
+    "specificity",
+    "required_context",
+    "conflicts",
+    "supersedes",
+)
 
 
 class InventoryMarkerError(ValueError):
@@ -60,12 +73,11 @@ def split_readme_inventory(text: str) -> tuple[str, str, str]:
 
 
 def _catalog_from_manifest(manifest: dict) -> dict:
-    fields = ("name", "version", "category", "capabilities", "depends_on")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "suite_version": manifest["suite_version"],
         "skills": [
-            {field: item[field] for field in fields}
+            {field: item[field] for field in ROUTING_FIELDS}
             for item in manifest["skills"]
         ],
     }
@@ -86,27 +98,50 @@ def _render_markdown(catalog: dict) -> str:
     )
     lines.append("")
 
-    for category in CATEGORIES:
-        lines.extend((f"## {category}", ""))
-        for item in catalog["skills"]:
-            if item["category"] != category:
-                continue
-            capabilities = ", ".join(
-                f"`{capability}`" for capability in item["capabilities"]
+    category = None
+    for item in catalog["skills"]:
+        if item["category"] != category:
+            category = item["category"]
+            lines.extend((f"## {category}", ""))
+        capabilities = ", ".join(
+            f"`{capability}`" for capability in item["capabilities"]
+        ) or "none"
+        dependencies = ", ".join(
+            f"`{dependency}`" for dependency in item["depends_on"]
+        ) or "none"
+        selectors = " OR ".join(
+            ", ".join(
+                f"`{axis}`: {', '.join(f'`{value}`' for value in values)}"
+                for axis, values in selector.items()
             )
-            dependencies = ", ".join(
-                f"`{dependency}`" for dependency in item["depends_on"]
-            ) or "none"
-            lines.extend(
-                (
-                    f"### {item['name']}",
-                    "",
-                    f"- Version: `{item['version']}`",
-                    f"- Capabilities: {capabilities}",
-                    f"- Depends on: {dependencies}",
-                    "",
-                )
+            for selector in item["selectors"]
+        ) or "none"
+        phases = ", ".join(f"`{phase}`" for phase in item["phases"]) or "none"
+        required_context = ", ".join(
+            f"`{context}`" for context in item["required_context"]
+        ) or "none"
+        conflicts = ", ".join(
+            f"`{conflict}`" for conflict in item["conflicts"]
+        ) or "none"
+        supersedes = ", ".join(
+            f"`{skill}`" for skill in item["supersedes"]
+        ) or "none"
+        lines.extend(
+            (
+                f"### {item['name']}",
+                "",
+                f"- Version: `{item['version']}`",
+                f"- Capabilities: {capabilities}",
+                f"- Depends on: {dependencies}",
+                f"- Selectors: {selectors}",
+                f"- Phases: {phases}",
+                f"- Specificity: `{item['specificity']}`",
+                f"- Required context: {required_context}",
+                f"- Conflicts: {conflicts}",
+                f"- Supersedes: {supersedes}",
+                "",
             )
+        )
     return "\n".join(lines)
 
 
