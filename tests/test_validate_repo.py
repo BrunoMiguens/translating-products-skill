@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ from scripts.render_catalog import (
 from scripts.validate_repo import (
     parse_frontmatter,
     validate_distribution,
+    validate_fixture_separation,
     validate_repository,
     validate_skill,
     validate_workflow,
@@ -151,6 +153,91 @@ def write_skill(root: Path, name: str, body: str = "# Demo\n") -> Path:
 
 
 class ValidatorTests(unittest.TestCase):
+    def test_validation_rejects_benchmark_text_copied_into_a_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            copied = "This exact benchmark sentence is deliberately long enough to detect reuse."
+            write_skill(root, "translating-demo", copied + "\n")
+            cases = root / "benchmarks" / "demo-v1" / "cases.jsonl"
+            cases.parent.mkdir(parents=True)
+            cases.write_text(
+                json.dumps({"id": "case-1", "source": copied}) + "\n",
+                encoding="utf-8",
+            )
+
+            errors = validate_fixture_separation(root)
+
+        self.assertEqual(
+            errors,
+            [
+                "skills/translating-demo/SKILL.md: contains normalized benchmark text "
+                "from benchmarks/demo-v1/cases.jsonl case case-1 field source"
+            ],
+        )
+
+    def test_fixture_separation_normalizes_case_and_whitespace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = "This benchmark sentence has enough unique words to detect normalized copying."
+            write_skill(
+                root,
+                "translating-demo",
+                "THIS  BENCHMARK sentence has enough unique words\n"
+                "to detect normalized copying.\n",
+            )
+            cases = root / "benchmarks" / "demo-v1" / "cases.jsonl"
+            cases.parent.mkdir(parents=True)
+            cases.write_text(
+                json.dumps({"id": "case-2", "source": source}) + "\n",
+                encoding="utf-8",
+            )
+
+            errors = validate_fixture_separation(root)
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("case case-2 field source", errors[0])
+
+    def test_fixture_separation_allows_short_phrases_and_unrelated_principles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_skill(
+                root,
+                "translating-demo",
+                "Preserve meaning, infer register from context, and verify terminology.\n"
+                "A compact example may say Save changes.\n",
+            )
+            cases = root / "benchmarks" / "demo-v1" / "cases.jsonl"
+            cases.parent.mkdir(parents=True)
+            cases.write_text(
+                json.dumps({"id": "case-3", "source": "Save changes"}) + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(validate_fixture_separation(root), [])
+
+    def test_repository_validation_enforces_fixture_separation_in_both_modes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            copied = "This exact benchmark sentence is deliberately long enough to detect reuse."
+            write_skill(root, "translating-demo", copied + "\n")
+            cases = root / "benchmarks" / "demo-v1" / "cases.jsonl"
+            cases.parent.mkdir(parents=True)
+            cases.write_text(
+                json.dumps({"id": "case-1", "source": copied}) + "\n",
+                encoding="utf-8",
+            )
+            manifest = manifest_with(
+                skills=(skill("translating-demo"),),
+                minimum_skill_versions={"translating-demo": "0.1.0"},
+            )
+            expected = [
+                "skills/translating-demo/SKILL.md: contains normalized benchmark text "
+                "from benchmarks/demo-v1/cases.jsonl case case-1 field source"
+            ]
+
+            self.assertEqual(validate_repository(root, manifest), expected)
+            self.assertEqual(validate_repository(root, manifest, partial=True), expected)
+
     def test_cli_partial_mode_validates_the_current_manifest(self):
         result = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "validate_repo.py"), "--partial"],

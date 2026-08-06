@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+import json
 from pathlib import Path
 import re
 import shlex
@@ -61,6 +62,89 @@ PROFILE_FIELDS = {
     "purpose",
     "register",
 }
+FIXTURE_TEXT_MINIMUM = 48
+
+
+def _normalized_prose(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _skill_body(path: Path) -> str:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if lines and lines[0] == "---":
+        try:
+            closing = lines.index("---", 1)
+        except ValueError:
+            pass
+        else:
+            return "\n".join(lines[closing + 1 :])
+    return "\n".join(lines)
+
+
+def _fixture_texts(root: Path) -> list[tuple[str, str, str, str]]:
+    fixtures = []
+
+    def add(
+        record: object,
+        relative: Path,
+        fields: tuple[str, ...],
+        case: object,
+    ) -> None:
+        if not isinstance(record, dict):
+            return
+        case_id = str(record.get("id", case))
+        for field in fields:
+            value = record.get(field)
+            if not isinstance(value, str):
+                continue
+            normalized = _normalized_prose(value)
+            if len(normalized) >= FIXTURE_TEXT_MINIMUM:
+                fixtures.append((normalized, relative.as_posix(), case_id, field))
+
+    benchmarks = root / "benchmarks"
+    if benchmarks.is_dir():
+        for path in sorted(benchmarks.glob("*/cases.jsonl")):
+            relative = path.relative_to(root)
+            with path.open(encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if line.strip():
+                        add(
+                            json.loads(line),
+                            relative,
+                            ("source", "reference"),
+                            line_number,
+                        )
+
+    for filename, fields in (
+        ("translation-quality-cases.json", ("source", "literal_failure")),
+        ("structural-fidelity-cases.json", ("source",)),
+    ):
+        path = root / "evals" / filename
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root)
+        for index, record in enumerate(
+            json.loads(path.read_text(encoding="utf-8")), start=1
+        ):
+            add(record, relative, fields, index)
+
+    return fixtures
+
+
+def validate_fixture_separation(root: Path) -> list[str]:
+    skill_bodies = [
+        (path.relative_to(root).as_posix(), _normalized_prose(_skill_body(path)))
+        for path in sorted((root / "skills").glob("*/SKILL.md"))
+    ]
+    errors = []
+    for fixture, relative, case_id, field in _fixture_texts(root):
+        for skill_path, body in skill_bodies:
+            if fixture in body:
+                errors.append(
+                    f"{skill_path}: contains normalized benchmark text from "
+                    f"{relative} case {case_id} field {field}"
+                )
+    return sorted(errors)
 
 
 def parse_frontmatter(path: Path) -> dict[str, str]:
@@ -143,6 +227,8 @@ def validate_repository(
             f"{path.relative_to(root)}: {message}"
             for message in validate_skill(path)
         )
+
+    errors.extend(validate_fixture_separation(root))
 
     for skill in sorted(manifest.skills, key=lambda item: item.name):
         if not skill.selectors:
