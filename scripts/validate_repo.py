@@ -11,7 +11,13 @@ from urllib.parse import unquote, urlsplit
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.repo_model import Manifest, load_manifest
+from scripts.repo_model import (
+    ROUTING_AXES,
+    ROUTING_PHASES,
+    SPECIFICITIES,
+    Manifest,
+    load_manifest,
+)
 from scripts.render_catalog import InventoryMarkerError, split_readme_inventory
 
 
@@ -41,6 +47,20 @@ OFFLINE_VALIDATION_COMMANDS = (
     "python3 -m unittest discover -s tests -v",
 )
 SOURCE_VERIFICATION_COMMAND = "python3 scripts/verify_sources.py"
+PROFILE_FIELDS = {
+    "source_locale",
+    "target_locale",
+    "language",
+    "scripts",
+    "surfaces",
+    "platforms",
+    "formats",
+    "domains",
+    "capabilities",
+    "audience",
+    "purpose",
+    "register",
+}
 
 
 def parse_frontmatter(path: Path) -> dict[str, str]:
@@ -124,6 +144,64 @@ def validate_repository(
             for message in validate_skill(path)
         )
 
+    for skill in sorted(manifest.skills, key=lambda item: item.name):
+        if not skill.selectors:
+            errors.append(
+                f"skills-manifest.json: {skill.name} must declare at least one selector"
+            )
+        for selector in skill.selectors:
+            for axis, _values in selector.criteria:
+                if axis not in ROUTING_AXES:
+                    errors.append(
+                        f"skills-manifest.json: {skill.name} has unknown selector axis {axis}"
+                    )
+        for phase in sorted(set(skill.phases)):
+            if phase not in ROUTING_PHASES:
+                errors.append(
+                    f"skills-manifest.json: {skill.name} has invalid phase {phase}"
+                )
+        if skill.specificity not in SPECIFICITIES:
+            errors.append(
+                "skills-manifest.json: "
+                f"{skill.name} has invalid specificity {skill.specificity}"
+            )
+        for context in sorted(set(skill.required_context)):
+            if context not in PROFILE_FIELDS:
+                errors.append(
+                    f"skills-manifest.json: {skill.name} requires unknown context "
+                    f"{context}"
+                )
+        for dependency in sorted(set(skill.depends_on)):
+            if dependency == skill.name:
+                errors.append(
+                    f"skills-manifest.json: {skill.name} cannot depend on itself"
+                )
+        for conflict in sorted(set(skill.conflicts)):
+            if conflict not in declared:
+                errors.append(
+                    f"skills-manifest.json: {skill.name} conflicts with unknown skill "
+                    f"{conflict}"
+                )
+            elif conflict == skill.name:
+                errors.append(
+                    f"skills-manifest.json: {skill.name} cannot conflict with itself"
+                )
+        for superseded in sorted(set(skill.supersedes)):
+            if superseded not in declared:
+                errors.append(
+                    f"skills-manifest.json: {skill.name} supersedes unknown skill "
+                    f"{superseded}"
+                )
+            elif superseded == skill.name:
+                errors.append(
+                    f"skills-manifest.json: {skill.name} cannot supersede itself"
+                )
+        for target in sorted(set(skill.depends_on) & set(skill.supersedes)):
+            errors.append(
+                f"skills-manifest.json: {skill.name} cannot both depend on and "
+                f"supersede {target}"
+            )
+
     graph = defaultdict(tuple)
     for skill in sorted(manifest.skills, key=lambda item: item.name):
         graph[skill.name] = skill.depends_on
@@ -152,6 +230,29 @@ def validate_repository(
 
     for name in sorted(declared):
         visit(name)
+
+    supersedes_graph = defaultdict(tuple)
+    for skill in sorted(manifest.skills, key=lambda item: item.name):
+        supersedes_graph[skill.name] = skill.supersedes
+
+    visiting.clear()
+    visited.clear()
+
+    def visit_supersedes(name: str) -> None:
+        if name in visiting:
+            errors.append(f"skills-manifest.json: supersedes cycle at {name}")
+            return
+        if name in visited:
+            return
+        visiting.add(name)
+        for superseded in sorted(supersedes_graph[name]):
+            if superseded in declared:
+                visit_supersedes(superseded)
+        visiting.remove(name)
+        visited.add(name)
+
+    for name in sorted(declared):
+        visit_supersedes(name)
 
     known_capabilities = {
         capability

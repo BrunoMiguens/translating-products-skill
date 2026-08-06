@@ -398,6 +398,118 @@ class ValidatorTests(unittest.TestCase):
             ],
         )
 
+    def test_routing_metadata_rejects_unknown_references_and_invalid_enums(self):
+        bad = skill(
+            "translating-bad",
+            phases=("guess",),
+            specificity="regional-ish",
+            required_context=("unknown_field",),
+            conflicts=("missing-conflict",),
+            supersedes=("missing-superior",),
+        )
+        errors = validate_repository(
+            Path("/nonexistent"),
+            manifest_with(
+                skills=(bad,),
+                minimum_skill_versions={"translating-bad": "0.1.0"},
+            ),
+            partial=True,
+        )
+
+        self.assertIn(
+            "skills-manifest.json: translating-bad has invalid phase guess", errors
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-bad has invalid specificity regional-ish",
+            errors,
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-bad requires unknown context unknown_field",
+            errors,
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-bad conflicts with unknown skill missing-conflict",
+            errors,
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-bad supersedes unknown skill missing-superior",
+            errors,
+        )
+
+    def test_routing_metadata_rejects_empty_self_and_supersedes_cycles(self):
+        first = skill(
+            "translating-first",
+            selectors=(),
+            conflicts=("translating-first",),
+            supersedes=("translating-second",),
+        )
+        second = skill(
+            "translating-second",
+            supersedes=("translating-first", "translating-second"),
+        )
+        errors = validate_repository(
+            Path("/nonexistent"),
+            manifest_with(
+                skills=(first, second),
+                minimum_skill_versions={
+                    "translating-first": "0.1.0",
+                    "translating-second": "0.1.0",
+                },
+            ),
+            partial=True,
+        )
+
+        self.assertIn(
+            "skills-manifest.json: translating-first must declare at least one selector",
+            errors,
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-first cannot conflict with itself", errors
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-second cannot supersede itself", errors
+        )
+        self.assertIn(
+            "skills-manifest.json: supersedes cycle at translating-first", errors
+        )
+
+    def test_routing_metadata_rejects_unknown_axes_self_dependencies_and_overlap(self):
+        base = skill("translating-base")
+        invalid_selector = skill(
+            "translating-invalid-selector",
+            selectors=(Selector((("audience", ("consumer",)),)),),
+        )
+        self_dependency = skill(
+            "translating-self", depends_on=("translating-self",)
+        )
+        overlap = skill(
+            "translating-overlap",
+            depends_on=("translating-base",),
+            supersedes=("translating-base",),
+        )
+        skills = (base, invalid_selector, self_dependency, overlap)
+        errors = validate_repository(
+            Path("/nonexistent"),
+            manifest_with(
+                skills=skills,
+                minimum_skill_versions={skill.name: "0.1.0" for skill in skills},
+            ),
+            partial=True,
+        )
+
+        self.assertIn(
+            "skills-manifest.json: translating-invalid-selector has unknown selector axis audience",
+            errors,
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-self cannot depend on itself", errors
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-overlap cannot both depend on and "
+            "supersede translating-base",
+            errors,
+        )
+
 
 class DistributionTests(unittest.TestCase):
     def setUp(self):
