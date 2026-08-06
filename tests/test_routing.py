@@ -73,6 +73,7 @@ def routing_request(targets, *, platforms=(), domains=()):
 def synthetic_skill(
     name,
     *,
+    capabilities=(),
     selectors=(),
     depends_on=(),
     phases=("refine",),
@@ -80,13 +81,15 @@ def synthetic_skill(
     required_context=(),
     conflicts=(),
     supersedes=(),
+    ownership=None,
     category="language",
 ):
-    return {
+    skill = {
         "name": name,
         "version": "1.0.0",
         "category": category,
-        "capabilities": [],
+        "description": "Use when testing generic routing behavior.",
+        "capabilities": list(capabilities),
         "depends_on": list(depends_on),
         "selectors": list(selectors),
         "phases": list(phases),
@@ -95,6 +98,9 @@ def synthetic_skill(
         "conflicts": list(conflicts),
         "supersedes": list(supersedes),
     }
+    if ownership is not None:
+        skill["ownership"] = list(ownership)
+    return skill
 
 
 def synthetic_catalog(*skills):
@@ -392,12 +398,15 @@ class RoutingTests(unittest.TestCase):
         catalog = synthetic_catalog(
             synthetic_skill(
                 "broader",
+                capabilities=("grammar",),
                 selectors=({"domains": ["supersession-demo"]},),
                 depends_on=("broader-support",),
             ),
             synthetic_skill("broader-support"),
             synthetic_skill(
                 "narrower",
+                capabilities=("grammar",),
+                ownership=("grammar",),
                 selectors=({"domains": ["supersession-demo"]},),
                 specificity="locale",
                 supersedes=("broader",),
@@ -420,10 +429,13 @@ class RoutingTests(unittest.TestCase):
             ),
             synthetic_skill(
                 "broader",
+                capabilities=("grammar",),
                 selectors=({"domains": ["closure-demo"]},),
             ),
             synthetic_skill(
                 "narrower",
+                capabilities=("grammar",),
+                ownership=("grammar",),
                 selectors=({"domains": ["closure-demo"]},),
                 specificity="locale",
                 supersedes=("broader",),
@@ -492,35 +504,91 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(result["phases"]["integrate"], ["translating-web"])
         self.assertEqual(result["phases"]["review"], ["reviewing-translations"])
 
-    def test_catalog_only_locale_specialist_supersedes_broader_language_skill(self):
-        router = load_module("route_capabilities_external", ROUTER)
-        catalog = load_catalog()
-        catalog["skills"].append(
-            {
-                "name": "external-pt-pt-product-copy",
-                "version": "1.0.0",
-                "category": "language",
-                "capabilities": ["locale:pt-PT"],
-                "depends_on": ["translating-core", "reviewing-translations"],
-                "selectors": [{"locales": ["pt-PT"], "domains": ["product-copy"]}],
-                "phases": ["refine"],
-                "specificity": "locale",
-                "required_context": ["target_locale", "register"],
-                "conflicts": [],
-                "supersedes": ["translating-portuguese"],
-            }
+    def test_partial_supersession_retains_broader_unowned_capabilities(self):
+        router = load_module("route_capabilities_partial_supersession", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "broader-language",
+                capabilities=("grammar", "terminology"),
+                selectors=({"domains": ["ownership-demo"]},),
+            ),
+            synthetic_skill(
+                "narrower-locale",
+                capabilities=("grammar",),
+                ownership=("grammar",),
+                selectors=({"domains": ["ownership-demo"]},),
+                specificity="locale",
+                supersedes=("broader-language",),
+            ),
         )
 
         result = router.route_profile(
-            complete_profile(target_locale="pt-PT", domains=["product-copy"]),
-            catalog,
+            complete_profile(domains=["ownership-demo"]), catalog
         )
 
-        self.assertIn("external-pt-pt-product-copy", result["selected"])
-        self.assertNotIn("translating-portuguese", result["selected"])
         self.assertEqual(
-            result["phases"]["refine"], ["external-pt-pt-product-copy"]
+            result["phases"]["refine"],
+            ["broader-language", "narrower-locale"],
         )
+        self.assertEqual(
+            result["ownership_overrides"],
+            {
+                "narrower-locale": [
+                    {"skill": "broader-language", "ownership": ["grammar"]}
+                ]
+            },
+        )
+
+    def test_full_supersession_prunes_replaced_skill_and_its_dependency(self):
+        router = load_module("route_capabilities_full_supersession", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill("broader-dependency"),
+            synthetic_skill(
+                "broader-language",
+                capabilities=("grammar",),
+                selectors=({"domains": ["ownership-demo"]},),
+                depends_on=("broader-dependency",),
+            ),
+            synthetic_skill(
+                "narrower-locale",
+                capabilities=("grammar",),
+                ownership=("grammar",),
+                selectors=({"domains": ["ownership-demo"]},),
+                specificity="locale",
+                supersedes=("broader-language",),
+            ),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["ownership-demo"]), catalog
+        )
+
+        self.assertEqual(result["selected"], ["narrower-locale"])
+        self.assertEqual(result["ownership_overrides"], {})
+
+    def test_unrelated_ownership_cannot_declare_supersession(self):
+        router = load_module("route_capabilities_unrelated_ownership", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "broader-language",
+                capabilities=("terminology",),
+                selectors=({"domains": ["ownership-demo"]},),
+            ),
+            synthetic_skill(
+                "narrower-locale",
+                capabilities=("grammar",),
+                ownership=("grammar",),
+                selectors=({"domains": ["ownership-demo"]},),
+                specificity="locale",
+                supersedes=("broader-language",),
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "supersedes without shared ownership: narrower-locale, broader-language",
+        ):
+            router.route_profile(complete_profile(domains=["ownership-demo"]), catalog)
 
     def test_selector_conjoins_axes_and_matches_locale_ranges(self):
         router = load_module("route_capabilities_selectors", ROUTER)

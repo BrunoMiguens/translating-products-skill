@@ -6,6 +6,7 @@
       "name": "translating-products",
       "version": "0.2.0",
       "category": "orchestrator",
+      "description": "Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.",
       "capabilities": [
         "orchestrator",
         "project-bootstrap",
@@ -35,6 +36,7 @@
       "name": "translating-core",
       "version": "0.1.0",
       "category": "core",
+      "description": "Use when producing meaning-faithful, natural, culturally appropriate translations for any language translation before applying product or language specialists.",
       "capabilities": [
         "core-translation",
         "terminology",
@@ -66,6 +68,7 @@
       "name": "reviewing-translations",
       "version": "0.1.0",
       "category": "quality",
+      "description": "Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.",
       "capabilities": [
         "translation-qa",
         "terminology-qa",
@@ -94,6 +97,7 @@
       "name": "translating-web",
       "version": "0.1.0",
       "category": "surface",
+      "description": "Use when localizing websites while preserving markup, metadata, accessibility, links, and locale signals for HTML, Markdown, or web-content translation.",
       "capabilities": [
         "surface:web",
         "html",
@@ -133,6 +137,7 @@
       "name": "localizing-software",
       "version": "0.1.0",
       "category": "surface",
+      "description": "Use when localizing software resources while preserving ICU syntax, placeholders, plurals, keys, and locale formatting for application resource files and UI strings.",
       "capabilities": [
         "surface:software",
         "icu",
@@ -173,6 +178,7 @@
       "name": "translating-mobile",
       "version": "0.1.0",
       "category": "surface",
+      "description": "Use when applying shared mobile-localization constraints for mobile UI, accessibility strings, screenshots, expansion, truncation, and pseudo-localization.",
       "capabilities": [
         "surface:mobile",
         "mobile-ui",
@@ -205,6 +211,7 @@
       "name": "translating-ios",
       "version": "0.1.0",
       "category": "platform",
+      "description": "Use when localizing Apple-platform resources and UI copy for String Catalogs, SwiftUI, UIKit, VoiceOver, and Apple locale behavior.",
       "capabilities": [
         "platform:ios",
         "xcstrings",
@@ -242,6 +249,7 @@
       "name": "translating-android",
       "version": "0.1.0",
       "category": "platform",
+      "description": "Use when localizing Android resources and UI copy for strings.xml, plurals, Compose, views, TalkBack, pseudo-locales, and bidirectional layouts.",
       "capabilities": [
         "platform:android",
         "string-resources",
@@ -279,6 +287,7 @@
       "name": "translating-flutter",
       "version": "0.1.0",
       "category": "platform",
+      "description": "Use when localizing Flutter applications for ARB, generated localization, ICU messages, flutter_localizations, accessibility, and responsive layout checks.",
       "capabilities": [
         "platform:flutter",
         "arb",
@@ -316,6 +325,7 @@
       "name": "translating-app-stores",
       "version": "0.1.0",
       "category": "surface",
+      "description": "Use when localizing App Store and Play Store product listings for store metadata, screenshots, keywords, market adaptation, and listing constraints.",
       "capabilities": [
         "surface:app-store",
         "surface:play-store",
@@ -349,6 +359,7 @@
       "name": "translating-marketing",
       "version": "0.1.0",
       "category": "surface",
+      "description": "Use when transcreating marketing content while preserving brand voice and conversion intent for campaigns, landing pages, calls to action, and cultural adaptation.",
       "capabilities": [
         "surface:marketing",
         "transcreation",
@@ -383,6 +394,7 @@
       "name": "translating-documentation",
       "version": "0.1.0",
       "category": "surface",
+      "description": "Use when localizing technical documentation while preserving code, commands, identifiers, diagrams, references, and technical terminology for guides, API references, READMEs, and developer documentation.",
       "capabilities": [
         "surface:documentation",
         "code-preservation",
@@ -414,6 +426,7 @@
       "name": "translating-rtl",
       "version": "0.1.0",
       "category": "script",
+      "description": "Use when applying right-to-left script and bidirectional UI rules for Arabic, Hebrew, Persian, Urdu, or mixed RTL/LTR product content.",
       "capabilities": [
         "script:rtl",
         "bidi",
@@ -451,6 +464,7 @@
       "name": "translating-arabic",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining Arabic translations for the requested locale and register, including Arabic wording, agreement, terminology, punctuation, and product naturalness.",
       "capabilities": [
         "language:arabic",
         "locale:ar"
@@ -482,6 +496,7 @@
       "name": "translating-hebrew",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining Hebrew translations for the requested locale and register, including Hebrew wording, gender, number, construct forms, punctuation, and transliteration.",
       "capabilities": [
         "language:hebrew",
         "locale:he"
@@ -513,6 +528,7 @@
       "name": "translating-japanese",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining Japanese translations for the requested locale and register, including politeness, honorifics, omission, counters, loanwords, punctuation, and concise UI copy.",
       "capabilities": [
         "language:japanese",
         "locale:ja"
@@ -543,6 +559,7 @@
       "name": "translating-chinese",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining Chinese translations for script and region, including Simplified or Traditional Chinese, classifiers, terminology, punctuation, and product conventions.",
       "capabilities": [
         "language:chinese",
         "locale:zh-Hans",
@@ -574,6 +591,7 @@
       "name": "translating-korean",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining Korean translations for the requested locale and register, including speech level, honorifics, spacing, counters, loanwords, and concise UI copy.",
       "capabilities": [
         "language:korean",
         "locale:ko"
@@ -604,6 +622,7 @@
       "name": "translating-portuguese",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining Portuguese translations for Brazil or Portugal, including regional grammar, vocabulary, spelling, formality, and product register.",
       "capabilities": [
         "language:portuguese",
         "locale:pt-BR",
@@ -635,6 +654,7 @@
       "name": "translating-spanish",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining Spanish translations for Spain, Latin America, or a named region, including regional vocabulary, pronouns, formality, and product register.",
       "capabilities": [
         "language:spanish",
         "locale:es-ES",
@@ -666,6 +686,7 @@
       "name": "translating-french",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining French translations for France or Canada, including regional vocabulary, formality, typography, spacing, anglicisms, and product register.",
       "capabilities": [
         "language:french",
         "locale:fr-FR",
@@ -697,6 +718,7 @@
       "name": "translating-german",
       "version": "0.1.0",
       "category": "language",
+      "description": "Use when refining German translations for Germany, Austria, or Switzerland, including formality, terminology, compounds, capitalization, expansion, and UI constraints.",
       "capabilities": [
         "language:german",
         "locale:de-DE",

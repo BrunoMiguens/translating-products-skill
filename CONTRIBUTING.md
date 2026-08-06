@@ -26,7 +26,9 @@ Use this sequence for every specialist change:
 4. Declare phases from `inspect`, `translate`, `refine`, `integrate`, and
    `review`, and declare an allowed specificity. Dependencies, conflicts, and
    explicit `supersedes` relationships must make ownership and composition
-   deterministic.
+   deterministic. A superseding specialist must declare non-empty `ownership`
+   capabilities; partial overlap keeps the broader specialist active and
+   replaces only the shared ownership.
 5. Add positive and negative routing cases that demonstrate both selection and
    non-selection. A catalog-only fixture must prove a compatible third-party
    specialist is selectable without changing router code.
@@ -60,6 +62,13 @@ never installs or enables it. It must also declare a compatible license,
 immutable commit and source path, SHA-256 checksum, and an adapter mapping with
 routing, negative-routing, security, structural, quality, and host-compatibility
 evaluations.
+
+Exercise admission through the host-neutral router CLI with repeatable
+`--external-catalog` inputs. The approved request must name the installed skill
+in `authorized_external_skills` or `project_authorized_external_skills`, unless
+a reviewed schema-`2` compatibility registry authorizes it. The CLI preserves
+bundled order, then external input order, and rejects duplicate names,
+unauthorized records, and invalid external metadata before routing.
 
 Add reviewed installed integrations to the orchestrator's
 [compatibility registry](skills/translating-products/references/compatibility-registry.json).

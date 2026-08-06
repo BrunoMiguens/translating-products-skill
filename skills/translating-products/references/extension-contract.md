@@ -24,8 +24,12 @@ normalized BCP 47 ranges.
 writing-system, language, locale, surface, platform, format, domain, or
 quality). `required_context` lists profile fields that must be resolved before
 the skill runs. `conflicts` lists incompatible specialists. `supersedes` is
-only for an explicit replacement of broader guidance; narrower wording remains
-within its declared ownership and does not remove unrelated capabilities.
+only for an explicit replacement of broader guidance. A skill that declares
+`supersedes` must also declare a non-empty `ownership` list, whose values are
+declared capabilities. The router applies replacement only to the shared
+ownership. It removes the broader module only when all of that module's
+ownership is covered; otherwise it keeps the broader module and returns the
+scoped override plan. Unrelated capabilities and dependencies remain active.
 
 Ignore an external candidate when any required metadata is missing, ambiguous,
 invalid, or conflicts cannot be resolved deterministically.
@@ -39,10 +43,24 @@ it:
 2. `.translation/project-brief.md` lists it.
 3. `compatibility-registry.json` contains a reviewed entry for it.
 
-An authorized specialist must already be installed before routing. If it is
-unavailable, use compatible bundled guidance. Never install a specialist at
-runtime. A catalog-only test must prove that a compatible third-party record is
-selected without modifying the router.
+An authorized specialist must already be installed before routing. Supply its
+schema-`2` catalog or manifest through the portable public CLI:
+
+```bash
+python3 route_capabilities.py REQUEST_JSON \
+  --external-catalog INSTALLED_CATALOG_OR_MANIFEST.json \
+  --compatibility-registry compatibility-registry.json
+```
+
+Repeat `--external-catalog` in the desired deterministic input order. The
+request authorizes names with `authorized_external_skills` for an explicit user
+selection or `project_authorized_external_skills` for approved project context;
+the registry is the third authorization channel. Bundled entries keep their
+catalog order, followed by admitted external inputs in argument order. Duplicate
+names, unauthorized entries, and invalid metadata fail deterministically before
+routing. If an authorized specialist is unavailable, use compatible bundled
+guidance. Never install a specialist at runtime. A public CLI test must prove
+that a compatible third-party record is selected without modifying the router.
 
 ## Specialist authoring checklist
 

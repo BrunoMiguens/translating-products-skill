@@ -17,6 +17,7 @@ Suite version: `0.2.0`
 ### translating-products
 
 - Version: `0.2.0`
+- Description: Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.
 - Capabilities: `orchestrator`, `project-bootstrap`, `skill-routing`, `subagent-routing`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `capabilities`: `orchestrator`
@@ -31,6 +32,7 @@ Suite version: `0.2.0`
 ### translating-core
 
 - Version: `0.1.0`
+- Description: Use when producing meaning-faithful, natural, culturally appropriate translations for any language translation before applying product or language specialists.
 - Capabilities: `core-translation`, `terminology`, `cultural-adaptation`, `structural-fidelity`
 - Depends on: `reviewing-translations`
 - Selectors: `capabilities`: `core-translation`
@@ -45,6 +47,7 @@ Suite version: `0.2.0`
 ### reviewing-translations
 
 - Version: `0.1.0`
+- Description: Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.
 - Capabilities: `translation-qa`, `terminology-qa`, `structural-qa`
 - Depends on: none
 - Selectors: `capabilities`: `translation-qa`
@@ -59,6 +62,7 @@ Suite version: `0.2.0`
 ### translating-web
 
 - Version: `0.1.0`
+- Description: Use when localizing websites while preserving markup, metadata, accessibility, links, and locale signals for HTML, Markdown, or web-content translation.
 - Capabilities: `surface:web`, `html`, `markdown`, `accessibility`, `hreflang`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `surfaces`: `web` OR `formats`: `html`, `markdown`
@@ -71,6 +75,7 @@ Suite version: `0.2.0`
 ### localizing-software
 
 - Version: `0.1.0`
+- Description: Use when localizing software resources while preserving ICU syntax, placeholders, plurals, keys, and locale formatting for application resource files and UI strings.
 - Capabilities: `surface:software`, `icu`, `placeholders`, `plurals`, `locale-formatting`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `surfaces`: `software` OR `formats`: `icu`, `po`, `xliff`
@@ -83,6 +88,7 @@ Suite version: `0.2.0`
 ### translating-mobile
 
 - Version: `0.1.0`
+- Description: Use when applying shared mobile-localization constraints for mobile UI, accessibility strings, screenshots, expansion, truncation, and pseudo-localization.
 - Capabilities: `surface:mobile`, `mobile-ui`, `accessibility`, `pseudo-localization`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `surfaces`: `mobile`
@@ -97,6 +103,7 @@ Suite version: `0.2.0`
 ### translating-ios
 
 - Version: `0.1.0`
+- Description: Use when localizing Apple-platform resources and UI copy for String Catalogs, SwiftUI, UIKit, VoiceOver, and Apple locale behavior.
 - Capabilities: `platform:ios`, `xcstrings`, `swiftui`, `apple-locales`
 - Depends on: `translating-mobile`, `reviewing-translations`
 - Selectors: `platforms`: `ios` OR `formats`: `xcstrings`
@@ -109,6 +116,7 @@ Suite version: `0.2.0`
 ### translating-android
 
 - Version: `0.1.0`
+- Description: Use when localizing Android resources and UI copy for strings.xml, plurals, Compose, views, TalkBack, pseudo-locales, and bidirectional layouts.
 - Capabilities: `platform:android`, `string-resources`, `compose`, `android-locales`
 - Depends on: `translating-mobile`, `reviewing-translations`
 - Selectors: `platforms`: `android` OR `formats`: `android-xml`
@@ -121,6 +129,7 @@ Suite version: `0.2.0`
 ### translating-flutter
 
 - Version: `0.1.0`
+- Description: Use when localizing Flutter applications for ARB, generated localization, ICU messages, flutter_localizations, accessibility, and responsive layout checks.
 - Capabilities: `platform:flutter`, `arb`, `flutter-localizations`, `icu`
 - Depends on: `translating-mobile`, `reviewing-translations`
 - Selectors: `platforms`: `flutter` OR `formats`: `arb`
@@ -135,6 +144,7 @@ Suite version: `0.2.0`
 ### translating-app-stores
 
 - Version: `0.1.0`
+- Description: Use when localizing App Store and Play Store product listings for store metadata, screenshots, keywords, market adaptation, and listing constraints.
 - Capabilities: `surface:app-store`, `surface:play-store`, `aso`, `store-metadata`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `surfaces`: `app-store`, `play-store`
@@ -147,6 +157,7 @@ Suite version: `0.2.0`
 ### translating-marketing
 
 - Version: `0.1.0`
+- Description: Use when transcreating marketing content while preserving brand voice and conversion intent for campaigns, landing pages, calls to action, and cultural adaptation.
 - Capabilities: `surface:marketing`, `transcreation`, `brand-voice`, `calls-to-action`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `surfaces`: `marketing`
@@ -159,6 +170,7 @@ Suite version: `0.2.0`
 ### translating-documentation
 
 - Version: `0.1.0`
+- Description: Use when localizing technical documentation while preserving code, commands, identifiers, diagrams, references, and technical terminology for guides, API references, READMEs, and developer documentation.
 - Capabilities: `surface:documentation`, `code-preservation`, `technical-terminology`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `surfaces`: `documentation`
@@ -173,6 +185,7 @@ Suite version: `0.2.0`
 ### translating-rtl
 
 - Version: `0.1.0`
+- Description: Use when applying right-to-left script and bidirectional UI rules for Arabic, Hebrew, Persian, Urdu, or mixed RTL/LTR product content.
 - Capabilities: `script:rtl`, `bidi`, `mirroring`, `mixed-direction`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `scripts`: `rtl` OR `capabilities`: `bidi`
@@ -187,6 +200,7 @@ Suite version: `0.2.0`
 ### translating-arabic
 
 - Version: `0.1.0`
+- Description: Use when refining Arabic translations for the requested locale and register, including Arabic wording, agreement, terminology, punctuation, and product naturalness.
 - Capabilities: `language:arabic`, `locale:ar`
 - Depends on: `translating-core`, `translating-rtl`, `reviewing-translations`
 - Selectors: `languages`: `ar`
@@ -199,6 +213,7 @@ Suite version: `0.2.0`
 ### translating-hebrew
 
 - Version: `0.1.0`
+- Description: Use when refining Hebrew translations for the requested locale and register, including Hebrew wording, gender, number, construct forms, punctuation, and transliteration.
 - Capabilities: `language:hebrew`, `locale:he`
 - Depends on: `translating-core`, `translating-rtl`, `reviewing-translations`
 - Selectors: `languages`: `he`
@@ -211,6 +226,7 @@ Suite version: `0.2.0`
 ### translating-japanese
 
 - Version: `0.1.0`
+- Description: Use when refining Japanese translations for the requested locale and register, including politeness, honorifics, omission, counters, loanwords, punctuation, and concise UI copy.
 - Capabilities: `language:japanese`, `locale:ja`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `languages`: `ja`
@@ -223,6 +239,7 @@ Suite version: `0.2.0`
 ### translating-chinese
 
 - Version: `0.1.0`
+- Description: Use when refining Chinese translations for script and region, including Simplified or Traditional Chinese, classifiers, terminology, punctuation, and product conventions.
 - Capabilities: `language:chinese`, `locale:zh-Hans`, `locale:zh-Hant`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `languages`: `zh`
@@ -235,6 +252,7 @@ Suite version: `0.2.0`
 ### translating-korean
 
 - Version: `0.1.0`
+- Description: Use when refining Korean translations for the requested locale and register, including speech level, honorifics, spacing, counters, loanwords, and concise UI copy.
 - Capabilities: `language:korean`, `locale:ko`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `languages`: `ko`
@@ -247,6 +265,7 @@ Suite version: `0.2.0`
 ### translating-portuguese
 
 - Version: `0.1.0`
+- Description: Use when refining Portuguese translations for Brazil or Portugal, including regional grammar, vocabulary, spelling, formality, and product register.
 - Capabilities: `language:portuguese`, `locale:pt-BR`, `locale:pt-PT`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `languages`: `pt`
@@ -259,6 +278,7 @@ Suite version: `0.2.0`
 ### translating-spanish
 
 - Version: `0.1.0`
+- Description: Use when refining Spanish translations for Spain, Latin America, or a named region, including regional vocabulary, pronouns, formality, and product register.
 - Capabilities: `language:spanish`, `locale:es-ES`, `locale:es-419`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `languages`: `es`
@@ -271,6 +291,7 @@ Suite version: `0.2.0`
 ### translating-french
 
 - Version: `0.1.0`
+- Description: Use when refining French translations for France or Canada, including regional vocabulary, formality, typography, spacing, anglicisms, and product register.
 - Capabilities: `language:french`, `locale:fr-FR`, `locale:fr-CA`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `languages`: `fr`
@@ -283,6 +304,7 @@ Suite version: `0.2.0`
 ### translating-german
 
 - Version: `0.1.0`
+- Description: Use when refining German translations for Germany, Austria, or Switzerland, including formality, terminology, compounds, capitalization, expansion, and UI constraints.
 - Capabilities: `language:german`, `locale:de-DE`, `locale:de-AT`, `locale:de-CH`
 - Depends on: `translating-core`, `reviewing-translations`
 - Selectors: `languages`: `de`

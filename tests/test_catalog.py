@@ -77,6 +77,7 @@ class CatalogTests(unittest.TestCase):
                 "name",
                 "version",
                 "category",
+                "description",
                 "capabilities",
                 "depends_on",
                 "selectors",
@@ -137,7 +138,7 @@ class CatalogTests(unittest.TestCase):
                 / "skills/translating-products/references/compatibility-registry.json"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual(registry, {"schema_version": 1, "skills": []})
+        self.assertEqual(registry, {"schema_version": 2, "skills": []})
 
 
 if __name__ == "__main__":

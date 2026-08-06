@@ -27,7 +27,7 @@ Follow this order:
 6. Bind approval to those exact bytes with `python3 SKILL_DIRECTORY/scripts/policy.py approve --project-root PROJECT_ROOT --approved-by APPROVER --approved-at TIMESTAMP`. Add `--approved-empty glossary.csv` or `--approved-empty protected-terms.txt` only for each explicitly approved empty collection.
 7. Rerun the bootstrap command. Proceed only when it returns `translate`; any content or line-ending change to the five context files invalidates the recorded hashes and requires reapproval. Optional project-memory files do not invalidate them.
 8. Inspect the supplied artifact and approved project context. Build **one task profile per target locale** with the exact source and target locale, language, explicit or observed scripts, audience, purpose, register, surfaces, platforms, formats, domains, structural constraints, and approved terminology and style decisions. Do not guess a material missing field: restart the one-question-at-a-time setup before translation begins.
-9. Load `SKILL_DIRECTORY/references/capability-catalog.json`, then invoke `SKILL_DIRECTORY/scripts/route_capabilities.py` with a schema `2` request JSON containing the shared task fields and an isolated target entry for each target locale.
+9. Load `SKILL_DIRECTORY/references/capability-catalog.json`, then invoke `SKILL_DIRECTORY/scripts/route_capabilities.py REQUEST_JSON` with a schema `2` request containing the shared task fields and an isolated target entry for each target locale. For an already-installed external specialist, pass its schema-`2` catalog or manifest with repeatable `--external-catalog PATH`; authorize it through `authorized_external_skills` or `project_authorized_external_skills` in the approved request, or pass a reviewed `--compatibility-registry PATH`. Input order is deterministic after bundled skills; duplicate names and unauthorized or malformed records fail before routing.
 10. Inspect every route reason in the returned per-locale plans. Reject an unexplained module and any external module that is not already installed and authorized. Compose only the capabilities that contribute to this profile: core, relevant language or locale, writing system when its declared mechanics contribute, relevant surface/platform/format/domain modules, and QA.
 11. Load every selected skill completely once, then execute it only in its declared phases. Production skills provide reusable reasoning and procedures; evaluation cases are not routing rules or fixed answers.
 12. Run shared surface, platform, and format `inspect` work before linguistic drafting. Preserve its resulting translation contract for every target branch.
@@ -78,16 +78,19 @@ profile; values on an axis are alternatives; separate selectors are alternative
 ways to select a skill. Locale selectors use normalized BCP 47 ranges.
 
 The router returns a reason for every selected module, including selector,
-dependency, and superseding reasons. Read those **route reasons** before work
-starts. An added unrelated profile dimension must not add a module; a catalog
-entry that matches a profile is selected without router code changes.
+dependency, and superseding reasons, plus `ownership_overrides` for scoped
+replacement. Read those **route reasons** before work starts. An added
+unrelated profile dimension must not add a module; a catalog entry that matches
+a profile is selected without router code changes.
 
 Within a linguistic branch, broader writing-system defaults run before
 language guidance and narrower locale guidance runs last. A locale specialist
-may override a broader default only in its declared ownership; unrelated
-capabilities remain active. Select a writing-system skill only when its
-declared reusable mechanics contribute to the profile, not merely because a
-script label exists.
+may override a broader default only in its declared ownership. When a
+replacement owns only part of a broader module, keep that broader module active
+for its remaining capabilities and apply the returned scoped override only to
+the shared ownership. Select a writing-system skill only when its declared
+reusable mechanics contribute to the profile, not merely because a script
+label exists.
 
 For an absent capability, apply `SKILL_DIRECTORY/scripts/policy.py`'s `missing_specialist_action`. Prefer an available bundled specialist, then core only when core can cover the need; otherwise report the missing capability.
 
@@ -127,7 +130,7 @@ Within one ownership dimension, resolve conflicts from highest to lowest:
 | Missing configuration | Run project bootstrap. |
 | Ambiguous locale | Ask one focused question. |
 | Missing specialist | Use `missing_specialist_action`; never invent or download a skill. |
-| External specialist unavailable | Use the bundled specialist. |
+| External specialist unavailable | Use compatible bundled guidance, core only when it can cover the gap, otherwise report the missing capability. |
 | Structural corruption | Reject and retry only the affected segment. |
 | Sub-agent failure | Retry once, preserve completed locales, report the incomplete target. |
 | QA failure | Return the affected section to the responsible specialist. |

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 import sys
@@ -43,6 +44,27 @@ SHARED_LIST_FIELDS = (
 TARGET_LIST_FIELDS = ("scripts",)
 TEXT_FIELDS = ("audience", "purpose", "register")
 MANDATORY_CAPABILITIES = ("core-translation", "translation-qa")
+EXTERNAL_SKILL_FIELDS = frozenset(
+    (
+        "name",
+        "version",
+        "category",
+        "description",
+        "capabilities",
+        "depends_on",
+        "selectors",
+        "phases",
+        "specificity",
+        "required_context",
+        "conflicts",
+        "supersedes",
+    )
+)
+EXTERNAL_OPTIONAL_FIELDS = frozenset(("ownership",))
+EXTERNAL_AUTHORIZATION_FIELDS = (
+    "authorized_external_skills",
+    "project_authorized_external_skills",
+)
 
 
 def normalize_locale(value: str) -> str:
@@ -106,6 +128,139 @@ def selector_matches(profile: dict, selector: dict) -> bool:
         if not actual_folded.intersection(value.casefold() for value in candidates):
             return False
     return True
+
+
+def _external_string_list(value: object, field: str, skill_name: str) -> list[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise ValueError(
+            f"external skill {skill_name} has invalid {field}: expected string list"
+        )
+    return value
+
+
+def validate_external_catalog(catalog: object) -> list[dict]:
+    """Validate one installed external manifest or capability catalog."""
+    if not isinstance(catalog, dict) or catalog.get("schema_version") != 2:
+        raise ValueError("external catalog must use schema_version 2")
+    skills = catalog.get("skills")
+    if not isinstance(skills, list):
+        raise ValueError("external catalog skills must be a list")
+
+    names: set[str] = set()
+    for item in skills:
+        if not isinstance(item, dict):
+            raise ValueError("external catalog skill must be an object")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("external catalog skill name must be a non-empty string")
+        missing = sorted(EXTERNAL_SKILL_FIELDS - set(item))
+        if missing:
+            raise ValueError(
+                f"external skill {name} is missing fields: {', '.join(missing)}"
+            )
+        unknown = sorted(
+            set(item) - EXTERNAL_SKILL_FIELDS - EXTERNAL_OPTIONAL_FIELDS
+        )
+        if unknown:
+            raise ValueError(
+                f"external skill {name} has unknown fields: {', '.join(unknown)}"
+            )
+        if name in names:
+            raise ValueError(f"duplicate external skill name: {name}")
+        names.add(name)
+        for field in ("version", "category", "description", "specificity"):
+            if not isinstance(item[field], str) or not item[field].strip():
+                raise ValueError(f"external skill {name} has invalid {field}")
+        if item["specificity"] not in SPECIFICITY_ORDER:
+            raise ValueError(f"external skill {name} has invalid specificity")
+        for field in (
+            "capabilities",
+            "depends_on",
+            "phases",
+            "required_context",
+            "conflicts",
+            "supersedes",
+        ):
+            _external_string_list(item[field], field, name)
+        if not item["selectors"]:
+            raise ValueError(f"external skill {name} must declare selectors")
+        if not isinstance(item["selectors"], list):
+            raise ValueError(f"external skill {name} has invalid selectors")
+        for selector in item["selectors"]:
+            if not isinstance(selector, dict) or not selector:
+                raise ValueError(f"external skill {name} has invalid selector")
+            for axis, values in selector.items():
+                if axis not in ROUTING_AXES:
+                    raise ValueError(
+                        f"external skill {name} has unknown selector axis: {axis}"
+                    )
+                _external_string_list(values, f"selector {axis}", name)
+        unknown_phases = sorted(set(item["phases"]) - set(PHASES))
+        if unknown_phases:
+            raise ValueError(
+                f"external skill {name} has unknown phases: {', '.join(unknown_phases)}"
+            )
+        ownership = item.get("ownership")
+        if item["supersedes"] and not ownership:
+            raise ValueError(
+                f"external skill {name} must declare ownership when superseding"
+            )
+        if ownership is not None:
+            ownership = _external_string_list(ownership, "ownership", name)
+            unknown_ownership = sorted(set(ownership) - set(item["capabilities"]))
+            if unknown_ownership:
+                raise ValueError(
+                    f"external skill {name} owns undeclared capabilities: "
+                    + ", ".join(unknown_ownership)
+                )
+    return skills
+
+
+def _authorization_names(request: dict, registry: object) -> set[str]:
+    authorized: set[str] = set()
+    for field in EXTERNAL_AUTHORIZATION_FIELDS:
+        if field not in request:
+            continue
+        values = _external_string_list(request[field], field, "request")
+        authorized.update(values)
+    if registry is None:
+        return authorized
+    if not isinstance(registry, dict) or registry.get("schema_version") != 2:
+        raise ValueError("compatibility registry must use schema_version 2")
+    entries = registry.get("skills")
+    if not isinstance(entries, list):
+        raise ValueError("compatibility registry skills must be a list")
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("compatibility registry skill must be an object")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("compatibility registry skill name must be a non-empty string")
+        authorized.add(name)
+    return authorized
+
+
+def merge_external_catalogs(
+    bundled_catalog: dict, external_catalogs: list[object], request: dict, registry: object
+) -> dict:
+    """Merge authorized installed external records without changing bundled precedence."""
+    authorized = _authorization_names(request, registry)
+    merged = dict(bundled_catalog)
+    merged_skills = list(bundled_catalog["skills"])
+    known_names = {item["name"] for item in merged_skills}
+    for external_catalog in external_catalogs:
+        for skill in validate_external_catalog(external_catalog):
+            name = skill["name"]
+            if name not in authorized:
+                raise ValueError(f"unauthorized external skill: {name}")
+            if name in known_names:
+                raise ValueError(f"duplicate external skill name: {name}")
+            known_names.add(name)
+            merged_skills.append(skill)
+    merged["skills"] = merged_skills
+    return merged
 
 
 def _normalized_profile(profile: dict) -> dict:
@@ -242,12 +397,17 @@ def expand_dependencies(
                 pending.append(dependency)
 
 
+def _ownership(skill: dict) -> set[str]:
+    return set(skill.get("ownership", skill["capabilities"]))
+
+
 def apply_supersedes(
     selected: set[str],
     by_name: dict[str, dict],
     reasons: dict[str, list[str]],
-) -> set[str]:
+) -> tuple[set[str], dict[str, list[dict[str, object]]]]:
     removed: set[str] = set()
+    ownership_overrides: dict[str, list[dict[str, object]]] = {}
     for name in by_name:
         if name not in selected:
             continue
@@ -260,9 +420,22 @@ def apply_supersedes(
                 by_name[target]["specificity"]
             ]:
                 raise ValueError(f"invalid supersedes specificity: {name}, {target}")
-            removed.add(target)
-            reasons[name].append(f"supersedes:{target}")
-    return selected - removed
+            shared_ownership = sorted(_ownership(by_name[name]) & _ownership(by_name[target]))
+            if not shared_ownership:
+                raise ValueError(
+                    f"supersedes without shared ownership: {name}, {target}"
+                )
+            if _ownership(by_name[target]).issubset(_ownership(by_name[name])):
+                removed.add(target)
+                reasons[name].append(f"supersedes:{target}")
+            else:
+                ownership_overrides.setdefault(name, []).append(
+                    {"skill": target, "ownership": shared_ownership}
+                )
+                reasons[name].append(
+                    f"refines:{target}:{','.join(shared_ownership)}"
+                )
+    return selected - removed, ownership_overrides
 
 
 def validate_dependency_closure(
@@ -280,16 +453,16 @@ def resolve_selection(
     names: list[str],
     by_name: dict[str, dict],
     reasons: dict[str, list[str]],
-) -> set[str]:
+) -> tuple[set[str], dict[str, list[dict[str, object]]]]:
     direct_matches = set(names)
     while True:
         selected = set(direct_matches)
         expand_dependencies(selected, by_name, reasons)
-        retained = apply_supersedes(selected, by_name, reasons)
+        retained, ownership_overrides = apply_supersedes(selected, by_name, reasons)
         validate_dependency_closure(retained, by_name)
         removed_direct_matches = direct_matches - retained
         if not removed_direct_matches:
-            return retained
+            return retained, ownership_overrides
         direct_matches.difference_update(removed_direct_matches)
 
 
@@ -334,7 +507,7 @@ def route_profile(profile: dict, catalog: dict) -> dict:
     profile = _normalized_profile(profile)
     names, reasons = matching_skill_names(profile, catalog)
     by_name = {item["name"]: item for item in catalog["skills"]}
-    selected = resolve_selection(names, by_name, reasons)
+    selected, ownership_overrides = resolve_selection(names, by_name, reasons)
     validate_conflicts(selected, by_name)
     for name in by_name:
         if name not in selected:
@@ -358,6 +531,7 @@ def route_profile(profile: dict, catalog: dict) -> dict:
         "reasons": {
             name: sorted(set(reasons[name])) for name in selected_in_load_order
         },
+        "ownership_overrides": ownership_overrides,
     }
 
 
@@ -377,19 +551,45 @@ def route(request: dict, catalog: dict) -> dict:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("invalid request: expected one request JSON path", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser(
+        description="Route bundled and already-installed external translation skills."
+    )
+    parser.add_argument("request_json", help="schema-2 routing request JSON path")
+    parser.add_argument(
+        "--external-catalog",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="installed external schema-2 catalog or manifest; repeat for more inputs",
+    )
+    parser.add_argument(
+        "--compatibility-registry",
+        metavar="PATH",
+        help="reviewed schema-2 registry that authorizes installed external skills",
+    )
+    arguments = parser.parse_args()
 
     try:
-        request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+        request = json.loads(Path(arguments.request_json).read_text(encoding="utf-8"))
         catalog_path = (
             Path(__file__).resolve().parents[1]
             / "references"
             / "capability-catalog.json"
         )
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-        result = route(request, catalog)
+        external_catalogs = [
+            json.loads(Path(path).read_text(encoding="utf-8"))
+            for path in arguments.external_catalog
+        ]
+        registry = (
+            json.loads(Path(arguments.compatibility_registry).read_text(encoding="utf-8"))
+            if arguments.compatibility_registry
+            else None
+        )
+        admitted_catalog = merge_external_catalogs(
+            catalog, external_catalogs, request, registry
+        )
+        result = route(request, admitted_catalog)
     except (OSError, ValueError, TypeError, KeyError) as error:
         print(f"invalid request: {error}", file=sys.stderr)
         return 2
