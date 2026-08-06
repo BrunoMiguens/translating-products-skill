@@ -229,6 +229,50 @@ class RoutingTests(unittest.TestCase):
                 load_catalog(),
             )
 
+    def test_normalize_request_normalizes_each_target_locale(self):
+        router = load_module("route_capabilities_normalization", ROUTER)
+
+        profiles = router.normalize_request(
+            routing_request([{"locale": "pt_pt", "register": "familiar"}])
+        )
+
+        self.assertEqual(profiles[0]["target_locale"], "pt-PT")
+        self.assertEqual(profiles[0]["language"], "pt")
+
+    def test_target_routing_errors_identify_normalized_target_locale(self):
+        router = load_module("route_capabilities_target_error", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "first-conflict",
+                selectors=({"locales": ["ja"]},),
+                conflicts=("second-conflict",),
+            ),
+            synthetic_skill(
+                "second-conflict",
+                selectors=({"locales": ["ja"]},),
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "target locale ja-JP: conflicting skills: first-conflict, second-conflict",
+        ) as context:
+            router.route(
+                routing_request(
+                    [
+                        {"locale": "pt-PT", "register": "familiar"},
+                        {"locale": "ja_jp", "register": "polite"},
+                    ]
+                ),
+                catalog,
+            )
+
+        self.assertIsInstance(context.exception.__cause__, ValueError)
+        self.assertEqual(
+            str(context.exception.__cause__),
+            "conflicting skills: first-conflict, second-conflict",
+        )
+
     def test_target_routes_do_not_share_mutable_containers(self):
         router = load_module("route_capabilities_isolation", ROUTER)
         routes = router.route(

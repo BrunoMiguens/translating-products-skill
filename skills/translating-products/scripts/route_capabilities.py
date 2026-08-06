@@ -363,9 +363,16 @@ def route_profile(profile: dict, catalog: dict) -> dict:
 
 def route(request: dict, catalog: dict) -> dict:
     profiles = normalize_request(request)
+    routes = []
+    for profile in profiles:
+        try:
+            routes.append(route_profile(profile, catalog))
+        except ValueError as error:
+            target_locale = profile["target_locale"]
+            raise ValueError(f"target locale {target_locale}: {error}") from error
     return {
         "schema_version": 2,
-        "routes": [route_profile(profile, catalog) for profile in profiles],
+        "routes": routes,
     }
 
 
