@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -52,6 +53,21 @@ def complete_profile(**overrides):
     }
     profile.update(overrides)
     return profile
+
+
+def routing_request(targets, *, platforms=(), domains=()):
+    return {
+        "source_locale": "en-GB",
+        "targets": targets,
+        "surfaces": ["web"],
+        "platforms": list(platforms),
+        "formats": ["html"],
+        "domains": list(domains),
+        "capabilities": [],
+        "audience": "Adults",
+        "purpose": "Product onboarding",
+        "register": "neutral product",
+    }
 
 
 def synthetic_skill(
@@ -120,6 +136,170 @@ def errors_across_hash_seeds(profile, catalog):
 
 
 class RoutingTests(unittest.TestCase):
+    def test_multi_locale_request_isolates_each_linguistic_branch(self):
+        router = load_module("route_capabilities_multi", ROUTER)
+        request = {
+            "source_locale": "en-GB",
+            "targets": [
+                {"locale": "pt-PT", "register": "familiar"},
+                {"locale": "ja-JP", "register": "polite"},
+                {
+                    "locale": "ar-SA",
+                    "register": "modern product",
+                    "scripts": ["rtl"],
+                },
+            ],
+            "surfaces": ["web"],
+            "platforms": [],
+            "formats": ["html"],
+            "domains": [],
+            "capabilities": [],
+            "audience": "Adults",
+            "purpose": "Product onboarding",
+            "register": "neutral product",
+        }
+
+        result = router.route(request, load_catalog())
+
+        self.assertEqual(result["schema_version"], 2)
+        self.assertEqual(
+            [route["target_locale"] for route in result["routes"]],
+            ["pt-PT", "ja-JP", "ar-SA"],
+        )
+        selected = {
+            route["target_locale"]: route["selected"] for route in result["routes"]
+        }
+        self.assertIn("translating-portuguese", selected["pt-PT"])
+        self.assertNotIn("translating-japanese", selected["pt-PT"])
+        self.assertIn("translating-japanese", selected["ja-JP"])
+        self.assertNotIn("translating-arabic", selected["ja-JP"])
+        self.assertIn("translating-arabic", selected["ar-SA"])
+        self.assertIn("translating-rtl", selected["ar-SA"])
+
+    def test_locale_variant_changes_profile_not_skill_family(self):
+        router = load_module("route_capabilities_variant", ROUTER)
+        pt_pt = router.route(
+            routing_request([{"locale": "pt-PT", "register": "familiar"}]),
+            load_catalog(),
+        )["routes"][0]
+        pt_br = router.route(
+            routing_request([{"locale": "pt-BR", "register": "friendly"}]),
+            load_catalog(),
+        )["routes"][0]
+
+        self.assertEqual(pt_pt["selected"], pt_br["selected"])
+        self.assertEqual(pt_pt["target_locale"], "pt-PT")
+        self.assertEqual(pt_br["target_locale"], "pt-BR")
+
+    def test_adding_ios_adds_only_declared_platform_and_dependency(self):
+        router = load_module("route_capabilities_ios_delta", ROUTER)
+        request = routing_request([{"locale": "pt-PT", "register": "familiar"}])
+        base = router.route(request, load_catalog())["routes"][0]
+        ios = router.route(
+            {**request, "platforms": ["ios"]}, load_catalog()
+        )["routes"][0]
+
+        self.assertEqual(
+            set(ios["selected"]) - set(base["selected"]),
+            {"translating-mobile", "translating-ios"},
+        )
+
+    def test_unmatched_domain_does_not_change_a_route(self):
+        router = load_module("route_capabilities_domain_delta", ROUTER)
+        targets = [{"locale": "pt-PT", "register": "familiar"}]
+        base = router.route(routing_request(targets), load_catalog())
+        changed = router.route(
+            routing_request(targets, domains=["unmatched-demo-domain"]),
+            load_catalog(),
+        )
+
+        self.assertEqual(base, changed)
+
+    def test_duplicate_normalized_target_locales_are_rejected(self):
+        router = load_module("route_capabilities_duplicates", ROUTER)
+
+        with self.assertRaisesRegex(ValueError, "duplicate target locale: pt-PT"):
+            router.route(
+                routing_request(
+                    [
+                        {"locale": "pt_pt", "register": "familiar"},
+                        {"locale": "pt-PT", "register": "familiar"},
+                    ]
+                ),
+                load_catalog(),
+            )
+
+    def test_target_routes_do_not_share_mutable_containers(self):
+        router = load_module("route_capabilities_isolation", ROUTER)
+        routes = router.route(
+            routing_request(
+                [
+                    {"locale": "pt-PT", "register": "familiar"},
+                    {"locale": "ja-JP", "register": "polite"},
+                ]
+            ),
+            load_catalog(),
+        )["routes"]
+
+        self.assertIsNot(routes[0]["selected"], routes[1]["selected"])
+        self.assertIsNot(routes[0]["reasons"], routes[1]["reasons"])
+        self.assertIsNot(routes[0]["phases"], routes[1]["phases"])
+
+    def test_all_routing_evaluations_match_exact_order(self):
+        router = load_module("route_capabilities_evaluations", ROUTER)
+        for case in load_cases("routing-cases.json"):
+            with self.subTest(case=case["id"]):
+                result = router.route(case["request"], load_catalog())
+                self.assertEqual(
+                    [
+                        {
+                            "target_locale": route["target_locale"],
+                            "selected": route["selected"],
+                        }
+                        for route in result["routes"]
+                    ],
+                    case["expected_routes"],
+                )
+
+    def test_cli_routes_one_request_json_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "request.json"
+            request_path.write_text(
+                json.dumps(
+                    routing_request([{"locale": "pt-PT", "register": "familiar"}])
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, str(ROUTER), str(request_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(
+            json.loads(completed.stdout)["routes"][0]["target_locale"], "pt-PT"
+        )
+
+    def test_cli_rejects_malformed_request_without_stdout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "request.json"
+            request_path.write_text("{}", encoding="utf-8")
+
+            completed = subprocess.run(
+                [sys.executable, str(ROUTER), str(request_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, "")
+        self.assertRegex(completed.stderr, r"^invalid request: .+\n$")
+
     def test_dependencies_expand_transitively_and_order_before_dependents(self):
         router = load_module("route_capabilities_dependencies", ROUTER)
         catalog = synthetic_catalog(

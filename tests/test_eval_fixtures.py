@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EVALS = ROOT / "evals"
 
 SCHEMAS = {
-    "routing-cases.json": {"id", "request", "expected_skills"},
+    "routing-cases.json": {"id", "request", "expected_routes"},
     "bootstrap-cases.json": {
         "id",
         "fixture",

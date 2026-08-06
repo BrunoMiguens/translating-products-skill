@@ -33,6 +33,15 @@ SPECIFICITY_ORDER = {
         )
     )
 }
+SHARED_LIST_FIELDS = (
+    "surfaces",
+    "platforms",
+    "formats",
+    "domains",
+    "capabilities",
+)
+TARGET_LIST_FIELDS = ("scripts",)
+TEXT_FIELDS = ("audience", "purpose", "register")
 MANDATORY_CAPABILITIES = ("core-translation", "translation-qa")
 
 
@@ -123,6 +132,80 @@ def _normalized_profile(profile: dict) -> dict:
         dict.fromkeys((*MANDATORY_CAPABILITIES, *normalized["capabilities"]))
     )
     return normalized
+
+
+def _nonblank_string(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+    return value
+
+
+def _string_list(value: object, field: str) -> list[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise ValueError(f"{field} must be a list of non-empty strings")
+    return list(value)
+
+
+def normalize_request(request: dict) -> tuple[dict, ...]:
+    if not isinstance(request, dict):
+        raise ValueError("request must be an object")
+
+    source_locale = normalize_locale(
+        _nonblank_string(request.get("source_locale"), "source_locale")
+    )
+    targets = request.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("targets must be a non-empty list")
+
+    shared_lists = {
+        field: _string_list(request.get(field, []), field)
+        for field in SHARED_LIST_FIELDS
+    }
+    shared_text = {
+        field: _nonblank_string(request.get(field), field) for field in TEXT_FIELDS
+    }
+    profiles = []
+    target_locales = set()
+    for target in targets:
+        if not isinstance(target, dict):
+            raise ValueError("target must be an object")
+        target_locale = normalize_locale(
+            _nonblank_string(target.get("locale"), "target locale")
+        )
+        if target_locale in target_locales:
+            raise ValueError(f"duplicate target locale: {target_locale}")
+        target_locales.add(target_locale)
+
+        target_lists = {
+            field: _string_list(target.get(field, []), field)
+            for field in TARGET_LIST_FIELDS
+        }
+        register = _nonblank_string(
+            target.get("register", shared_text["register"]), "register"
+        )
+        capabilities = list(
+            dict.fromkeys((*MANDATORY_CAPABILITIES, *shared_lists["capabilities"]))
+        )
+        profiles.append(
+            {
+                "source_locale": source_locale,
+                "target_locale": target_locale,
+                "language": language_from_locale(target_locale),
+                **{
+                    field: list(values)
+                    for field, values in shared_lists.items()
+                    if field != "capabilities"
+                },
+                **{field: list(values) for field, values in target_lists.items()},
+                "capabilities": capabilities,
+                "audience": shared_text["audience"],
+                "purpose": shared_text["purpose"],
+                "register": register,
+            }
+        )
+    return tuple(profiles)
 
 
 def matching_skill_names(
@@ -278,22 +361,30 @@ def route_profile(profile: dict, catalog: dict) -> dict:
     }
 
 
+def route(request: dict, catalog: dict) -> dict:
+    profiles = normalize_request(request)
+    return {
+        "schema_version": 2,
+        "routes": [route_profile(profile, catalog) for profile in profiles],
+    }
+
+
 def main() -> int:
     if len(sys.argv) != 2:
-        print("invalid profile: expected one profile JSON path", file=sys.stderr)
+        print("invalid request: expected one request JSON path", file=sys.stderr)
         return 2
 
     try:
-        profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+        request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
         catalog_path = (
             Path(__file__).resolve().parents[1]
             / "references"
             / "capability-catalog.json"
         )
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-        result = route_profile(profile, catalog)
+        result = route(request, catalog)
     except (OSError, ValueError, TypeError, KeyError) as error:
-        print(f"invalid profile: {error}", file=sys.stderr)
+        print(f"invalid request: {error}", file=sys.stderr)
         return 2
 
     print(json.dumps(result, ensure_ascii=False))
