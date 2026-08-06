@@ -1,0 +1,29 @@
+CONTRIBUTING.md
+  s_51f69c54a42bb0::t_3ae8b6bc553c7c 16-20,25-33,36,38-39,47-62
+  s_51f69c54a42bb0::t_95ecfa08e1e2c8 21-24
+skills/translating-products/references/compatibility-registry.json
+  s_51f69c54a42bb0::t_3ae8b6bc553c7c 2
+skills/translating-products/references/extension-contract.md
+  s_51f69c54a42bb0::t_3ae8b6bc553c7c 3-5,7,9-13,15-17,22-28,30-31,33-36,42-45,47,49-53,55,57-62
+  s_51f69c54a42bb0::t_95ecfa08e1e2c8 18-20
+skills/translating-products/SKILL.md
+  s_51f69c54a42bb0::t_3ae8b6bc553c7c 10-14,29-35,73-90,96-121
+tests/test_skill_contracts.py
+  s_51f69c54a42bb0::t_3fbc1f1dab04f1 1-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d9f1efd4d4044b4a5f0d4dd8da34ba5bbda8f615",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
