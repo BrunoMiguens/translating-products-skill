@@ -76,6 +76,8 @@ class Manifest:
 
 
 def _load_selector(raw: dict[str, object]) -> Selector:
+    if not isinstance(raw, dict):
+        raise ValueError("selector must be an object")
     unknown = sorted(set(raw) - set(ROUTING_AXES))
     if unknown:
         raise ValueError("unknown selector axes: " + ", ".join(unknown))
@@ -94,6 +96,39 @@ def _load_selector(raw: dict[str, object]) -> Selector:
     return Selector(tuple(criteria))
 
 
+def _load_string_list(
+    raw: object, field: str, *, allow_empty: bool = False
+) -> tuple[str, ...]:
+    if (
+        not isinstance(raw, list)
+        or (not allow_empty and not raw)
+        or not all(isinstance(value, str) and value.strip() for value in raw)
+    ):
+        qualifier = "string list" if allow_empty else "non-empty string list"
+        raise ValueError(f"{field} must be a {qualifier}")
+    return tuple(raw)
+
+
+def _load_phases(raw: object) -> tuple[str, ...]:
+    phases = _load_string_list(raw, "phases")
+    unknown = sorted(set(phases) - set(ROUTING_PHASES))
+    if unknown:
+        raise ValueError("unknown routing phases: " + ", ".join(unknown))
+    return phases
+
+
+def _load_specificity(raw: object) -> str:
+    if not isinstance(raw, str) or raw not in SPECIFICITIES:
+        raise ValueError("specificity must be one of: " + ", ".join(SPECIFICITIES))
+    return raw
+
+
+def _load_selectors(raw: object) -> tuple[Selector, ...]:
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("selectors must be a non-empty selector list")
+    return tuple(_load_selector(selector) for selector in raw)
+
+
 def load_manifest(path: Path) -> Manifest:
     raw = json.loads(path.read_text(encoding="utf-8"))
     skills = tuple(
@@ -104,12 +139,18 @@ def load_manifest(path: Path) -> Manifest:
             description=item["description"],
             capabilities=tuple(item["capabilities"]),
             depends_on=tuple(item["depends_on"]),
-            selectors=tuple(_load_selector(selector) for selector in item["selectors"]),
-            phases=tuple(item["phases"]),
-            specificity=item["specificity"],
-            required_context=tuple(item["required_context"]),
-            conflicts=tuple(item["conflicts"]),
-            supersedes=tuple(item["supersedes"]),
+            selectors=_load_selectors(item["selectors"]),
+            phases=_load_phases(item["phases"]),
+            specificity=_load_specificity(item["specificity"]),
+            required_context=_load_string_list(
+                item["required_context"], "required_context", allow_empty=True
+            ),
+            conflicts=_load_string_list(
+                item["conflicts"], "conflicts", allow_empty=True
+            ),
+            supersedes=_load_string_list(
+                item["supersedes"], "supersedes", allow_empty=True
+            ),
         )
         for item in raw["skills"]
     )

@@ -1,3 +1,5 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -8,6 +10,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ManifestTests(unittest.TestCase):
+    def assert_manifest_rejected(self, field: str, value: object, message: str):
+        manifest = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )
+        manifest["skills"][0][field] = value
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "skills-manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, message):
+                load_manifest(path)
+
     def test_manifest_has_expected_suite_and_orchestrator(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")
         self.assertEqual(manifest.schema_version, 2)
@@ -60,6 +73,31 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(portuguese.specificity, "language")
         self.assertEqual(review.phases, ("review",))
         self.assertEqual(review.specificity, "quality")
+
+    def test_manifest_rejects_invalid_routing_phases(self):
+        self.assert_manifest_rejected(
+            "phases", [], "phases must be a non-empty string list"
+        )
+        self.assert_manifest_rejected(
+            "phases", ["route"], "unknown routing phases: route"
+        )
+
+    def test_manifest_rejects_invalid_routing_specificity(self):
+        self.assert_manifest_rejected(
+            "specificity",
+            "unsupported",
+            "specificity must be one of: universal, writing-system, language, locale, surface, platform, format, domain, quality",
+        )
+
+    def test_manifest_rejects_malformed_routing_collections(self):
+        for field, value, message in (
+            ("selectors", [], "selectors must be a non-empty selector list"),
+            ("required_context", "target_locale", "required_context must be a string list"),
+            ("conflicts", [""], "conflicts must be a string list"),
+            ("supersedes", [1], "supersedes must be a string list"),
+        ):
+            with self.subTest(field=field):
+                self.assert_manifest_rejected(field, value, message)
 
     def test_every_source_is_pinned_and_checksumed(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")
