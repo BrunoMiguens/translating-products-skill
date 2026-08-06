@@ -1,0 +1,21 @@
+tests/test_routing.py
+  s_51f69c54a42bb0::t_41b50be417bcb7 4-7,57-121,123-252
+skills/translating-products/scripts/route_capabilities.py
+  s_51f69c54a42bb0::t_3f09ee9d987dfd 150,185-212,254,256-258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a6f481615e61b13e8b6a975b467c71eb7ed4ec73",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
