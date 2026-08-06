@@ -58,12 +58,26 @@ EXTERNAL_SKILL_FIELDS = frozenset(
         "required_context",
         "conflicts",
         "supersedes",
+        "ownership",
     )
 )
-EXTERNAL_OPTIONAL_FIELDS = frozenset(("ownership",))
+EXTERNAL_OPTIONAL_FIELDS = frozenset()
 EXTERNAL_AUTHORIZATION_FIELDS = (
     "authorized_external_skills",
     "project_authorized_external_skills",
+)
+REGISTRY_FIELDS = frozenset(
+    (
+        "name",
+        "version_constraint",
+        "compatible_orchestrator_version",
+        "capabilities",
+        "authority_scope",
+        "dependencies",
+        "conflicts",
+        "evaluation_evidence",
+        "review_date",
+    )
 )
 
 
@@ -202,19 +216,7 @@ def validate_external_catalog(catalog: object) -> list[dict]:
             raise ValueError(
                 f"external skill {name} has unknown phases: {', '.join(unknown_phases)}"
             )
-        ownership = item.get("ownership")
-        if item["supersedes"] and not ownership:
-            raise ValueError(
-                f"external skill {name} must declare ownership when superseding"
-            )
-        if ownership is not None:
-            ownership = _external_string_list(ownership, "ownership", name)
-            unknown_ownership = sorted(set(ownership) - set(item["capabilities"]))
-            if unknown_ownership:
-                raise ValueError(
-                    f"external skill {name} owns undeclared capabilities: "
-                    + ", ".join(unknown_ownership)
-                )
+        _ownership_map(item, name)
     return skills
 
 
@@ -235,21 +237,144 @@ def _authorization_names(request: dict, registry: object) -> set[str]:
     for entry in entries:
         if not isinstance(entry, dict):
             raise ValueError("compatibility registry skill must be an object")
+        missing = sorted(REGISTRY_FIELDS - set(entry))
+        if missing:
+            raise ValueError(
+                "compatibility registry skill is missing fields: " + ", ".join(missing)
+            )
+        unknown = sorted(set(entry) - REGISTRY_FIELDS)
+        if unknown:
+            raise ValueError(
+                "compatibility registry skill has unknown fields: " + ", ".join(unknown)
+            )
         name = entry.get("name")
         if not isinstance(name, str) or not name.strip():
             raise ValueError("compatibility registry skill name must be a non-empty string")
+        for field in (
+            "version_constraint",
+            "compatible_orchestrator_version",
+            "review_date",
+        ):
+            if not isinstance(entry[field], str) or not entry[field].strip():
+                raise ValueError(f"compatibility registry skill {name} has invalid {field}")
+        for field in (
+            "capabilities",
+            "authority_scope",
+            "dependencies",
+            "conflicts",
+            "evaluation_evidence",
+        ):
+            values = _external_string_list(entry[field], field, name)
+            if field in {"capabilities", "authority_scope", "evaluation_evidence"} and not values:
+                raise ValueError(f"compatibility registry skill {name} has empty {field}")
         authorized.add(name)
     return authorized
 
 
+def _validate_merged_relationships(skills: list[dict], external_names: set[str]) -> None:
+    by_name = {skill["name"]: skill for skill in skills}
+    for name in sorted(external_names):
+        skill = by_name[name]
+        for field in ("depends_on", "conflicts", "supersedes"):
+            for target in sorted(set(skill[field])):
+                if target not in by_name:
+                    raise ValueError(f"external skill {name} has unknown {field}: {target}")
+                if target == name:
+                    raise ValueError(f"external skill {name} cannot {field} itself")
+        for dependency in skill["depends_on"]:
+            if min(PHASES.index(phase) for phase in by_name[dependency]["phases"]) > min(
+                PHASES.index(phase) for phase in skill["phases"]
+            ):
+                raise ValueError(
+                    f"external skill {name} depends on later-phase skill: {dependency}"
+                )
+
+    graph = {
+        name: tuple(by_name[name]["depends_on"] + by_name[name]["supersedes"])
+        for name in by_name
+    }
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visiting:
+            raise ValueError(f"relationship cycle: {name}")
+        if name in visited:
+            return
+        visiting.add(name)
+        for target in sorted(graph[name]):
+            visit(target)
+        visiting.remove(name)
+        visited.add(name)
+
+    for name in sorted(graph):
+        visit(name)
+
+
+def _frontmatter_values(path: Path) -> dict[str, str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0] != "---":
+        raise ValueError(f"installed skill has invalid frontmatter: {path.name}")
+    values: dict[str, str] = {}
+    for line in lines[1:]:
+        if line == "---":
+            return values
+        if ":" not in line:
+            raise ValueError(f"installed skill has invalid frontmatter: {path.name}")
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip()
+    raise ValueError(f"installed skill has invalid frontmatter: {path.name}")
+
+
+def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> None:
+    name = skill["name"]
+    if Path(name).name != name or name in {"", ".", ".."}:
+        raise ValueError(f"external skill has unsafe name: {name}")
+    matches: list[Path] = []
+    for root in installed_roots:
+        try:
+            resolved_root = root.resolve(strict=True)
+        except OSError:
+            raise ValueError(f"installed root is unavailable: {root}") from None
+        candidate = resolved_root / name
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        skill_path = candidate / "SKILL.md"
+        manifest_path = candidate / "capability-manifest.json"
+        if skill_path.is_symlink() or manifest_path.is_symlink():
+            continue
+        if skill_path.is_file() and manifest_path.is_file():
+            matches.append(candidate)
+    if not matches:
+        raise ValueError(f"external skill is not installed: {name}")
+    if len(matches) != 1:
+        raise ValueError(f"external skill installation is ambiguous: {name}")
+    installed = matches[0]
+    frontmatter = _frontmatter_values(installed / "SKILL.md")
+    if frontmatter.get("name") != name or frontmatter.get("description") != skill["description"]:
+        raise ValueError(f"installed skill identity does not match catalog: {name}")
+    manifest = json.loads((installed / "capability-manifest.json").read_text(encoding="utf-8"))
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 2
+        or manifest.get("skill") != skill
+    ):
+        raise ValueError(f"installed skill manifest does not match catalog: {name}")
+
+
 def merge_external_catalogs(
-    bundled_catalog: dict, external_catalogs: list[object], request: dict, registry: object
+    bundled_catalog: dict,
+    external_catalogs: list[object],
+    request: dict,
+    registry: object,
+    installed_roots: list[Path],
 ) -> dict:
     """Merge authorized installed external records without changing bundled precedence."""
     authorized = _authorization_names(request, registry)
     merged = dict(bundled_catalog)
     merged_skills = list(bundled_catalog["skills"])
     known_names = {item["name"] for item in merged_skills}
+    external_names: set[str] = set()
     for external_catalog in external_catalogs:
         for skill in validate_external_catalog(external_catalog):
             name = skill["name"]
@@ -257,9 +382,12 @@ def merge_external_catalogs(
                 raise ValueError(f"unauthorized external skill: {name}")
             if name in known_names:
                 raise ValueError(f"duplicate external skill name: {name}")
+            _verify_installed_skill(skill, installed_roots)
             known_names.add(name)
+            external_names.add(name)
             merged_skills.append(skill)
     merged["skills"] = merged_skills
+    _validate_merged_relationships(merged_skills, external_names)
     return merged
 
 
@@ -397,8 +525,26 @@ def expand_dependencies(
                 pending.append(dependency)
 
 
-def _ownership(skill: dict) -> set[str]:
-    return set(skill.get("ownership", skill["capabilities"]))
+def _ownership_map(skill: dict, name: str | None = None) -> dict[str, set[str]]:
+    raw = skill.get("ownership")
+    if raw is None:
+        return {capability: set(skill["phases"]) for capability in skill["capabilities"]}
+    label = name or skill["name"]
+    if not isinstance(raw, dict) or set(raw) != set(skill["capabilities"]):
+        raise ValueError(
+            f"external skill {label} ownership must map every declared capability"
+        )
+    ownership = {}
+    for capability, phases in raw.items():
+        if not isinstance(capability, str) or capability not in skill["capabilities"]:
+            raise ValueError(f"external skill {label} owns undeclared capability")
+        values = _external_string_list(phases, "ownership phases", label)
+        if not values or not set(values).issubset(skill["phases"]):
+            raise ValueError(
+                f"external skill {label} ownership phases must be declared phases"
+            )
+        ownership[capability] = set(values)
+    return ownership
 
 
 def apply_supersedes(
@@ -420,12 +566,22 @@ def apply_supersedes(
                 by_name[target]["specificity"]
             ]:
                 raise ValueError(f"invalid supersedes specificity: {name}, {target}")
-            shared_ownership = sorted(_ownership(by_name[name]) & _ownership(by_name[target]))
+            replacement_ownership = _ownership_map(by_name[name])
+            target_ownership = _ownership_map(by_name[target])
+            shared_ownership = {
+                capability: sorted(replacement_ownership[capability] & phases)
+                for capability, phases in target_ownership.items()
+                if capability in replacement_ownership
+                and replacement_ownership[capability] & phases
+            }
             if not shared_ownership:
                 raise ValueError(
                     f"supersedes without shared ownership: {name}, {target}"
                 )
-            if _ownership(by_name[target]).issubset(_ownership(by_name[name])):
+            if all(
+                set(phases).issubset(replacement_ownership.get(capability, set()))
+                for capability, phases in target_ownership.items()
+            ):
                 removed.add(target)
                 reasons[name].append(f"supersedes:{target}")
             else:
@@ -433,7 +589,11 @@ def apply_supersedes(
                     {"skill": target, "ownership": shared_ownership}
                 )
                 reasons[name].append(
-                    f"refines:{target}:{','.join(shared_ownership)}"
+                    f"refines:{target}:"
+                    + ",".join(
+                        f"{capability}@{'/'.join(phases)}"
+                        for capability, phases in sorted(shared_ownership.items())
+                    )
                 )
     return selected - removed, ownership_overrides
 
@@ -567,6 +727,13 @@ def main() -> int:
         metavar="PATH",
         help="reviewed schema-2 registry that authorizes installed external skills",
     )
+    parser.add_argument(
+        "--installed-root",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="root containing installed <skill-name>/SKILL.md and capability-manifest.json",
+    )
     arguments = parser.parse_args()
 
     try:
@@ -587,7 +754,11 @@ def main() -> int:
             else None
         )
         admitted_catalog = merge_external_catalogs(
-            catalog, external_catalogs, request, registry
+            catalog,
+            external_catalogs,
+            request,
+            registry,
+            [Path(path) for path in arguments.installed_root],
         )
         result = route(request, admitted_catalog)
     except (OSError, ValueError, TypeError, KeyError) as error:

@@ -135,6 +135,7 @@ def skill(
         required_context=required_context,
         conflicts=conflicts,
         supersedes=supersedes,
+        ownership=(("capability:test", phases),),
     )
 
 

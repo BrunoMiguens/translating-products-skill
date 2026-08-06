@@ -99,7 +99,9 @@ def synthetic_skill(
         "supersedes": list(supersedes),
     }
     if ownership is not None:
-        skill["ownership"] = list(ownership)
+        skill["ownership"] = {
+            capability: list(phases) for capability in ownership
+        }
     return skill
 
 
@@ -534,7 +536,10 @@ class RoutingTests(unittest.TestCase):
             result["ownership_overrides"],
             {
                 "narrower-locale": [
-                    {"skill": "broader-language", "ownership": ["grammar"]}
+                    {
+                        "skill": "broader-language",
+                        "ownership": {"grammar": ["refine"]},
+                    }
                 ]
             },
         )
@@ -565,6 +570,34 @@ class RoutingTests(unittest.TestCase):
 
         self.assertEqual(result["selected"], ["narrower-locale"])
         self.assertEqual(result["ownership_overrides"], {})
+
+    def test_refine_only_replacement_preserves_broader_inspection(self):
+        router = load_module("route_capabilities_phase_scoped_ownership", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "broader-surface",
+                capabilities=("structure",),
+                selectors=({"domains": ["ownership-demo"]},),
+                phases=("inspect", "refine"),
+            ),
+            synthetic_skill(
+                "narrower-locale",
+                capabilities=("structure",),
+                ownership=("structure",),
+                selectors=({"domains": ["ownership-demo"]},),
+                specificity="locale",
+                supersedes=("broader-surface",),
+            ),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["ownership-demo"]), catalog
+        )
+
+        self.assertEqual(result["phases"]["inspect"], ["broader-surface"])
+        self.assertEqual(
+            result["phases"]["refine"], ["broader-surface", "narrower-locale"]
+        )
 
     def test_unrelated_ownership_cannot_declare_supersession(self):
         router = load_module("route_capabilities_unrelated_ownership", ROUTER)

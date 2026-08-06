@@ -25,11 +25,12 @@ writing-system, language, locale, surface, platform, format, domain, or
 quality). `required_context` lists profile fields that must be resolved before
 the skill runs. `conflicts` lists incompatible specialists. `supersedes` is
 only for an explicit replacement of broader guidance. A skill that declares
-`supersedes` must also declare a non-empty `ownership` list, whose values are
-declared capabilities. The router applies replacement only to the shared
-ownership. It removes the broader module only when all of that module's
-ownership is covered; otherwise it keeps the broader module and returns the
-scoped override plan. Unrelated capabilities and dependencies remain active.
+`supersedes` must also declare `ownership` as a map from every declared
+capability to the non-empty subset of declared phases it owns. The router
+applies replacement only to shared capability-and-phase slices. It removes the
+broader module only when every one of those slices is covered; otherwise it
+keeps the broader module and returns the scoped override plan. Unrelated
+capabilities, phases, and dependencies remain active.
 
 Ignore an external candidate when any required metadata is missing, ambiguous,
 invalid, or conflicts cannot be resolved deterministically.
@@ -49,10 +50,17 @@ schema-`2` catalog or manifest through the portable public CLI:
 ```bash
 python3 route_capabilities.py REQUEST_JSON \
   --external-catalog INSTALLED_CATALOG_OR_MANIFEST.json \
+  --installed-root PORTABLE_INSTALLED_SKILLS_ROOT \
   --compatibility-registry compatibility-registry.json
 ```
 
 Repeat `--external-catalog` in the desired deterministic input order. The
+corresponding installed root contains `<skill-name>/SKILL.md` with matching
+portable `name` and `description` frontmatter plus a matching
+`capability-manifest.json` identity record; the router rejects symlinked,
+missing, ambiguous, or mismatched installations.
+
+The
 request authorizes names with `authorized_external_skills` for an explicit user
 selection or `project_authorized_external_skills` for approved project context;
 the registry is the third authorization channel. Bundled entries keep their
@@ -72,9 +80,10 @@ prompts, expected answers, or disguised answer tables fails validation.
 
 ## Reviewed registry entries
 
-Contributors add an entry only after review. Each entry records the installed
-skill name, version constraint, compatible orchestrator version, capabilities,
-authority scope, dependencies, conflicts, evaluation evidence, and review
-date. Reviewers verify metadata validity, catalog-only selection, dependency
-and conflict behavior, authority boundaries, representative evaluation output,
-and host neutrality before accepting an entry.
+Contributors add an entry only after review. Each entry contains exactly
+`name`, `version_constraint`, `compatible_orchestrator_version`,
+`capabilities`, `authority_scope`, `dependencies`, `conflicts`,
+`evaluation_evidence`, and `review_date`. Reviewers verify metadata validity,
+installation identity, dependency and conflict behavior, authority boundaries,
+representative evaluation output, and host neutrality before accepting an
+entry.

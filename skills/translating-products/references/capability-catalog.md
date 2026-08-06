@@ -26,6 +26,7 @@ Suite version: `0.2.0`
 - Required context: none
 - Conflicts: none
 - Supersedes: none
+- Ownership: `orchestrator`: `inspect`; `project-bootstrap`: `inspect`; `skill-routing`: `inspect`; `subagent-routing`: `inspect`
 
 ## core
 
@@ -41,6 +42,7 @@ Suite version: `0.2.0`
 - Required context: `source_locale`, `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `core-translation`: `translate`; `terminology`: `translate`; `cultural-adaptation`: `translate`; `structural-fidelity`: `translate`
 
 ## quality
 
@@ -56,6 +58,7 @@ Suite version: `0.2.0`
 - Required context: `source_locale`, `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `translation-qa`: `review`; `terminology-qa`: `review`; `structural-qa`: `review`
 
 ## surface
 
@@ -71,6 +74,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `surface:web`: `inspect`, `integrate`; `html`: `inspect`, `integrate`; `markdown`: `inspect`, `integrate`; `accessibility`: `inspect`, `integrate`; `hreflang`: `inspect`, `integrate`
 
 ### localizing-software
 
@@ -84,6 +88,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `surface:software`: `inspect`, `integrate`; `icu`: `inspect`, `integrate`; `placeholders`: `inspect`, `integrate`; `plurals`: `inspect`, `integrate`; `locale-formatting`: `inspect`, `integrate`
 
 ### translating-mobile
 
@@ -97,6 +102,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `surface:mobile`: `inspect`, `integrate`; `mobile-ui`: `inspect`, `integrate`; `accessibility`: `inspect`, `integrate`; `pseudo-localization`: `inspect`, `integrate`
 
 ## platform
 
@@ -112,6 +118,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `platform:ios`: `inspect`, `integrate`; `xcstrings`: `inspect`, `integrate`; `swiftui`: `inspect`, `integrate`; `apple-locales`: `inspect`, `integrate`
 
 ### translating-android
 
@@ -125,6 +132,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `platform:android`: `inspect`, `integrate`; `string-resources`: `inspect`, `integrate`; `compose`: `inspect`, `integrate`; `android-locales`: `inspect`, `integrate`
 
 ### translating-flutter
 
@@ -138,6 +146,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `platform:flutter`: `inspect`, `integrate`; `arb`: `inspect`, `integrate`; `flutter-localizations`: `inspect`, `integrate`; `icu`: `inspect`, `integrate`
 
 ## surface
 
@@ -153,6 +162,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `surface:app-store`: `inspect`, `integrate`; `surface:play-store`: `inspect`, `integrate`; `aso`: `inspect`, `integrate`; `store-metadata`: `inspect`, `integrate`
 
 ### translating-marketing
 
@@ -166,6 +176,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `audience`, `purpose`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `surface:marketing`: `inspect`, `integrate`; `transcreation`: `inspect`, `integrate`; `brand-voice`: `inspect`, `integrate`; `calls-to-action`: `inspect`, `integrate`
 
 ### translating-documentation
 
@@ -179,6 +190,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `surface:documentation`: `inspect`, `integrate`; `code-preservation`: `inspect`, `integrate`; `technical-terminology`: `inspect`, `integrate`
 
 ## script
 
@@ -194,6 +206,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `script:rtl`: `refine`, `integrate`; `bidi`: `refine`, `integrate`; `mirroring`: `refine`, `integrate`; `mixed-direction`: `refine`, `integrate`
 
 ## language
 
@@ -209,6 +222,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:arabic`: `refine`; `locale:ar`: `refine`
 
 ### translating-hebrew
 
@@ -222,6 +236,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:hebrew`: `refine`; `locale:he`: `refine`
 
 ### translating-japanese
 
@@ -235,6 +250,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:japanese`: `refine`; `locale:ja`: `refine`
 
 ### translating-chinese
 
@@ -248,6 +264,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:chinese`: `refine`; `locale:zh-Hans`: `refine`; `locale:zh-Hant`: `refine`
 
 ### translating-korean
 
@@ -261,6 +278,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:korean`: `refine`; `locale:ko`: `refine`
 
 ### translating-portuguese
 
@@ -274,6 +292,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:portuguese`: `refine`; `locale:pt-BR`: `refine`; `locale:pt-PT`: `refine`
 
 ### translating-spanish
 
@@ -287,6 +306,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:spanish`: `refine`; `locale:es-ES`: `refine`; `locale:es-419`: `refine`
 
 ### translating-french
 
@@ -300,6 +320,7 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:french`: `refine`; `locale:fr-FR`: `refine`; `locale:fr-CA`: `refine`
 
 ### translating-german
 
@@ -313,3 +334,4 @@ Suite version: `0.2.0`
 - Required context: `target_locale`, `register`
 - Conflicts: none
 - Supersedes: none
+- Ownership: `language:german`: `refine`; `locale:de-DE`: `refine`; `locale:de-AT`: `refine`; `locale:de-CH`: `refine`

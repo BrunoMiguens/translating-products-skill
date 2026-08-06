@@ -40,6 +40,7 @@ ROUTING_FIELDS = (
     "required_context",
     "conflicts",
     "supersedes",
+    "ownership",
 )
 
 
@@ -78,7 +79,17 @@ def _catalog_from_manifest(manifest: dict) -> dict:
         "schema_version": 2,
         "suite_version": manifest["suite_version"],
         "skills": [
-            {field: item[field] for field in ROUTING_FIELDS}
+            {
+                field: (
+                    item.get(
+                        "ownership",
+                        {capability: item["phases"] for capability in item["capabilities"]},
+                    )
+                    if field == "ownership"
+                    else item[field]
+                )
+                for field in ROUTING_FIELDS
+            }
             for item in manifest["skills"]
         ],
     }
@@ -127,6 +138,10 @@ def _render_markdown(catalog: dict) -> str:
         supersedes = ", ".join(
             f"`{skill}`" for skill in item["supersedes"]
         ) or "none"
+        ownership = "; ".join(
+            f"`{capability}`: {', '.join(f'`{phase}`' for phase in phases)}"
+            for capability, phases in item["ownership"].items()
+        ) or "none"
         lines.extend(
             (
                 f"### {item['name']}",
@@ -141,6 +156,7 @@ def _render_markdown(catalog: dict) -> str:
                 f"- Required context: {required_context}",
                 f"- Conflicts: {conflicts}",
                 f"- Supersedes: {supersedes}",
+                f"- Ownership: {ownership}",
                 "",
             )
         )

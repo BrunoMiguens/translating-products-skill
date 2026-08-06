@@ -50,6 +50,7 @@ class SkillRecord:
     required_context: tuple[str, ...]
     conflicts: tuple[str, ...]
     supersedes: tuple[str, ...]
+    ownership: tuple[tuple[str, tuple[str, ...]], ...]
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,21 @@ def _load_selectors(raw: object) -> tuple[Selector, ...]:
     return tuple(_load_selector(selector) for selector in raw)
 
 
+def _load_ownership(item: dict[str, object], capabilities: tuple[str, ...], phases: tuple[str, ...]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    raw = item.get("ownership")
+    if raw is None:
+        return tuple((capability, phases) for capability in capabilities)
+    if not isinstance(raw, dict) or set(raw) != set(capabilities):
+        raise ValueError("ownership must map every declared capability")
+    ownership = []
+    for capability in capabilities:
+        values = _load_string_list(raw[capability], "ownership phases")
+        if not set(values).issubset(phases):
+            raise ValueError("ownership phases must be declared phases")
+        ownership.append((capability, values))
+    return tuple(ownership)
+
+
 def load_manifest(path: Path) -> Manifest:
     raw = json.loads(path.read_text(encoding="utf-8"))
     skills = tuple(
@@ -150,6 +166,11 @@ def load_manifest(path: Path) -> Manifest:
             ),
             supersedes=_load_string_list(
                 item["supersedes"], "supersedes", allow_empty=True
+            ),
+            ownership=_load_ownership(
+                item,
+                tuple(item["capabilities"]),
+                _load_phases(item["phases"]),
             ),
         )
         for item in raw["skills"]

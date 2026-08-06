@@ -86,6 +86,7 @@ class CatalogTests(unittest.TestCase):
                 "required_context",
                 "conflicts",
                 "supersedes",
+                "ownership",
             },
         )
 

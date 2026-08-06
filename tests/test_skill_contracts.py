@@ -40,7 +40,24 @@ def external_skill(name: str) -> dict:
         "required_context": ["target_locale"],
         "conflicts": [],
         "supersedes": [],
+        "ownership": {f"external:{name}": ["refine"]},
     }
+
+
+def write_installed_skill(root: Path, skill: dict) -> None:
+    skill_root = root / skill["name"]
+    skill_root.mkdir(parents=True)
+    skill_root.joinpath("SKILL.md").write_text(
+        "---\n"
+        f"name: {skill['name']}\n"
+        f"description: {skill['description']}\n"
+        "---\n\n"
+        "# Installed specialist\n",
+        encoding="utf-8",
+    )
+    skill_root.joinpath("capability-manifest.json").write_text(
+        json.dumps({"schema_version": 2, "skill": skill}), encoding="utf-8"
+    )
 
 
 class SkillContractTests(unittest.TestCase):
@@ -67,6 +84,22 @@ class SkillContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            missing_installation = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROUTER),
+                    str(request_path),
+                    "--external-catalog",
+                    str(first_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            installed_root = root / "installed"
+            write_installed_skill(installed_root, first)
+            write_installed_skill(installed_root, second)
+
             result = subprocess.run(
                 [
                     sys.executable,
@@ -76,12 +109,16 @@ class SkillContractTests(unittest.TestCase):
                     str(first_path),
                     "--external-catalog",
                     str(second_path),
+                    "--installed-root",
+                    str(installed_root),
                 ],
                 capture_output=True,
                 text=True,
                 check=False,
             )
 
+        self.assertEqual(missing_installation.returncode, 2)
+        self.assertIn("external skill is not installed: external-first", missing_installation.stderr)
         self.assertEqual(result.returncode, 0, result.stderr)
         route = json.loads(result.stdout)["routes"][0]
         self.assertEqual(

@@ -30,7 +30,21 @@
       "specificity": "universal",
       "required_context": [],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "orchestrator": [
+          "inspect"
+        ],
+        "project-bootstrap": [
+          "inspect"
+        ],
+        "skill-routing": [
+          "inspect"
+        ],
+        "subagent-routing": [
+          "inspect"
+        ]
+      }
     },
     {
       "name": "translating-core",
@@ -62,7 +76,21 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "core-translation": [
+          "translate"
+        ],
+        "terminology": [
+          "translate"
+        ],
+        "cultural-adaptation": [
+          "translate"
+        ],
+        "structural-fidelity": [
+          "translate"
+        ]
+      }
     },
     {
       "name": "reviewing-translations",
@@ -91,7 +119,18 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "translation-qa": [
+          "review"
+        ],
+        "terminology-qa": [
+          "review"
+        ],
+        "structural-qa": [
+          "review"
+        ]
+      }
     },
     {
       "name": "translating-web",
@@ -131,7 +170,29 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "surface:web": [
+          "inspect",
+          "integrate"
+        ],
+        "html": [
+          "inspect",
+          "integrate"
+        ],
+        "markdown": [
+          "inspect",
+          "integrate"
+        ],
+        "accessibility": [
+          "inspect",
+          "integrate"
+        ],
+        "hreflang": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "localizing-software",
@@ -172,7 +233,29 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "surface:software": [
+          "inspect",
+          "integrate"
+        ],
+        "icu": [
+          "inspect",
+          "integrate"
+        ],
+        "placeholders": [
+          "inspect",
+          "integrate"
+        ],
+        "plurals": [
+          "inspect",
+          "integrate"
+        ],
+        "locale-formatting": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-mobile",
@@ -205,7 +288,25 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "surface:mobile": [
+          "inspect",
+          "integrate"
+        ],
+        "mobile-ui": [
+          "inspect",
+          "integrate"
+        ],
+        "accessibility": [
+          "inspect",
+          "integrate"
+        ],
+        "pseudo-localization": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-ios",
@@ -243,7 +344,25 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "platform:ios": [
+          "inspect",
+          "integrate"
+        ],
+        "xcstrings": [
+          "inspect",
+          "integrate"
+        ],
+        "swiftui": [
+          "inspect",
+          "integrate"
+        ],
+        "apple-locales": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-android",
@@ -281,7 +400,25 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "platform:android": [
+          "inspect",
+          "integrate"
+        ],
+        "string-resources": [
+          "inspect",
+          "integrate"
+        ],
+        "compose": [
+          "inspect",
+          "integrate"
+        ],
+        "android-locales": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-flutter",
@@ -319,7 +456,25 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "platform:flutter": [
+          "inspect",
+          "integrate"
+        ],
+        "arb": [
+          "inspect",
+          "integrate"
+        ],
+        "flutter-localizations": [
+          "inspect",
+          "integrate"
+        ],
+        "icu": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-app-stores",
@@ -353,7 +508,25 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "surface:app-store": [
+          "inspect",
+          "integrate"
+        ],
+        "surface:play-store": [
+          "inspect",
+          "integrate"
+        ],
+        "aso": [
+          "inspect",
+          "integrate"
+        ],
+        "store-metadata": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-marketing",
@@ -388,7 +561,25 @@
         "purpose"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "surface:marketing": [
+          "inspect",
+          "integrate"
+        ],
+        "transcreation": [
+          "inspect",
+          "integrate"
+        ],
+        "brand-voice": [
+          "inspect",
+          "integrate"
+        ],
+        "calls-to-action": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-documentation",
@@ -420,7 +611,21 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "surface:documentation": [
+          "inspect",
+          "integrate"
+        ],
+        "code-preservation": [
+          "inspect",
+          "integrate"
+        ],
+        "technical-terminology": [
+          "inspect",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-rtl",
@@ -458,7 +663,25 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "script:rtl": [
+          "refine",
+          "integrate"
+        ],
+        "bidi": [
+          "refine",
+          "integrate"
+        ],
+        "mirroring": [
+          "refine",
+          "integrate"
+        ],
+        "mixed-direction": [
+          "refine",
+          "integrate"
+        ]
+      }
     },
     {
       "name": "translating-arabic",
@@ -490,7 +713,15 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:arabic": [
+          "refine"
+        ],
+        "locale:ar": [
+          "refine"
+        ]
+      }
     },
     {
       "name": "translating-hebrew",
@@ -522,7 +753,15 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:hebrew": [
+          "refine"
+        ],
+        "locale:he": [
+          "refine"
+        ]
+      }
     },
     {
       "name": "translating-japanese",
@@ -553,7 +792,15 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:japanese": [
+          "refine"
+        ],
+        "locale:ja": [
+          "refine"
+        ]
+      }
     },
     {
       "name": "translating-chinese",
@@ -585,7 +832,18 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:chinese": [
+          "refine"
+        ],
+        "locale:zh-Hans": [
+          "refine"
+        ],
+        "locale:zh-Hant": [
+          "refine"
+        ]
+      }
     },
     {
       "name": "translating-korean",
@@ -616,7 +874,15 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:korean": [
+          "refine"
+        ],
+        "locale:ko": [
+          "refine"
+        ]
+      }
     },
     {
       "name": "translating-portuguese",
@@ -648,7 +914,18 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:portuguese": [
+          "refine"
+        ],
+        "locale:pt-BR": [
+          "refine"
+        ],
+        "locale:pt-PT": [
+          "refine"
+        ]
+      }
     },
     {
       "name": "translating-spanish",
@@ -680,7 +957,18 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:spanish": [
+          "refine"
+        ],
+        "locale:es-ES": [
+          "refine"
+        ],
+        "locale:es-419": [
+          "refine"
+        ]
+      }
     },
     {
       "name": "translating-french",
@@ -712,7 +1000,18 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:french": [
+          "refine"
+        ],
+        "locale:fr-FR": [
+          "refine"
+        ],
+        "locale:fr-CA": [
+          "refine"
+        ]
+      }
     },
     {
       "name": "translating-german",
@@ -745,7 +1044,21 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "ownership": {
+        "language:german": [
+          "refine"
+        ],
+        "locale:de-DE": [
+          "refine"
+        ],
+        "locale:de-AT": [
+          "refine"
+        ],
+        "locale:de-CH": [
+          "refine"
+        ]
+      }
     }
   ]
 }
