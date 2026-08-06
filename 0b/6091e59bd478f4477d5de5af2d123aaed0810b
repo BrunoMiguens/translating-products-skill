@@ -1,0 +1,35 @@
+scripts/repo_model.py
+  s_51f69c54a42bb0::t_4a1d2a4d303184 8-38,47-52,78-96,107-112
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_67c907908ab219 7,101-102,110-122,130-135
+scripts/render_catalog.py
+  s_51f69c54a42bb0::t_4a1d2a4d303184 30-42,77,80
+  s_51f69c54a42bb0::t_f5d6f97de0f931 101-115,117-142,144
+tests/test_catalog.py
+  s_51f69c54a42bb0::t_67c907908ab219 73,76-88
+tests/test_manifest.py
+  s_51f69c54a42bb0::t_67c907908ab219 13-14,31-62
+  s_51f69c54a42bb0::t_dda8f6fa467027 63
+skills-manifest.json
+  s_51f69c54a42bb0::t_c43cf32bbc46b4 2-3,31,34-57,64-89,96-118,125-158,165-199,206-232,239-270,277-308,315-346,353-380,387-415,422-447,454-485,492-517,524-549,556-580,587-612,619-643,650-675,682-707,714-739,746-772,784-788,799-804,815-819,830-834,845-850,861-865,876-880
+skills/translating-products/references/capability-catalog.json
+  s_51f69c54a42bb0::t_a99d1361cac1b5 2-3,7,18-32,46-63,74-91,107-130,146-170,185-202,217-239,254-276,291-313,328-346,361-380,394-411,426-448,462-479,493-510,523-540,554-571,584-601,615-632,646-663,677-694,709-726
+skills/translating-products/references/capability-catalog.md
+  s_51f69c54a42bb0::t_5a5460393fcd70 3,19,22-27,36-41,50-55,64-69,76-81,88-93,102-107,114-119,126-169,178-183,192-197,204-209,216-221,228-233,240-245,252-257,264-269,276-281,288-293
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0b6091e59bd478f4477d5de5af2d123aaed0810b",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
