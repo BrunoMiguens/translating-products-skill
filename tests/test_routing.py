@@ -1,8 +1,6 @@
 import importlib.util
+import ast
 import json
-import subprocess
-import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -32,139 +30,126 @@ def load_cases(name: str) -> list[dict]:
     return json.loads((EVALS / name).read_text(encoding="utf-8"))
 
 
+def complete_profile(**overrides):
+    target_locale = overrides.pop("target_locale", "pt-PT")
+    profile = {
+        "source_locale": "en-GB",
+        "target_locale": target_locale,
+        "language": target_locale.split("-", 1)[0].casefold(),
+        "scripts": [],
+        "surfaces": ["web"],
+        "platforms": [],
+        "formats": ["html"],
+        "domains": [],
+        "capabilities": ["core-translation", "translation-qa"],
+        "audience": "Adults in Portugal",
+        "purpose": "Account settings",
+        "register": "familiar second person",
+    }
+    profile.update(overrides)
+    return profile
+
+
 class RoutingTests(unittest.TestCase):
-    def test_all_routing_evaluations_match_exact_order(self):
-        router = load_module("route_capabilities_evals", ROUTER)
-        catalog = load_catalog()
-        cases = load_cases("routing-cases.json")
-        mismatches = []
-
-        for case in cases:
-            actual = router.route(case["request"], catalog)
-            if actual != case["expected_skills"]:
-                mismatches.append(
-                    {
-                        "id": case["id"],
-                        "expected": case["expected_skills"],
-                        "actual": actual,
-                    }
-                )
-
-        accuracy = (len(cases) - len(mismatches)) / len(cases)
+    def test_profile_routes_from_catalog_without_a_skill_map(self):
+        router = load_module("route_capabilities_generic", ROUTER)
+        result = router.route_profile(complete_profile(), load_catalog())
         self.assertEqual(
-            mismatches,
-            [],
-            f"routing exact-match accuracy was {accuracy:.1%}",
-        )
-        self.assertGreaterEqual(accuracy, 0.95)
-
-    def test_arabic_marketing_web_route(self):
-        router = load_module("route_capabilities", ROUTER)
-        request = {
-            "languages": ["arabic"],
-            "locales": ["ar-SA"],
-            "surfaces": ["web", "marketing"],
-            "domains": [],
-            "scripts": ["rtl"],
-        }
-
-        self.assertEqual(
-            router.route(request, load_catalog()),
+            result["selected"],
             [
                 "translating-core",
                 "translating-web",
-                "translating-marketing",
-                "translating-rtl",
-                "translating-arabic",
+                "translating-portuguese",
                 "reviewing-translations",
             ],
         )
+        self.assertEqual(result["phases"]["inspect"], ["translating-web"])
+        self.assertEqual(result["phases"]["translate"], ["translating-core"])
+        self.assertEqual(result["phases"]["refine"], ["translating-portuguese"])
+        self.assertEqual(result["phases"]["integrate"], ["translating-web"])
+        self.assertEqual(result["phases"]["review"], ["reviewing-translations"])
 
-    def test_unknown_language_uses_core_without_inventing_specialist(self):
-        router = load_module("route_capabilities", ROUTER)
-        request = {
-            "languages": ["icelandic"],
-            "locales": ["is-IS"],
-            "surfaces": ["documentation"],
-            "domains": [],
-            "scripts": ["latin"],
-        }
+    def test_catalog_only_locale_specialist_supersedes_broader_language_skill(self):
+        router = load_module("route_capabilities_external", ROUTER)
+        catalog = load_catalog()
+        catalog["skills"].append(
+            {
+                "name": "external-pt-pt-product-copy",
+                "version": "1.0.0",
+                "category": "language",
+                "capabilities": ["locale:pt-PT"],
+                "depends_on": ["translating-core", "reviewing-translations"],
+                "selectors": [{"locales": ["pt-PT"], "domains": ["product-copy"]}],
+                "phases": ["refine"],
+                "specificity": "locale",
+                "required_context": ["target_locale", "register"],
+                "conflicts": [],
+                "supersedes": ["translating-portuguese"],
+            }
+        )
 
+        result = router.route_profile(
+            complete_profile(target_locale="pt-PT", domains=["product-copy"]),
+            catalog,
+        )
+
+        self.assertIn("external-pt-pt-product-copy", result["selected"])
+        self.assertNotIn("translating-portuguese", result["selected"])
         self.assertEqual(
-            router.route(request, load_catalog()),
-            [
-                "translating-core",
-                "translating-documentation",
-                "reviewing-translations",
-            ],
+            result["phases"]["refine"], ["external-pt-pt-product-copy"]
         )
 
-    def test_ios_route_includes_mobile_before_ios_and_no_orchestrator(self):
-        router = load_module("route_capabilities", ROUTER)
-        request = {
-            "languages": ["german"],
-            "locales": ["de-DE"],
-            "surfaces": ["ios"],
-            "domains": [],
-            "scripts": ["latin"],
-        }
-
-        result = router.route(request, load_catalog())
-
-        self.assertEqual(
-            result,
-            [
-                "translating-core",
-                "translating-mobile",
-                "translating-ios",
-                "translating-german",
-                "reviewing-translations",
-            ],
-        )
-        self.assertNotIn("translating-products", result)
-
-    def test_cli_returns_two_for_malformed_request_json(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            request_path = Path(tmp) / "request.json"
-            request_path.write_text("not json", encoding="utf-8")
-
-            result = subprocess.run(
-                [sys.executable, str(ROUTER), str(request_path)],
-                capture_output=True,
-                text=True,
-                check=False,
+    def test_selector_conjoins_axes_and_matches_locale_ranges(self):
+        router = load_module("route_capabilities_selectors", ROUTER)
+        profile = complete_profile(domains=["product-copy"])
+        self.assertTrue(
+            router.selector_matches(
+                profile,
+                {"locales": ["pt"], "domains": ["product-copy"]},
             )
+        )
+        self.assertFalse(
+            router.selector_matches(
+                profile,
+                {"locales": ["pt"], "domains": ["legal"]},
+            )
+        )
 
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(result.stdout, "")
-        self.assertRegex(result.stderr, r"^invalid request: .+\n$")
+    def test_two_matching_conflicting_skills_fail_deterministically(self):
+        router = load_module("route_capabilities_conflicts", ROUTER)
+        catalog = load_catalog()
+        common = {
+            "version": "1.0.0",
+            "category": "language",
+            "capabilities": ["domain:demo"],
+            "depends_on": [],
+            "selectors": [{"domains": ["demo"]}],
+            "phases": ["refine"],
+            "specificity": "language",
+            "required_context": [],
+            "supersedes": [],
+        }
+        catalog["skills"].extend(
+            [
+                {**common, "name": "external-demo-a", "conflicts": ["external-demo-b"]},
+                {**common, "name": "external-demo-b", "conflicts": []},
+            ]
+        )
 
-    def test_cli_returns_two_when_classified_fields_are_not_string_lists(self):
-        fields = ("languages", "locales", "surfaces", "domains", "scripts")
-        invalid_values = ("not-a-list", [123])
+        with self.assertRaisesRegex(
+            ValueError, "conflicting skills: external-demo-a, external-demo-b"
+        ):
+            router.route_profile(complete_profile(domains=["demo"]), catalog)
 
-        for field in fields:
-            for invalid_value in invalid_values:
-                with self.subTest(field=field, invalid_value=invalid_value):
-                    with tempfile.TemporaryDirectory() as tmp:
-                        request_path = Path(tmp) / "request.json"
-                        request_path.write_text(
-                            json.dumps({field: invalid_value}), encoding="utf-8"
-                        )
-
-                        result = subprocess.run(
-                            [sys.executable, str(ROUTER), str(request_path)],
-                            capture_output=True,
-                            text=True,
-                            check=False,
-                        )
-
-                    self.assertEqual(result.returncode, 2)
-                    self.assertEqual(result.stdout, "")
-                    self.assertEqual(
-                        result.stderr,
-                        f"invalid request: {field} must be a list of strings\n",
-                    )
+    def test_router_source_contains_no_bundled_skill_name_literals(self):
+        tree = ast.parse(ROUTER.read_text(encoding="utf-8"))
+        literals = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        bundled_names = {item["name"] for item in load_catalog()["skills"]}
+        self.assertEqual(literals & bundled_names, set())
 
 
 class PolicyTests(unittest.TestCase):
