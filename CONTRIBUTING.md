@@ -13,17 +13,30 @@ Use this sequence for every specialist change:
 1. Add or modify one specialist. Keep `SKILL.md` frontmatter to `name` and
    `description`, with a trigger-oriented description beginning with
    `Use when`.
-2. Update its manifest version, capabilities, dependencies, and the suite
-   compatibility metadata when required.
-3. Add positive and negative routing cases that demonstrate both selection and
-   non-selection.
-4. Add representative language, script, platform, or product-surface fixtures.
+2. Update its schema-`2` manifest record: `name`, `version`, `category`,
+   `description`, `capabilities`, `depends_on`, `selectors`, `phases`,
+   `specificity`, `required_context`, `conflicts`, and `supersedes`.
+3. Use declarative selectors only. Each populated axis in one selector is
+   conjunctive; values on an axis are alternatives; multiple selectors are
+   alternative matches. The supported JSON axes are `languages`, `locales`,
+   `scripts`, `surfaces`, `platforms`, `formats`, `domains`, and
+   `capabilities`; locale ranges use normalized BCP 47 matching. Do not add a
+   skill-name map or a
+   language/product combination to the router.
+4. Declare phases from `inspect`, `translate`, `refine`, `integrate`, and
+   `review`, and declare an allowed specificity. Dependencies, conflicts, and
+   explicit `supersedes` relationships must make ownership and composition
+   deterministic.
+5. Add positive and negative routing cases that demonstrate both selection and
+   non-selection. A catalog-only fixture must prove a compatible third-party
+   specialist is selectable without changing router code.
+6. Add representative language, script, platform, or product-surface fixtures.
    Preserve placeholders, links, code, markup, keys, and other protected
    structure in expected decisions.
-5. Verify every adapted source's compatible license, immutable commit, path,
+7. Verify every adapted source's compatible license, immutable commit, path,
    checksum, attribution, and local adapter.
-6. Render the manifest-derived catalog and README inventory.
-7. Run strict validation and the full offline test suite.
+8. Render the manifest-derived catalog and README inventory.
+9. Run strict validation and the full offline test suite.
 
 Work on one specialist at a time. For instruction changes, evaluate a fresh
 agent without the skill first, then repeat with the skill loaded and record the
@@ -31,21 +44,22 @@ behavioral difference. Automated tests should verify routing, schemas,
 commands, structure, and other observable behavior—not freeze documentation
 wording.
 
-## External skill contract
+## Specialist authoring and external contract
 
-An external specialist must already be installed and must declare, without
-ambiguity:
+Every production specialist must state its scope and non-scope, context signals
+and required inputs, reusable analysis and transformation procedure, relevant
+principles, protected invariants and authority boundaries, common failure
+classes, and QA evidence or handoff. Examples are representative and
+non-exhaustive; direct benchmark prompt or expected-answer reuse fails
+validation. Keep production skills to reusable reasoning rather than fixed
+answers or case-by-case routing prose.
 
-- a unique name and version plus the minimum orchestrator version;
-- capabilities and their authority scope;
-- supported languages, locales, surfaces, and domains;
-- required inputs and produced outputs;
-- dependencies, conflicts, and precedence;
-- a compatible license;
-- an immutable commit and source path;
-- a SHA-256 checksum; and
-- an adapter mapping with routing, negative-routing, security, structural,
-  quality, and host-compatibility evaluations.
+An external specialist must already be installed and use the same schema-`2`
+catalog fields and selector semantics as bundled skills. Its catalog metadata
+never installs or enables it. It must also declare a compatible license,
+immutable commit and source path, SHA-256 checksum, and an adapter mapping with
+routing, negative-routing, security, structural, quality, and host-compatibility
+evaluations.
 
 Add reviewed installed integrations to the orchestrator's
 [compatibility registry](skills/translating-products/references/compatibility-registry.json).

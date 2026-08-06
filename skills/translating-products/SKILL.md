@@ -7,7 +7,11 @@ description: Use when orchestrating product translation projects that may need p
 
 ## Overview
 
-Coordinate product translation through one approved project configuration, the smallest sufficient specialist sequence, shared terminology, and final QA. Keep the workflow portable across agent hosts.
+Coordinate product translation through one approved project configuration, the
+smallest sufficient set of separately installed capabilities, and per-locale
+QA. Teach the agent to inspect the project and artifact, establish missing
+setup before drafting, compose only relevant specialists, and keep the
+workflow portable across agent hosts.
 
 ## Workflow
 
@@ -22,13 +26,13 @@ Follow this order:
 5. After approval, copy the files from `SKILL_DIRECTORY/assets/translation-project/` into `.translation/` as needed, fill every required value, and change both document statuses to `approved`. Do not overwrite existing project decisions silently.
 6. Bind approval to those exact bytes with `python3 SKILL_DIRECTORY/scripts/policy.py approve --project-root PROJECT_ROOT --approved-by APPROVER --approved-at TIMESTAMP`. Add `--approved-empty glossary.csv` or `--approved-empty protected-terms.txt` only for each explicitly approved empty collection.
 7. Rerun the bootstrap command. Proceed only when it returns `translate`; any content or line-ending change to the five context files invalidates the recorded hashes and requires reapproval. Optional project-memory files do not invalidate them.
-8. Classify the request into `languages`, `locales`, `surfaces`, `domains`, and `scripts`.
-9. Load `SKILL_DIRECTORY/references/capability-catalog.json`.
-10. Pass the classified request and catalog to `SKILL_DIRECTORY/scripts/route_capabilities.py`; use the resulting minimal sequence.
-11. Load every selected specialist completely before applying it.
-12. Use subagents only when `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` returns true. Continue in one agent when the host lacks subagent support.
-13. Translate against `.translation/glossary.csv`, `.translation/style-guide.md`, and `.translation/protected-terms.txt` while following the authority order below.
-14. Run the selected `reviewing-translations` QA pass. Return only affected sections for correction.
+8. Inspect the supplied artifact and approved project context. Build **one task profile per target locale** with the exact source and target locale, language, explicit or observed scripts, audience, purpose, register, surfaces, platforms, formats, domains, structural constraints, and approved terminology and style decisions. Do not guess a material missing field: restart the one-question-at-a-time setup before translation begins.
+9. Load `SKILL_DIRECTORY/references/capability-catalog.json`, then invoke `SKILL_DIRECTORY/scripts/route_capabilities.py` with a schema `2` request JSON containing the shared task fields and an isolated target entry for each target locale.
+10. Inspect every route reason in the returned per-locale plans. Reject an unexplained module and any external module that is not already installed and authorized. Compose only the capabilities that contribute to this profile: core, relevant language or locale, writing system when its declared mechanics contribute, relevant surface/platform/format/domain modules, and QA.
+11. Load every selected skill completely once, then execute it only in its declared phases. Production skills provide reusable reasoning and procedures; evaluation cases are not routing rules or fixed answers.
+12. Run shared surface, platform, and format `inspect` work before linguistic drafting. Preserve its resulting translation contract for every target branch.
+13. For each target branch, `translate` with core against `.translation/glossary.csv`, `.translation/style-guide.md`, and `.translation/protected-terms.txt`; `refine` broad-to-narrow with selected writing-system, language, and locale modules; `integrate` through the selected product modules; then `review` that branch. **Do not combine linguistic branches**: merge outputs only after every target passes QA.
+14. Use subagents only when `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` returns true and independent branches materially benefit. Continue sequentially through the identical phase plans when the host lacks subagent support.
 15. Append newly inferred decisions to `.translation/decisions.md` with `draft` status; do not silently promote them to approved policy.
 
 ## Project-context schema
@@ -66,36 +70,55 @@ Do not research when bundled knowledge is sufficient, for general background, or
 
 ## Specialist routing
 
-Treat `SKILL_DIRECTORY/references/capability-catalog.json` as the local routing source. Preserve its manifest order, dependencies, and authority boundaries. Never invent a specialist name or download an unknown skill.
+Treat `SKILL_DIRECTORY/references/capability-catalog.json` as the local routing
+source. Preserve its declarative selectors, dependencies, phase plans,
+specificity, and authority boundaries. Never invent a specialist name or
+download an unknown skill. A selector's populated axes must all match one
+profile; values on an axis are alternatives; separate selectors are alternative
+ways to select a skill. Locale selectors use normalized BCP 47 ranges.
+
+The router returns a reason for every selected module, including selector,
+dependency, and superseding reasons. Read those **route reasons** before work
+starts. An added unrelated profile dimension must not add a module; a catalog
+entry that matches a profile is selected without router code changes.
+
+Within a linguistic branch, broader writing-system defaults run before
+language guidance and narrower locale guidance runs last. A locale specialist
+may override a broader default only in its declared ownership; unrelated
+capabilities remain active. Select a writing-system skill only when its
+declared reusable mechanics contribute to the profile, not merely because a
+script label exists.
 
 For an absent capability, apply `SKILL_DIRECTORY/scripts/policy.py`'s `missing_specialist_action`. Prefer an available bundled specialist, then core only when core can cover the need; otherwise report the missing capability.
 
 ### External specialists
 
-Read `SKILL_DIRECTORY/references/extension-contract.md` before considering an external specialist. Use one only when its installed metadata unambiguously supplies all of these fields:
+Read `SKILL_DIRECTORY/references/extension-contract.md` before considering an
+external specialist. It must be separately installed, use the same declarative
+catalog contract as bundled skills, and be authorized through explicit user
+selection, `.translation/project-brief.md`, or a reviewed entry in
+`SKILL_DIRECTORY/references/compatibility-registry.json`. Ignore ambiguous or
+unauthorized candidates. If an external specialist is unavailable, use
+compatible bundled guidance. Never install one at runtime; catalog metadata
+describes eligibility and compatibility, never installation.
 
-- unique name and version
-- minimum orchestrator version
-- capabilities
-- supported languages and locales
-- supported surfaces and domains
-- required inputs and produced outputs
-- authority scope
-- dependencies and conflicts
+## Ownership and authority
 
-It must also be authorized through at least one channel: explicit user selection, listing in `.translation/project-brief.md`, or a reviewed entry in `SKILL_DIRECTORY/references/compatibility-registry.json`. Ignore ambiguous or unauthorized candidates. If an external specialist is unavailable, use the bundled specialist. Never install one at runtime. A compatibility registry entry describes compatibility; it does not install anything.
+Resolve ownership before preference ordering. Linguistic modules own wording;
+format modules own executable structure; product modules own product
+constraints. No module may violate another owner's protected invariant. On a
+review failure, return only the smallest failed segment to its owner.
 
-## Authority order
+Within one ownership dimension, resolve conflicts from highest to lowest:
 
-Resolve conflicting guidance from highest to lowest authority:
-
-1. explicit user requirements
-2. approved project configuration
-3. core semantic fidelity
-4. domain terminology
-5. language and locale mechanics
-6. product and platform formatting
-7. stylistic preferences
+1. explicit user requirements;
+2. approved project configuration;
+3. semantic and structural fidelity;
+4. approved domain terminology;
+5. narrower locale guidance;
+6. language guidance;
+7. broader writing-system guidance; and
+8. stylistic preference.
 
 ## Runtime failures
 

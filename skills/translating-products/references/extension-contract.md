@@ -1,46 +1,62 @@
 # External specialist extension contract
 
-An external specialist is optional and must already be installed. A registry entry records reviewed compatibility; it never installs, downloads, or enables a skill.
+An external specialist is optional and must already be installed. It joins the
+same manifest-derived capability catalog as bundled skills; a catalog record
+never installs, downloads, enables, or grants authority to a skill.
 
-## Eligibility metadata
+## Required catalog metadata
 
-Require installed metadata to declare every field below without ambiguity:
+An installed external specialist must provide the same record fields as a
+bundled specialist: `name`, `version`, `category`, `description`,
+`capabilities`, `depends_on`, `selectors`, `phases`, `specificity`,
+`required_context`, `conflicts`, and `supersedes`. The catalog itself uses
+schema version `2`.
 
-- unique installed skill name
-- version
-- minimum compatible orchestrator version
-- capabilities
-- supported languages and locales
-- supported surfaces and domains
-- required inputs
-- produced outputs
-- authority scope
-- dependencies
-- conflicts
+`selectors` is a non-empty list of alternative matching rules. Each populated
+axis within one selector must match the task profile; values within an axis are
+alternatives; multiple selectors are alternative routes into the skill. The
+only selector axes are `languages`, `locales`, `scripts`, `surfaces`,
+`platforms`, `formats`, `domains`, and `capabilities`. Locale values use
+normalized BCP 47 ranges.
 
-Ignore an external specialist when any field is missing or ambiguous.
+`phases` contains one or more of `inspect`, `translate`, `refine`,
+`integrate`, and `review`. `specificity` declares the scope (universal,
+writing-system, language, locale, surface, platform, format, domain, or
+quality). `required_context` lists profile fields that must be resolved before
+the skill runs. `conflicts` lists incompatible specialists. `supersedes` is
+only for an explicit replacement of broader guidance; narrower wording remains
+within its declared ownership and does not remove unrelated capabilities.
 
-## Runtime authorization
+Ignore an external candidate when any required metadata is missing, ambiguous,
+invalid, or conflicts cannot be resolved deterministically.
 
-Use an eligible specialist only when one of these channels authorizes it:
+## Authorization and catalog-only admission
+
+Use an eligible external specialist only when one of these channels authorizes
+it:
 
 1. The user explicitly selects it.
 2. `.translation/project-brief.md` lists it.
 3. `compatibility-registry.json` contains a reviewed entry for it.
 
-If an authorized external specialist is unavailable, use the bundled specialist. Never install a specialist at runtime.
+An authorized specialist must already be installed before routing. If it is
+unavailable, use compatible bundled guidance. Never install a specialist at
+runtime. A catalog-only test must prove that a compatible third-party record is
+selected without modifying the router.
+
+## Specialist authoring checklist
+
+Every production external specialist documents its scope and non-scope,
+context signals, reusable procedure, relevant principles, protected invariants
+and authority boundaries, failure classes, and QA evidence or handoff. Examples
+may illustrate principles but are non-exhaustive. Direct reuse of benchmark
+prompts, expected answers, or disguised answer tables fails validation.
 
 ## Reviewed registry entries
 
-Contributors add an entry only after review. Each entry records:
-
-- installed skill name
-- version constraint
-- capabilities
-- authority scope
-- conflicts
-- compatible orchestrator version
-- evaluation case IDs
-- review date
-
-Reviewers verify all eligibility metadata, dependency and conflict behavior, authority boundaries, representative evaluation outputs, and continued host neutrality before accepting an entry.
+Contributors add an entry only after review. Each entry records the installed
+skill name, version constraint, compatible orchestrator version, capabilities,
+authority scope, dependencies, conflicts, evaluation evidence, and review
+date. Reviewers verify metadata validity, catalog-only selection, dependency
+and conflict behavior, authority boundaries, representative evaluation output,
+and host neutrality before accepting an entry.
