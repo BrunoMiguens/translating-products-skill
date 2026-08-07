@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import date
 import hashlib
 import json
@@ -926,6 +927,15 @@ def _snapshot_installed_skill(
         "name": name,
         "load_path": str(snapshot),
         "tree_sha256": attestation["tree_sha256"],
+        "files": [
+            {
+                **item,
+                "content_base64": base64.b64encode(
+                    contents[item["path"]]
+                ).decode("ascii"),
+            }
+            for item in attestation["files"]
+        ],
     }
 
 
@@ -1404,7 +1414,7 @@ def main() -> int:
     parser.add_argument(
         "--snapshot-root",
         metavar="PATH",
-        help="private parent for immutable admitted external-skill snapshots",
+        help="private parent for advisory admitted external-skill copies",
     )
     arguments = parser.parse_args()
 

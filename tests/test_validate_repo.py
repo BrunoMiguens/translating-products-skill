@@ -424,7 +424,7 @@ class ValidatorTests(unittest.TestCase):
             path = Path(tmp) / "translating-demo" / "SKILL.md"
             path.parent.mkdir()
             path.write_text(
-                "---\nname: translating-demo\ndescription: \n---\n\n"
+                "---\nname: translating-demo\ndescription: \"\"\n---\n\n"
                 + "\n".join("content" for _ in range(496)),
                 encoding="utf-8",
             )

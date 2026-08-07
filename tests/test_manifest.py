@@ -76,35 +76,39 @@ class ManifestTests(unittest.TestCase):
 
     def test_manifest_rejects_invalid_routing_phases(self):
         self.assert_manifest_rejected(
-            "phases", [], "phases must be a non-empty string list"
+            "phases", [], "requires non-empty phases"
         )
         self.assert_manifest_rejected(
-            "phases", ["route"], "unknown routing phases: route"
+            "phases", ["route"], "has unknown phases: route"
         )
 
     def test_manifest_rejects_invalid_routing_specificity(self):
         self.assert_manifest_rejected(
             "specificity",
             "unsupported",
-            "specificity must be one of: universal, writing-system, language, locale, surface, platform, format, domain, quality",
+            "has invalid specificity",
         )
 
     def test_manifest_rejects_malformed_routing_collections(self):
         for field, value, message in (
-            ("capabilities", [], "capabilities must be a non-empty string list"),
-            ("phases", [], "phases must be a non-empty string list"),
-            ("selectors", [], "selectors must be a non-empty selector list"),
-            ("selectors", [{}], "selector must contain at least one routing axis"),
+            ("capabilities", [], "requires non-empty capabilities"),
+            ("phases", [], "requires non-empty phases"),
+            ("selectors", [], "must declare selectors"),
+            ("selectors", [{}], "has invalid selector"),
             (
                 "selectors",
                 [{"domains": []}],
-                "selector domains must be a non-empty string list",
+                "has invalid selector domains: expected non-empty string list",
             ),
             ("ownership", {}, "ownership must map every declared capability"),
-            ("selectors", None, "selectors must be a non-empty selector list"),
-            ("required_context", "target_locale", "required_context must be a string list"),
-            ("conflicts", [""], "conflicts must be a string list"),
-            ("supersedes", [1], "supersedes must be a string list"),
+            ("selectors", None, "must declare selectors"),
+            (
+                "required_context",
+                "target_locale",
+                "has invalid required_context: expected string list",
+            ),
+            ("conflicts", [""], "has invalid conflicts"),
+            ("supersedes", [1], "has invalid supersedes"),
         ):
             with self.subTest(field=field):
                 self.assert_manifest_rejected(field, value, message)
@@ -124,7 +128,8 @@ class ManifestTests(unittest.TestCase):
             path.write_text(json.dumps(manifest), encoding="utf-8")
 
             with self.assertRaisesRegex(
-                ValueError, "ownership phases must be a non-empty string list"
+                ValueError,
+                "has invalid ownership phases: expected non-empty string list",
             ):
                 load_manifest(path)
 

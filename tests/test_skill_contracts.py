@@ -1,13 +1,14 @@
+import base64
 import copy
 from datetime import date, timedelta
 import hashlib
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-import shutil
 from pathlib import Path
 
 
@@ -247,7 +248,7 @@ def reviewed_registry_entry(
 
 
 class SkillContractTests(unittest.TestCase):
-    def test_admission_routes_external_loads_through_a_private_verified_snapshot(self):
+    def test_route_embeds_verified_external_bytes_independent_of_advisory_snapshot(self):
         spec = importlib.util.spec_from_file_location("router_snapshot", ROUTER)
         router = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
@@ -262,6 +263,12 @@ class SkillContractTests(unittest.TestCase):
                 candidate,
                 extra_files={"references/rules.md": reviewed_bytes},
             )
+            installed = installed_root / candidate["name"]
+            reviewed_contents = {
+                path.relative_to(installed).as_posix(): path.read_bytes()
+                for path in sorted(installed.rglob("*"))
+                if path.is_file()
+            }
             payload = request(authorized=(candidate["name"],))
             bundled = json.loads(
                 (ROOT / "skills/translating-products/references/capability-catalog.json")
@@ -275,30 +282,52 @@ class SkillContractTests(unittest.TestCase):
                 None,
                 [installed_root],
             )
-            (installed_root / candidate["name"] / "references/rules.md").write_bytes(
+            (installed / "references/rules.md").write_bytes(
                 b"substituted after admission\n"
             )
             result = router.route(payload, admitted)
 
             external_load = result["routes"][0]["external_loads"][0]
             snapshot = Path(external_load["load_path"])
-            self.assertEqual(external_load["name"], candidate["name"])
-            self.assertRegex(external_load["tree_sha256"], r"^sha256:[0-9a-f]{64}$")
-            self.assertEqual(
-                (snapshot / "references/rules.md").read_bytes(), reviewed_bytes
-            )
-            self.assertEqual(snapshot.stat().st_mode & 0o222, 0)
-            self.assertEqual(
-                (snapshot / "references/rules.md").stat().st_mode & 0o222, 0
-            )
             snapshot_parent = snapshot.parent
-            snapshot_parent.chmod(0o700)
-            snapshot.chmod(0o700)
-            for directory in sorted(
-                (path for path in snapshot.rglob("*") if path.is_dir()), reverse=True
-            ):
-                directory.chmod(0o700)
-            shutil.rmtree(snapshot_parent)
+            try:
+                snapshot_parent.chmod(0o700)
+                snapshot.chmod(0o700)
+                for path in snapshot.rglob("*"):
+                    path.chmod(0o700 if path.is_dir() else 0o600)
+                (snapshot / "SKILL.md").write_bytes(b"substituted snapshot skill\n")
+                (snapshot / "references/rules.md").write_bytes(
+                    b"substituted snapshot rules\n"
+                )
+
+                self.assertEqual(external_load["name"], candidate["name"])
+                self.assertRegex(
+                    external_load["tree_sha256"], r"^sha256:[0-9a-f]{64}$"
+                )
+                self.assertIn("files", external_load)
+                embedded_files = external_load["files"]
+                self.assertEqual(
+                    [item["path"] for item in embedded_files],
+                    sorted(reviewed_contents),
+                )
+                for item in embedded_files:
+                    expected = reviewed_contents[item["path"]]
+                    actual = base64.b64decode(
+                        item["content_base64"], validate=True
+                    )
+                    self.assertEqual(actual, expected)
+                    self.assertEqual(item["size"], len(expected))
+                    self.assertEqual(
+                        item["sha256"],
+                        f"sha256:{hashlib.sha256(expected).hexdigest()}",
+                    )
+                json.dumps(result)
+            finally:
+                snapshot_parent.chmod(0o700)
+                snapshot.chmod(0o700)
+                for path in snapshot.rglob("*"):
+                    path.chmod(0o700 if path.is_dir() else 0o600)
+                shutil.rmtree(snapshot_parent)
 
     def test_frontmatter_rejects_yaml_implicit_and_comment_plain_scalars(self):
         spec = importlib.util.spec_from_file_location("router_yaml", ROUTER)
@@ -307,12 +336,27 @@ class SkillContractTests(unittest.TestCase):
         spec.loader.exec_module(router)
 
         for scalar in (
+            "",
             "# host sees a comment",
+            "- sequence-like value",
+            "? mapping-like value",
+            ": mapping-like value",
+            ",flow-like value",
             "Use when translating # host strips this comment",
             "null",
             "true",
             "123",
             "2026-08-07",
+            ".inf",
+            "-.Inf",
+            ".NaN",
+            "0x10",
+            "0b101",
+            "0o17",
+            "1e3",
+            "1:20",
+            "2026-08-07T12:30:00Z",
+            "2026-08-07 12:30:00+01:00",
         ):
             with self.subTest(scalar=scalar):
                 content = (
