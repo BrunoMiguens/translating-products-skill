@@ -41,6 +41,13 @@
           <form id="lock-form">
             <label for="reviewer-id">Reviewer identity</label>
             <input id="reviewer-id" name="reviewer_id" type="text" required maxlength="200" autocomplete="off">
+            <label for="reviewer-conflicts">Independence and conflicts</label>
+            <textarea id="reviewer-conflicts" required maxlength="1000" autocomplete="off"></textarea>
+            <label><input id="attest-proficient" type="checkbox" required> I am proficient in European Portuguese (pt-PT).</label>
+            <label><input id="attest-blind" type="checkbox" required> I remained blind to condition identity.</label>
+            <label><input id="attest-key" type="checkbox" required> I did not access the condition key.</label>
+            <label><input id="attest-findings" type="checkbox" required> I did not consult automated findings.</label>
+            <label><input id="attest-rubric" type="checkbox" required> I completed the review under the stated rubric.</label>
             <button id="lock-annotations" class="lock-button" type="submit" disabled>Lock annotations</button>
           </form>
           <p id="lock-status" class="rail-copy" aria-live="polite">Available after all 198 presentations are saved.</p>

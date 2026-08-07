@@ -1,3 +1,6 @@
 .worktrees/
 .superpowers/
-
+.benchmark-review/
+.benchmark-tmp/
+benchmark-private/
+benchmark-evidence/

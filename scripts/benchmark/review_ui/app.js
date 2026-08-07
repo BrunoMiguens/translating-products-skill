@@ -128,6 +128,48 @@ function pairsFor(labels) {
   return pairs;
 }
 
+function hasComparisonCycle(labels, comparisons) {
+  const parent = Object.fromEntries(labels.map((label) => [label, label]));
+  const find = (label) => {
+    while (parent[label] !== label) {
+      parent[label] = parent[parent[label]];
+      label = parent[label];
+    }
+    return label;
+  };
+  for (const [key, value] of Object.entries(comparisons)) {
+    if (value !== "tie") continue;
+    const [left, right] = key.split(":");
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot;
+  }
+  const edges = {};
+  for (const [key, value] of Object.entries(comparisons)) {
+    if (value === "tie") continue;
+    const [left, right] = key.split(":");
+    const leftWins = value.startsWith("left_");
+    const better = find(leftWins ? left : right);
+    const worse = find(leftWins ? right : left);
+    if (better === worse) return true;
+    (edges[better] ||= new Set()).add(worse);
+  }
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (label) => {
+    if (visiting.has(label)) return true;
+    if (visited.has(label)) return false;
+    visiting.add(label);
+    for (const child of edges[label] || []) {
+      if (visit(child)) return true;
+    }
+    visiting.delete(label);
+    visited.add(label);
+    return false;
+  };
+  return labels.some((label) => visit(find(label)));
+}
+
 function makeOption(value, text = value) {
   const option = document.createElement("option");
   option.value = value;
@@ -421,6 +463,9 @@ function collectAnnotation() {
     if (!checked) throw new Error(`Choose a comparison for outputs ${left} and ${right}.`);
     comparisons[key] = checked.value;
   }
+  if (hasComparisonCycle(labelsFor(item), comparisons)) {
+    throw new Error("Resolve the contradictory three-way comparison cycle before saving.");
+  }
   const confidence = document.querySelector('input[name="confidence"]:checked');
   if (!confidence) throw new Error("Choose a confidence level.");
   const mqm = collectMqm(item);
@@ -530,6 +575,25 @@ async function lockAnnotations(event) {
     byId("reviewer-id").focus();
     return;
   }
+  const attestation = {
+    schema_version: 1,
+    reviewer_locale: "pt-PT",
+    pt_pt_proficient: byId("attest-proficient").checked,
+    independence_and_conflicts: byId("reviewer-conflicts").value,
+    continued_blindness_acknowledged: byId("attest-blind").checked,
+    condition_key_not_accessed: byId("attest-key").checked,
+    automated_findings_not_accessed: byId("attest-findings").checked,
+    rubric_completed: byId("attest-rubric").checked,
+  };
+  if (!attestation.independence_and_conflicts.trim()
+      || !attestation.pt_pt_proficient
+      || !attestation.continued_blindness_acknowledged
+      || !attestation.condition_key_not_accessed
+      || !attestation.automated_findings_not_accessed
+      || !attestation.rubric_completed) {
+    setError("Complete every reviewer attestation before locking.");
+    return;
+  }
   if (!window.confirm("Lock all annotations now? No further revisions can be saved.")) return;
   state.saving = true;
   setInteractionState();
@@ -538,7 +602,7 @@ async function lockAnnotations(event) {
     const payload = await requestJson("/api/lock", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reviewer_id: reviewerId }),
+      body: JSON.stringify({ reviewer_id: reviewerId, attestation }),
     });
     state.review = payload.state;
     state.review.lock_record = payload.lock;
@@ -598,6 +662,7 @@ if (typeof module !== "undefined" && module.exports) {
     allowNavigation,
     applyProgress,
     interactionState,
+    hasComparisonCycle,
     labelsFor,
     lockAllowed,
     nextRevision,

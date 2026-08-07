@@ -59,11 +59,37 @@ def valid_annotation(review_item: dict, *, revision: int = 1) -> dict:
     }
 
 
+def reviewer_attestation() -> dict:
+    return {
+        "schema_version": 1,
+        "reviewer_locale": "pt-PT",
+        "pt_pt_proficient": True,
+        "independence_and_conflicts": "Independent reviewer; no conflicts declared.",
+        "continued_blindness_acknowledged": True,
+        "condition_key_not_accessed": True,
+        "automated_findings_not_accessed": True,
+        "rubric_completed": True,
+    }
+
+
 def nested_json(depth: int) -> bytes:
     return b"[" * depth + b"0" + b"]" * depth
 
 
 class AnnotationValidationTests(unittest.TestCase):
+    def test_three_way_comparison_cycle_is_rejected_before_persistence(self):
+        """Break: A>B, B>C, C>A could be saved and make a locked review unscoreable."""
+        review_item = item()
+        event = valid_annotation(review_item)
+        event["comparisons"] = {
+            "A:B": "left_clear",
+            "A:C": "right_clear",
+            "B:C": "left_clear",
+        }
+
+        with self.assertRaisesRegex(BenchmarkError, "three-way comparison cycle"):
+            validate_annotation(review_item, event)
+
     def test_annotation_requires_every_pair_confidence_and_exact_fields(self):
         review_item = item()
         event = valid_annotation(review_item)
@@ -200,6 +226,19 @@ class ReviewStoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_lock_requires_protocol_attestation_and_binds_it_to_the_bundle(self):
+        """Break: a lock could claim human review without evidence the reviewer followed protocol."""
+        store = ReviewStore(bundle(item()), self.directory)
+        store.append(valid_annotation(store.item("item-1")))
+        with self.assertRaisesRegex(BenchmarkError, "reviewer attestation"):
+            store.lock(reviewer_id="pt-PT-reviewer")
+
+        lock = store.lock(
+            reviewer_id="pt-PT-reviewer", attestation=reviewer_attestation()
+        )
+        self.assertEqual(lock["attestation"]["reviewer_locale"], "pt-PT")
+        self.assertEqual(lock["attestation"]["bundle_sha256"], lock["bundle_sha256"])
+
     def test_revisions_append_and_lock_refuses_incomplete_queue(self):
         review_bundle = bundle(item("item-1"), item("item-2", three_outputs=False))
         store = ReviewStore(review_bundle, self.directory)
@@ -210,7 +249,7 @@ class ReviewStoreTests(unittest.TestCase):
         self.assertEqual([record["revision"] for record in read_jsonl(store.events_path)], [1, 2])
         self.assertEqual(store.latest["item-1"]["revision"], 2)
         with self.assertRaisesRegex(BenchmarkError, "1 presentation remains"):
-            store.lock(reviewer_id="reviewer-1")
+            store.lock(reviewer_id="reviewer-1", attestation=reviewer_attestation())
 
     def test_revision_cannot_overwrite_or_skip_and_unknown_items_are_rejected(self):
         store = ReviewStore(bundle(item()), self.directory)
@@ -292,7 +331,7 @@ class ReviewStoreTests(unittest.TestCase):
                 directory.mkdir()
                 store = ReviewStore(bundle(item()), directory)
                 store.append(valid_annotation(store.item("item-1")))
-                store.lock(reviewer_id="reviewer")
+                store.lock(reviewer_id="reviewer", attestation=reviewer_attestation())
                 lock = read_json(store.lock_path)
                 lock[field] = malformed
                 try:
@@ -314,7 +353,7 @@ class ReviewStoreTests(unittest.TestCase):
                 store = ReviewStore(bundle(item()), directory)
                 store.append(valid_annotation(store.item("item-1")))
                 with self.assertRaisesRegex(BenchmarkError, "reviewer_id"):
-                    store.lock(reviewer_id=reviewer_id)
+                    store.lock(reviewer_id=reviewer_id, attestation=reviewer_attestation())
                 self.assertFalse(store.lock_path.exists())
 
     def test_every_persisted_json_artifact_bounds_integer_conversion(self):
@@ -365,7 +404,7 @@ class ReviewStoreTests(unittest.TestCase):
         lock_directory.mkdir()
         lock_store = ReviewStore(bundle(item()), lock_directory)
         lock_store.append(valid_annotation(lock_store.item("item-1")))
-        lock_store.lock(reviewer_id="reviewer")
+        lock_store.lock(reviewer_id="reviewer", attestation=reviewer_attestation())
         lock_store.lock_path.write_bytes(
             lock_store.lock_path.read_bytes().replace(
                 b'"schema_version":1', b'"schema_version":' + negative,
@@ -420,7 +459,7 @@ class ReviewStoreTests(unittest.TestCase):
         lock_directory.mkdir()
         lock_store = ReviewStore(bundle(item()), lock_directory)
         lock_store.append(valid_annotation(lock_store.item("item-1")))
-        lock_store.lock(reviewer_id="reviewer")
+        lock_store.lock(reviewer_id="reviewer", attestation=reviewer_attestation())
         deep_lock = read_json(lock_store.lock_path)
         deep_lock["reviewer_id"] = too_deep
         lock_store.lock_path.write_bytes(canonical_bytes(deep_lock))
@@ -436,7 +475,9 @@ class ReviewStoreTests(unittest.TestCase):
         for review_item in store.bundle["items"]:
             store.append(valid_annotation(review_item))
 
-        lock = store.lock(reviewer_id="pt-PT-reviewer")
+        lock = store.lock(
+            reviewer_id="pt-PT-reviewer", attestation=reviewer_attestation()
+        )
         self.assertEqual(lock["reviewer_id"], "pt-PT-reviewer")
         self.assertEqual(lock["bundle_sha256"], hashlib.sha256(store.bundle_path.read_bytes()).hexdigest())
         self.assertEqual(lock["annotations_sha256"], hashlib.sha256(store.events_path.read_bytes()).hexdigest())
@@ -444,7 +485,9 @@ class ReviewStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(BenchmarkError, "locked"):
             store.append(valid_annotation(store.bundle["items"][0], revision=2))
         with self.assertRaisesRegex(BenchmarkError, "already locked"):
-            store.lock(reviewer_id="other-reviewer")
+            store.lock(
+                reviewer_id="other-reviewer", attestation=reviewer_attestation()
+            )
 
         reopened = ReviewStore(review_bundle, self.directory)
         self.assertTrue(reopened.locked)
@@ -454,9 +497,9 @@ class ReviewStoreTests(unittest.TestCase):
         review_bundle = bundle(item())
         store = ReviewStore(review_bundle, self.directory)
         with self.assertRaisesRegex(BenchmarkError, "1 presentation remains"):
-            store.lock(reviewer_id="reviewer")
+            store.lock(reviewer_id="reviewer", attestation=reviewer_attestation())
         store.append(valid_annotation(store.item("item-1")))
-        store.lock(reviewer_id="reviewer")
+        store.lock(reviewer_id="reviewer", attestation=reviewer_attestation())
         store.events_path.write_bytes(store.events_path.read_bytes() + b" \n")
         with self.assertRaisesRegex(BenchmarkError, "annotations hash mismatch"):
             ReviewStore(review_bundle, self.directory)
@@ -569,7 +612,10 @@ class ReviewHttpTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(json.loads(payload)["annotation"]["revision"], 1)
 
-        lock_payload = canonical_bytes({"reviewer_id": "pt-PT-reviewer"})
+        lock_payload = canonical_bytes({
+            "reviewer_id": "pt-PT-reviewer",
+            "attestation": reviewer_attestation(),
+        })
         status, _, payload = self.request(
             "POST", "/api/lock", lock_payload,
             Origin=self.origin, **{"Content-Type": "application/json"},

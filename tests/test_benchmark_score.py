@@ -28,6 +28,7 @@ from scripts.benchmark.score import (
     Pair,
     ScorePaths,
     _normalized_validations,
+    _publish_exclusive_json,
     evaluate_gates,
     paired_bootstrap,
     quantile,
@@ -804,6 +805,16 @@ class BootstrapTests(unittest.TestCase):
 
 
 class GateTests(unittest.TestCase):
+    def test_unresolved_review_mappings_make_claim_bearing_gate_unavailable(self):
+        """Break: unresolved reviewer findings could vanish from precision and still yield PASS."""
+        metrics = passing_metrics()
+        metrics["review"]["unresolved"] = 1
+        gates = evaluate_gates(metrics)
+
+        self.assertFalse(gates["review"]["available"])
+        self.assertIsNone(gates["review"]["passed"])
+        self.assertIsNone(gates["overall"]["passed"])
+
     def test_translation_gates_have_exact_boundaries(self):
         """Break: inclusive/exclusive threshold changes could reverse the verdict."""
         metrics = passing_metrics()
@@ -860,6 +871,7 @@ class LockedScoringTests(unittest.TestCase):
             reviewer="pt-PT-reviewer",
             approved_at="2026-08-03T12:00:00Z",
         )
+
         atomic_write_json(
             self.dataset / "dataset-manifest.json",
             build_dataset_manifest(
@@ -882,6 +894,27 @@ class LockedScoringTests(unittest.TestCase):
             annotations=self.annotations_dir / "annotations.jsonl",
             annotation_lock=self.annotations_dir / "annotation-lock.json",
         )
+
+    def test_score_rollback_never_unlinks_a_concurrent_replacement(self):
+        """Break: rollback could unlink a new pathname entry after the created inode was renamed."""
+        output = self.root / "raced-score.json"
+        created_inode = self.root / "created-score-inode.json"
+        calls = 0
+
+        def raced_fsync(descriptor: int) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                output.rename(created_inode)
+                output.write_bytes(b"replacement")
+                raise OSError("induced directory fsync failure")
+
+        with mock.patch("scripts.benchmark.score.os.fsync", side_effect=raced_fsync):
+            with self.assertRaisesRegex(BenchmarkError, "cannot publish score output"):
+                _publish_exclusive_json(output, {"score": "original"})
+
+        self.assertEqual(output.read_bytes(), b"replacement")
+        self.assertTrue(created_inode.exists())
 
     def _write_evidence(self) -> None:
         self.evidence.mkdir()
@@ -1004,7 +1037,16 @@ class LockedScoringTests(unittest.TestCase):
                 "major_or_worse": {label: False for label in labels},
                 "note": "",
             })
-        store.lock(reviewer_id="pt-PT-reviewer")
+        store.lock(reviewer_id="pt-PT-reviewer", attestation={
+            "schema_version": 1,
+            "reviewer_locale": "pt-PT",
+            "pt_pt_proficient": True,
+            "independence_and_conflicts": "Independent; no conflicts declared.",
+            "continued_blindness_acknowledged": True,
+            "condition_key_not_accessed": True,
+            "automated_findings_not_accessed": True,
+            "rubric_completed": True,
+        })
 
     def run_score_cli(self, output: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(

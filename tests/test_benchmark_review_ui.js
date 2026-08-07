@@ -9,6 +9,12 @@ assert.deepEqual(logic.pairsFor(["A", "B"]), [["A", "B"]]);
 assert.deepEqual(logic.pairsFor(["A", "B", "C"]), [
   ["A", "B"], ["A", "C"], ["B", "C"],
 ]);
+assert.equal(logic.hasComparisonCycle(["A", "B", "C"], {
+  "A:B": "left_clear", "A:C": "right_clear", "B:C": "left_clear",
+}), true);
+assert.equal(logic.hasComparisonCycle(["A", "B", "C"], {
+  "A:B": "left_clear", "A:C": "left_clear", "B:C": "left_clear",
+}), false);
 
 assert.equal(logic.nextRevision("item-1", { latest: {} }), 1);
 assert.equal(logic.nextRevision("item-1", { latest: { "item-1": { revision: 2 } } }), 3);

@@ -638,9 +638,14 @@ def build_schedule(cases: list[dict], config: dict, seed: int) -> list[RunSpec]:
             conditions.append("context_only")
         for condition in conditions:
             for attempt in range(1, PRIMARY_ATTEMPTS + 1):
-                identity = f"{case_id}:{condition}:{attempt}:{validated['model']}"
+                identity = canonical_bytes({
+                    "case": case,
+                    "condition": condition,
+                    "attempt": attempt,
+                    "execution_config": validated,
+                })
                 specs.append(
-                    RunSpec(sha256_text(identity)[:20], case_id, condition, attempt)
+                    RunSpec(sha256_bytes(identity)[:20], case_id, condition, attempt)
                 )
     random.Random(seed).shuffle(specs)
     distribution = Counter(spec.condition for spec in specs)
@@ -978,6 +983,7 @@ def _ensure_run_manifest(
     *,
     input_snapshot: dict | None,
     sandbox_probe: dict | None,
+    run_bindings: Mapping[str, object] | None,
 ) -> None:
     target = evidence_dir / "run-manifest.json"
     schedule_value = _schedule_manifest(schedule)
@@ -997,6 +1003,8 @@ def _ensure_run_manifest(
             raise BenchmarkError("run manifest input snapshot mismatch")
         if manifest.get("sandbox_probe") not in (None, sandbox_probe):
             raise BenchmarkError("run manifest sandbox probe mismatch")
+        if manifest.get("run_bindings") not in (None, run_bindings):
+            raise BenchmarkError("run manifest prompt binding mismatch")
         manifest.setdefault("runner_config_sha256", config_digest)
         manifest["execution_config_sha256"] = config_digest
     else:
@@ -1010,7 +1018,34 @@ def _ensure_run_manifest(
         manifest["input_snapshot"] = input_snapshot
     if sandbox_probe is not None:
         manifest["sandbox_probe"] = sandbox_probe
+    if run_bindings is not None:
+        manifest["run_bindings"] = dict(run_bindings)
     atomic_write_json(target, manifest)
+
+
+def _bound_prompts(
+    schedule: Sequence[RunSpec],
+    cases: Mapping[str, dict],
+    templates: Mapping[str, str],
+    config: Mapping[str, object],
+    input_snapshot: Mapping[str, object] | None,
+) -> dict[str, dict]:
+    execution_config_sha256 = sha256_bytes(canonical_bytes(dict(config)))
+    snapshot_sha256 = (
+        input_snapshot.get("sha256") if isinstance(input_snapshot, Mapping) else None
+    )
+    result = {}
+    for spec in schedule:
+        prompt = _render(spec, cases, templates)
+        binding = {
+            "case_sha256": sha256_bytes(canonical_bytes(cases[spec.case_id])),
+            "prompt_sha256": sha256_bytes(prompt.encode("utf-8")),
+            "execution_config_sha256": execution_config_sha256,
+            "input_snapshot_sha256": snapshot_sha256,
+        }
+        binding["sha256"] = sha256_bytes(canonical_bytes(binding))
+        result[spec.run_id] = binding
+    return result
 
 
 def _existing_results(
@@ -1405,9 +1440,13 @@ def execute_schedule(
     probe_manifest = _preflight_cli(
         runner, schedule, case_map, validated, evidence_dir, scratch_root, snapshot_path
     )
+    run_bindings = _bound_prompts(
+        schedule, case_map, templates, validated, snapshot_manifest
+    )
     _ensure_run_manifest(
         evidence_dir, schedule, validated,
         input_snapshot=snapshot_manifest, sandbox_probe=probe_manifest,
+        run_bindings=run_bindings,
     )
     completed = _existing_results(
         evidence_dir,
@@ -1558,7 +1597,7 @@ def import_manual_responses(
     evidence_dir.mkdir(parents=True, exist_ok=True)
     _ensure_run_manifest(
         evidence_dir, schedule, validated,
-        input_snapshot=None, sandbox_probe=None,
+        input_snapshot=None, sandbox_probe=None, run_bindings=None,
     )
     if (evidence_dir / "runs.jsonl").exists():
         raise BenchmarkError("manual import evidence already contains run records")

@@ -27,6 +27,7 @@ from .common import (
     sha256_bytes,
     sha256_file,
 )
+from .comparisons import PREFERENCE_ORDINAL, reject_comparison_cycle
 from .prepare import verify_dataset_manifest
 from .review_app import MQM_DIMENSIONS, ReviewStore
 from .run import RunResult
@@ -35,14 +36,6 @@ from .validate import CHECKS
 
 
 SEVERITY_POINTS = {"critical": 25, "major": 5, "minor": 1, "neutral": 0}
-PREFERENCE_ORDINAL = {
-    "left_clear": 2,
-    "left_slight": 1,
-    "tie": 0,
-    "right_slight": -1,
-    "right_clear": -2,
-}
-
 _ITEM_FIELDS = {
     "item_id", "case_id", "attempt", "task", "repeat_of", "labels",
     "comparisons", "mqm", "major_or_worse", "word_counts",
@@ -202,58 +195,6 @@ def _comparison_keys(labels: Sequence[str]) -> tuple[str, ...]:
     )
 
 
-def _preference_edges(labels: Sequence[str], comparisons: Mapping[str, str]) -> dict[str, set[str]]:
-    parent = {label: label for label in labels}
-
-    def find(label: str) -> str:
-        while parent[label] != label:
-            parent[label] = parent[parent[label]]
-            label = parent[label]
-        return label
-
-    def union(left: str, right: str) -> None:
-        left_root, right_root = find(left), find(right)
-        if left_root != right_root:
-            parent[right_root] = left_root
-
-    for key, value in comparisons.items():
-        if value == "tie":
-            left, right = key.split(":")
-            union(left, right)
-    edges: dict[str, set[str]] = defaultdict(set)
-    for key, value in comparisons.items():
-        ordinal = PREFERENCE_ORDINAL[value]
-        if not ordinal:
-            continue
-        left, right = key.split(":")
-        better, worse = (left, right) if ordinal > 0 else (right, left)
-        better_root, worse_root = find(better), find(worse)
-        if better_root == worse_root:
-            raise BenchmarkError("comparison cycle contradicts a tie")
-        edges[better_root].add(worse_root)
-    return edges
-
-
-def _reject_comparison_cycle(labels: Sequence[str], comparisons: Mapping[str, str]) -> None:
-    edges = _preference_edges(labels, comparisons)
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(node: str) -> None:
-        if node in visiting:
-            raise BenchmarkError("contradictory three-way comparison cycle")
-        if node in visited:
-            return
-        visiting.add(node)
-        for child in edges.get(node, ()):
-            visit(child)
-        visiting.remove(node)
-        visited.add(node)
-
-    for node in labels:
-        visit(node)
-
-
 def _validate_item(value: object, index: int) -> dict:
     if not isinstance(value, Mapping) or set(value) != _ITEM_FIELDS:
         raise BenchmarkError(f"score item {index} fields are invalid")
@@ -288,7 +229,7 @@ def _validate_item(value: object, index: int) -> dict:
     for key in expected_keys:
         if type(comparisons[key]) is not str or comparisons[key] not in PREFERENCE_ORDINAL:
             raise BenchmarkError(f"score item {index} comparison {key} is invalid")
-    _reject_comparison_cycle(expected_labels, comparisons)
+    reject_comparison_cycle(expected_labels, comparisons)
 
     major = result.get("major_or_worse")
     if not isinstance(major, Mapping) or set(major) != set(expected_labels):
@@ -1283,6 +1224,21 @@ def evaluate_gates(metrics: Mapping[str, object]) -> dict:
         }
         overall = {"passed": None, "verdict": "unavailable"}
         return {"translation": translation_gate, "review": review_gate, "overall": overall}
+    unresolved = review.get("unresolved", 0)
+    if type(unresolved) is not int or unresolved < 0:
+        raise BenchmarkError("review unresolved must be a non-negative integer")
+    if unresolved:
+        review_gate = {
+            "available": False,
+            "passed": None,
+            "checks": {},
+            "reason": "review mappings contain unresolved findings",
+        }
+        return {
+            "translation": translation_gate,
+            "review": review_gate,
+            "overall": {"passed": None, "verdict": "unavailable"},
+        }
     if not _REVIEW_GATE_INPUTS <= set(review):
         raise BenchmarkError("review gate fields are invalid")
 
@@ -1862,6 +1818,22 @@ def _validate_output_target(output: Path, paths: ScorePaths) -> Path:
         raise BenchmarkError(f"cannot validate score output path: {error}") from error
 
 
+def _unlink_created_output_if_same(parent_fd: int, output_fd: int, name: str) -> None:
+    """Remove only the directory entry still naming the inode created by this publisher."""
+    if parent_fd < 0 or output_fd < 0:
+        return
+    try:
+        created = os.fstat(output_fd)
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (created.st_dev, created.st_ino) != (current.st_dev, current.st_ino):
+            return
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
 def _publish_exclusive_json(output: Path, value: object) -> str:
     encoded = canonical_bytes(value)
     resolved_parent = output.parent.resolve(strict=True)
@@ -1896,18 +1868,12 @@ def _publish_exclusive_json(output: Path, value: object) -> str:
         os.fsync(parent_fd)
         return sha256_bytes(encoded)
     except BenchmarkError:
-        if created and parent_fd >= 0:
-            try:
-                os.unlink(output.name, dir_fd=parent_fd)
-            except OSError:
-                pass
+        if created:
+            _unlink_created_output_if_same(parent_fd, output_fd, output.name)
         raise
     except OSError as error:
-        if created and parent_fd >= 0:
-            try:
-                os.unlink(output.name, dir_fd=parent_fd)
-            except OSError:
-                pass
+        if created:
+            _unlink_created_output_if_same(parent_fd, output_fd, output.name)
         if error.errno == getattr(os, "EEXIST", 17):
             raise BenchmarkError(f"score output already exists: {output}") from error
         raise BenchmarkError(f"cannot publish score output: {error}") from error

@@ -75,6 +75,14 @@ _HIDDEN_THRESHOLD_TEXT = re.compile(
     r"5\s*%|15\s*%|25\s*%|50\s*%|60\s*%|99\s*%)(?![\d.])",
     re.IGNORECASE,
 )
+_OUTPUT_CONDITION_LEAK = re.compile(
+    r"(?:\bbenchmark[_ -]?condition\s*[:=]\s*(?:normal|suite|context[_ -]?only)\b|"
+    r"\bcondition\s*[:=]\s*(?:normal|suite|context[_ -]?only)\b|"
+    r"\bskills[/\\]+(?:translating|reviewing|localizing)-[^\s/\\]+[/\\]+skill\.md\b|"
+    r"(?:^|\n)\s*(?:\[(?:tool|assistant|system)\]|(?:tool|assistant|system)\s*:)|"
+    r"(?:^|\s)(?:[/\\][^\s/\\]+)*[/\\](?:benchmark-(?:evidence|private|tmp)|\.benchmark-review)(?:[/\\]|\b))",
+    re.IGNORECASE,
+)
 _RUN_RECORD_FIELDS = {field.name for field in fields(RunResult)} | {"schema_version", "output"}
 _DECODE_MAX_DEPTH = 32
 _DECODE_MAX_FORMS = 128
@@ -241,6 +249,11 @@ def _run_map(
         if not isinstance(run, Mapping):
             raise BenchmarkError("run must be an object")
         _validate_run_record(run)
+        if run.get("runner_mode") == "manual":
+            raise BenchmarkError(
+                "manual imports are not claim-bearing evidence; use independently "
+                "attested CLI execution for canonical blinding"
+            )
         run_id = run.get("run_id")
         if not isinstance(run_id, str) or not run_id or run_id in run_ids:
             raise BenchmarkError(f"duplicate or invalid run id: {run_id!r}")
@@ -589,6 +602,22 @@ def _scan_metadata_value(value: object, location: str, hidden_values: frozenset[
         raise BenchmarkError(f"visible metadata has unsupported value at {location}")
 
 
+def _scan_generated_output(value: str, location: str) -> None:
+    # Output scanning targets explicit harness disclosures, not arbitrary opaque
+    # encodings. Keep this bounded and linear across all 405 generated outputs.
+    forms = {
+        value,
+        html.unescape(value),
+        unquote(value),
+        _unicode_unescape(value),
+    }
+    for normalized in (_normalize_hidden_text(form) for form in forms):
+        if _OUTPUT_CONDITION_LEAK.search(normalized):
+            raise BenchmarkError(
+                f"generated output leaks benchmark condition at {location}"
+            )
+
+
 def scan_visible_bundle(
     bundle: object,
     *,
@@ -630,6 +659,8 @@ def scan_visible_bundle(
             raise BenchmarkError(f"visible item {item_id} has invalid anonymous outputs")
         if not all(isinstance(output, str) for output in outputs.values()):
             raise BenchmarkError(f"visible item {item_id} outputs must be text")
+        for label, output in outputs.items():
+            _scan_generated_output(output, f"items[{index}].outputs.{label}")
         _scan_metadata_value(item["context"], f"items[{index}].context", hidden_values)
         _scan_metadata_value(item["constraints"], f"items[{index}].constraints", hidden_values)
 
@@ -688,8 +719,8 @@ def _validate_prepared_manifest(
         "execution_config_sha256", "schedule_seed", "bootstrap_seed", "evidence",
         "schedule", "input_snapshot",
     }
-    allowed = required | {"sandbox_probe"}
-    if set(manifest) != required and set(manifest) != allowed:
+    allowed = required | {"sandbox_probe", "run_bindings"}
+    if not required <= set(manifest) or not set(manifest) <= allowed:
         missing = sorted(required - set(manifest))
         unknown = sorted(set(manifest) - allowed)
         raise BenchmarkError(
@@ -772,7 +803,26 @@ def _validate_prepared_manifest(
     if bound_evidence != actual_evidence or evidence_value != str(actual_evidence):
         raise BenchmarkError("run manifest evidence path mismatch")
 
-    _validate_schedule_manifest(manifest)
+    run_ids = _validate_schedule_manifest(manifest)
+    if "run_bindings" in manifest:
+        bindings = manifest["run_bindings"]
+        if not isinstance(bindings, Mapping) or set(bindings) != set(run_ids):
+            raise BenchmarkError("run manifest run bindings do not cover the schedule")
+        binding_fields = {
+            "case_sha256", "prompt_sha256", "execution_config_sha256",
+            "input_snapshot_sha256", "sha256",
+        }
+        for run_id, binding in bindings.items():
+            if not isinstance(binding, Mapping) or set(binding) != binding_fields:
+                raise BenchmarkError(f"run manifest binding is malformed: {run_id}")
+            for field in binding_fields:
+                value = binding[field]
+                if field == "input_snapshot_sha256" and value is None:
+                    continue
+                _require_sha256(value, f"run manifest binding {run_id} {field}")
+            payload = {name: binding[name] for name in binding_fields - {"sha256"}}
+            if binding["sha256"] != sha256_bytes(canonical_bytes(payload)):
+                raise BenchmarkError(f"run manifest binding hash mismatch: {run_id}")
     input_snapshot = manifest.get("input_snapshot")
     if not isinstance(input_snapshot, dict):
         raise BenchmarkError("run manifest input snapshot is malformed")

@@ -286,6 +286,53 @@ class ReportTests(unittest.TestCase):
 
 
 class ReportFixRoundTests(unittest.TestCase):
+    def test_report_rejects_unavailable_execution_identity_even_when_scores_exist(self):
+        """Break: a scorecard could look canonical without a verifiable host/model execution."""
+        scores = fixed_score_document()
+        provenance = fixed_report_provenance(scores)
+        provenance["execution"]["model"] = unavailable(
+            "provider did not attest the actual model revision"
+        )
+
+        with self.assertRaisesRegex(BenchmarkError, "execution model must be available"):
+            render_report(scores, provenance)
+
+    def test_passing_report_requires_complete_attempt_and_raw_output_coverage(self):
+        """Break: a PASS could cite a tiny arbitrary subset instead of all 405 frozen runs."""
+        scores = fixed_score_document()
+        scores["metrics"]["translation"].update({
+            "non_tied_win_rate": 0.75,
+            "bootstrap_lower": 0.60,
+            "mqm_reduction": 0.50,
+            "suite_critical": 0,
+            "normal_critical": 1,
+            "suite_structural_pass_rate": 1.0,
+            "critical_invariant_regressions": 0,
+        })
+        scores["metrics"]["review"] = {
+            "available": True,
+            "unresolved": 0,
+            "unresolved_reported": 0,
+            "unresolved_corrected": 0,
+            "introduced_error_aggregation": "any_mapping_per_run",
+            "introduced_error_runs": {"normal": 1, "suite": 0},
+            "response_runs": {"normal": 60, "suite": 60},
+            "required_error_recall": {"normal": 0.50, "suite": 0.75},
+            "reported_error_precision": {"normal": 0.80, "suite": 0.90},
+            "correction_success_rate": {"normal": 0.50, "suite": 0.75},
+            "false_positive_correction_rate": {"normal": 0.10, "suite": 0.10},
+            "introduced_error_rate": {"normal": 0.02, "suite": 0.0},
+            "critical_misses": {"normal": 2, "suite": 1},
+            "structural_pass_rate": {"normal": 1.0, "suite": 1.0},
+            "critical_invariant_regressions": 0,
+        }
+        scores["gates"] = evaluate_gates(scores["metrics"])
+        self.assertTrue(scores["gates"]["overall"]["passed"])
+        provenance = fixed_report_provenance(scores)
+
+        with self.assertRaisesRegex(BenchmarkError, "405 frozen runs"):
+            render_report(scores, provenance)
+
     def test_report_requires_bound_exact_provenance_and_embeds_it_in_results(self):
         """Break: a digest-only score could still publish without complete frozen provenance."""
         scores = fixed_score_document()

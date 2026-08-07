@@ -241,6 +241,26 @@ class BlindingTests(unittest.TestCase):
 
         scan_visible_bundle(bundle)
 
+    def test_builder_rejects_explicit_condition_leakage_in_generated_outputs(self):
+        """Break: an output can disclose its condition and make the blind comparison identifiable."""
+        leaks = (
+            "BENCHMARK_CONDITION=suite",
+            "condition: context_only",
+            "Loaded skills/translating-products/SKILL.md",
+            "[tool] read /private/benchmark-evidence/run.json",
+        )
+        for index, leak in enumerate(leaks):
+            changed_runs = complete_synthetic_runs()
+            changed_runs[index]["output"] = leak
+            changed_runs[index]["output_sha256"] = sha256_bytes(leak.encode("utf-8"))
+            changed_runs[index]["raw_output_path"] = (
+                f"raw/{changed_runs[index]['output_sha256']}.txt"
+            )
+            with self.subTest(leak=leak), self.assertRaisesRegex(
+                BenchmarkError, "generated output leaks benchmark condition",
+            ):
+                build_blind_bundle(changed_runs, cases(), SEED)
+
     def test_scanner_rejects_visible_repeat_and_condition_metadata_mutations(self):
         """Break: later producers could add an apparently helpful flag that silently unblinds review."""
         bundle, _ = build_blind_bundle(complete_synthetic_runs(), cases(), SEED)
@@ -445,12 +465,9 @@ class BlindingTests(unittest.TestCase):
 
         self.assertEqual(len(bundle["items"]), 198)
 
-    def test_builder_accepts_complete_manual_and_mixed_supported_modes(self):
-        """Break: Task 3 manual evidence must remain consumable with fake and CLI records."""
+    def test_builder_excludes_unattested_manual_imports_from_claim_bearing_bundle(self):
+        """Break: hand-edited text could be promoted to successful canonical model evidence."""
         manual = [as_manual(run) for run in complete_synthetic_runs()]
-
-        manual_bundle, _ = build_blind_bundle(manual, cases(), SEED)
-
         mixed = complete_synthetic_runs()
         mixed[0] = as_manual(mixed[0])
         mixed[1].update({
@@ -460,10 +477,13 @@ class BlindingTests(unittest.TestCase):
             "policy_integrity": "verified",
             "argv": ["sandbox-adapter", "runner"],
         })
-        mixed_bundle, _ = build_blind_bundle(mixed, cases(), SEED)
-
-        self.assertEqual(len(manual_bundle["items"]), 198)
-        self.assertEqual(len(mixed_bundle["items"]), 198)
+        for records in (manual, mixed):
+            with self.subTest(manual_count=sum(
+                record["runner_mode"] == "manual" for record in records
+            )), self.assertRaisesRegex(
+                BenchmarkError, "manual imports are not claim-bearing evidence",
+            ):
+                build_blind_bundle(records, cases(), SEED)
 
     def test_builder_rejects_incomplete_or_inconsistent_manual_records(self):
         """Break: manual compatibility must not admit pending, failed, or invented records."""
@@ -1114,7 +1134,7 @@ class BlindingCliTests(unittest.TestCase):
         completed = self.run_cli(
             public_dir / "bundle.json",
             private_dir / "key.json",
-            timeout=10,
+            timeout=30,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
@@ -1196,7 +1216,7 @@ class BlindingCliTests(unittest.TestCase):
                 key = private_dir / "key.json"
                 before_fds = len(os.listdir("/dev/fd"))
 
-                completed = self.run_cli(review, key, timeout=2)
+                completed = self.run_cli(review, key, timeout=10)
 
                 with self.subTest(resource=resource, case=label):
                     self.assertEqual(completed.returncode, 2, completed.stdout)

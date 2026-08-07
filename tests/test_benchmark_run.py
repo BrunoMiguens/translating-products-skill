@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import os
@@ -221,6 +222,13 @@ print(json.dumps(envelope, sort_keys=True))
         self.assertEqual(schedule, build_schedule(cases, self.config(), 20260803))
         self.assertNotEqual(schedule, build_schedule(cases, self.config(), 20260805))
         self.assertEqual({spec.attempt for spec in schedule}, {1, 2, 3})
+
+        changed_cases = copy.deepcopy(cases)
+        changed_cases[0]["source"] += " changed"
+        self.assertNotEqual(
+            {spec.run_id for spec in schedule},
+            {spec.run_id for spec in build_schedule(changed_cases, self.config(), 20260803)},
+        )
 
     def test_each_condition_has_the_required_isolation_boundary(self):
         """Break: controls could receive suite files or suite runs could lose approved context."""
@@ -850,6 +858,13 @@ print(json.dumps(envelope, sort_keys=True))
         self.assertIn("execution_config_sha256", manifest)
         self.assertEqual(len(resumed), 1)
         self.assertEqual(resumed_runner.prompts, [])
+        changed_templates = templates()
+        changed_templates["normal-translation"] += "\nChanged prompt bytes."
+        with self.assertRaisesRegex(BenchmarkError, "prompt binding mismatch"):
+            execute_schedule(
+                schedule, FakeRunner(), self.evidence,
+                cases=[case], config=self.config(), templates=changed_templates,
+            )
         with self.assertRaisesRegex(BenchmarkError, "schedule mismatch"):
             execute_schedule(
                 [RunSpec("resume-b", case["id"], "normal", 1)],

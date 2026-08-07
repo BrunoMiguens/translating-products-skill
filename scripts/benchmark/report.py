@@ -398,7 +398,8 @@ def _seed_binding(value: object, description: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise BenchmarkError(f"{description} must be an object")
     if value.get("status") == "unavailable":
-        return _unavailable(value, description)
+        _unavailable(value, description)
+        raise BenchmarkError(f"{description} must be available for a canonical report")
     record = _object(value, {"status", "value"}, description)
     if record["status"] != "available":
         raise BenchmarkError(f"{description} status is invalid")
@@ -444,7 +445,8 @@ def _execution_identity(
     if not isinstance(value, Mapping):
         raise BenchmarkError(f"{description} must be an object")
     if value.get("status") == "unavailable":
-        return _unavailable(value, description)
+        _unavailable(value, description)
+        raise BenchmarkError(f"{description} must be available for a canonical report")
     record = _object(value, {"status"} | available_fields, description)
     if record["status"] != "available":
         raise BenchmarkError(f"{description} status is invalid")
@@ -621,6 +623,12 @@ def _validate_report_provenance(
         raise BenchmarkError("raw output bindings must have unique sorted run IDs")
     if any(run_id not in set(attempt_ids) for run_id in raw_ids):
         raise BenchmarkError("raw output binding has no attempt history record")
+    if score_document["gates"]["overall"]["passed"] is True and (
+        len(attempt_ids) != 405 or set(raw_ids) != set(attempt_ids)
+    ):
+        raise BenchmarkError(
+            "a PASS report requires attempt and raw-output coverage for all 405 frozen runs"
+        )
 
     result_bindings = _object(
         provenance["result_bindings"],

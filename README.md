@@ -12,6 +12,17 @@ skills.
 > review, record that review in your own approval workflow rather than assuming
 > it from use of these skills.
 
+## Benchmark quality
+
+The [PT-PT benchmark runbook](docs/benchmarking.md) defines a frozen, paired
+comparison of the same exact agent/model/configuration under a normal prompt and
+the translation suite. It combines blind human preference and MQM-lite review,
+deterministic product-integrity checks, paired statistics, and diagnostic-only
+learned/operational measures. No result is claimed until all 405 outputs, 198
+blind presentations, the reviewer attestation and annotation lock, post-lock
+adjudication, unblinding, and every predeclared gate are complete and bound to
+the exact evidence bytes.
+
 The skills use the open `SKILL.md` format and are designed for Claude Code,
 Codex, Cursor, and universal Agent Skills hosts. They do not depend on a
 host-specific invocation syntax.

@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .blind import scan_visible_bundle
+from .comparisons import reject_comparison_cycle
 from .common import BenchmarkError, canonical_bytes, utc_now
 from .schema import SCHEMA_VERSION
 
@@ -51,8 +52,15 @@ _HOST = re.compile(r"^(127\.0\.0\.1|localhost):([1-9][0-9]{0,4})$")
 _ASCII_LENGTH = re.compile(r"^[0-9]+$")
 _LOCK_FIELDS = frozenset({
     "schema_version", "reviewer_id", "locked_at", "bundle_sha256",
-    "annotations_sha256", "state_sha256",
+    "annotations_sha256", "state_sha256", "attestation",
 })
+_ATTESTATION_INPUT_FIELDS = frozenset({
+    "schema_version", "reviewer_locale", "pt_pt_proficient",
+    "independence_and_conflicts", "continued_blindness_acknowledged",
+    "condition_key_not_accessed", "automated_findings_not_accessed",
+    "rubric_completed",
+})
+_ATTESTATION_FIELDS = _ATTESTATION_INPUT_FIELDS | {"bundle_sha256"}
 _ARTIFACT_NAMES = (
     "annotations.jsonl", "annotation-state.json", "annotation-lock.json",
 )
@@ -105,6 +113,39 @@ def _require_sha256(value: object, description: str) -> str:
     return digest
 
 
+def _reviewer_attestation(
+    value: object, *, bundle_sha256: str, stored: bool
+) -> dict:
+    fields = _ATTESTATION_FIELDS if stored else _ATTESTATION_INPUT_FIELDS
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise BenchmarkError("reviewer attestation fields are invalid")
+    if type(value.get("schema_version")) is not int or value["schema_version"] != 1:
+        raise BenchmarkError("reviewer attestation schema version mismatch")
+    if value.get("reviewer_locale") != "pt-PT":
+        raise BenchmarkError("reviewer attestation locale must be pt-PT")
+    _require_text(
+        value.get("independence_and_conflicts"),
+        "reviewer attestation independence and conflicts",
+        allow_empty=False,
+    )
+    for field in (
+        "pt_pt_proficient", "continued_blindness_acknowledged",
+        "condition_key_not_accessed", "automated_findings_not_accessed",
+        "rubric_completed",
+    ):
+        if value.get(field) is not True:
+            raise BenchmarkError(f"reviewer attestation {field} must be acknowledged")
+    result = dict(value)
+    if stored:
+        if _require_sha256(
+            value.get("bundle_sha256"), "reviewer attestation bundle_sha256"
+        ) != bundle_sha256:
+            raise BenchmarkError("reviewer attestation bundle hash mismatch")
+    else:
+        result["bundle_sha256"] = bundle_sha256
+    return result
+
+
 def _output_labels(item: Mapping[str, object]) -> tuple[str, ...]:
     outputs = item.get("outputs")
     if not isinstance(outputs, Mapping) or set(outputs) not in ({"A", "B"}, {"A", "B", "C"}):
@@ -151,6 +192,7 @@ def validate_annotation(item: Mapping[str, object], event: Mapping[str, object])
         comparison = _require_text(comparisons[key], f"comparison {key}")
         if comparison not in COMPARISON_VALUES:
             raise BenchmarkError(f"comparison {key} has invalid value")
+    reject_comparison_cycle(labels, comparisons)
 
     confidence = _require_text(event.get("confidence"), "confidence")
     if confidence not in CONFIDENCE_VALUES:
@@ -563,6 +605,9 @@ class ReviewStore:
         _require_utc_timestamp(value.get("locked_at"), "annotation lock locked_at")
         if _require_sha256(value.get("bundle_sha256"), "annotation lock bundle_sha256") != self._bundle_sha256:
             raise BenchmarkError("annotation lock bundle hash mismatch")
+        _reviewer_attestation(
+            value.get("attestation"), bundle_sha256=self._bundle_sha256, stored=True
+        )
         for field, artifact_name, message in (
             ("annotations_sha256", "annotations.jsonl", "annotations hash mismatch"),
             ("state_sha256", "annotation-state.json", "state hash mismatch"),
@@ -728,12 +773,15 @@ class ReviewStore:
         )
         return dict(stored)
 
-    def lock(self, *, reviewer_id: str) -> dict:
+    def lock(self, *, reviewer_id: str, attestation: object = None) -> dict:
         if self.locked or _artifact_stat(self._directory_fd, "annotation-lock.json") is not None:
             raise BenchmarkError("annotations are already locked")
         self._assert_bundle_unchanged()
         self._assert_history_unchanged()
         reviewer_id = _require_reviewer_id(reviewer_id)
+        bound_attestation = _reviewer_attestation(
+            attestation, bundle_sha256=self._bundle_sha256, stored=False
+        )
         remaining = len(self._items) - len(self.latest)
         if remaining:
             noun = "presentation remains" if remaining == 1 else "presentations remain"
@@ -748,6 +796,7 @@ class ReviewStore:
             "bundle_sha256": self._bundle_sha256,
             "annotations_sha256": _sha256(events_bytes),
             "state_sha256": _sha256(state_bytes),
+            "attestation": bound_attestation,
         }
         _exclusive_artifact(
             self._directory_fd, "annotation-lock.json", canonical_bytes(lock),
@@ -939,9 +988,14 @@ class _ReviewHandler(BaseHTTPRequestHandler):
                 stored = self.review_store.append(payload)
                 self._json(201, {"annotation": stored, "state": self.review_store.api_state()["state"]})
             else:
-                if set(payload) != {"reviewer_id"}:
-                    raise BenchmarkError("lock request must contain only reviewer_id")
-                lock = self.review_store.lock(reviewer_id=payload["reviewer_id"])
+                if set(payload) != {"reviewer_id", "attestation"}:
+                    raise BenchmarkError(
+                        "lock request must contain reviewer_id and reviewer attestation"
+                    )
+                lock = self.review_store.lock(
+                    reviewer_id=payload["reviewer_id"],
+                    attestation=payload["attestation"],
+                )
                 self._json(201, {"lock": lock, "state": self.review_store.api_state()["state"]})
         except BenchmarkError as error:
             self._error(400, "validation_error", str(error))
