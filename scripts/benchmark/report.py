@@ -73,7 +73,7 @@ _PROVENANCE_FIELDS = {
     "dataset_sha256", "dataset_manifest_sha256", "run_manifest_sha256",
     "review_bundle_sha256", "condition_key_sha256", "annotations_sha256",
     "annotation_lock_sha256", "validation_sha256", "bootstrap_seed",
-    "review_mappings_sha256", "learned_metrics_sha256",
+    "review_mappings_sha256", "learned_metrics_sha256", "claim_evidence",
 }
 _TRANSLATION_FIELDS = {
     "case_attempts", "suite_wins", "normal_wins", "ties", "ordinal_sum",
@@ -362,7 +362,10 @@ def _validate_score_document(value: object) -> Mapping[str, object]:
     if type(document["schema_version"]) is not int or document["schema_version"] != SCHEMA_VERSION:
         raise BenchmarkError("score document schema version mismatch")
     provenance = _object(document["provenance"], _PROVENANCE_FIELDS, "score provenance")
-    for name in sorted(_PROVENANCE_FIELDS - {"bootstrap_seed", "review_mappings_sha256", "learned_metrics_sha256"}):
+    for name in sorted(_PROVENANCE_FIELDS - {
+        "bootstrap_seed", "review_mappings_sha256", "learned_metrics_sha256",
+        "claim_evidence",
+    }):
         digest = _text(provenance[name], f"provenance {name}")
         if _SHA256.fullmatch(digest) is None:
             raise BenchmarkError(f"provenance {name} must be a SHA-256 digest")
@@ -372,10 +375,16 @@ def _validate_score_document(value: object) -> Mapping[str, object]:
             digest = _text(provenance[name], f"provenance {name}")
             if _SHA256.fullmatch(digest) is None:
                 raise BenchmarkError(f"provenance {name} must be a SHA-256 digest or null")
+    claim_evidence = _unavailable(
+        provenance["claim_evidence"], "claim-bearing provenance"
+    )
     metrics = _validate_metrics(document["metrics"])
     expected_gates = evaluate_gates(metrics)
+    expected_gates["overall"] = {"passed": None, "verdict": "unavailable"}
     if canonical_bytes(document["gates"]) != canonical_bytes(expected_gates):
-        raise BenchmarkError("score gates do not match canonical Task 7 evaluation")
+        raise BenchmarkError(
+            "claim-bearing provenance unavailable; overall gate must be unavailable"
+        )
     return document
 
 
@@ -455,6 +464,14 @@ def _execution_identity(
     return record
 
 
+def _unavailable_execution_identity(value: object, description: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping) or value.get("status") != "unavailable":
+        raise BenchmarkError(
+            f"{description} must be unavailable without a sealed execution receipt"
+        )
+    return _unavailable(value, description)
+
+
 def _validate_report_provenance(
     value: object,
     score_document: Mapping[str, object],
@@ -509,18 +526,28 @@ def _validate_report_provenance(
         provenance["execution"], {"host", "runner", "model", "generation_settings"},
         "report provenance execution",
     )
-    _execution_identity(execution["host"], "execution host", {"name", "version"})
-    _execution_identity(
-        execution["runner"], "execution runner",
-        {"name", "version", "invocation_mode"},
-    )
-    _execution_identity(
-        execution["model"], "execution model",
-        {"provider", "name", "version"},
-    )
+    claim_available = score_provenance["claim_evidence"].get("status") == "available"
+    if claim_available:
+        _execution_identity(execution["host"], "execution host", {"name", "version"})
+        _execution_identity(
+            execution["runner"], "execution runner",
+            {"name", "version", "invocation_mode"},
+        )
+        _execution_identity(
+            execution["model"], "execution model",
+            {"provider", "name", "version"},
+        )
+    else:
+        _unavailable_execution_identity(execution["host"], "execution host")
+        _unavailable_execution_identity(execution["runner"], "execution runner")
+        _unavailable_execution_identity(execution["model"], "execution model")
     settings = execution["generation_settings"]
     if not isinstance(settings, list):
         raise BenchmarkError("generation settings must be a list")
+    if not claim_available and settings:
+        raise BenchmarkError(
+            "generation settings must be unavailable without claim-bearing provenance"
+        )
     setting_names: list[str] = []
     for index, setting in enumerate(settings):
         record = _object(
@@ -628,6 +655,10 @@ def _validate_report_provenance(
     ):
         raise BenchmarkError(
             "a PASS report requires attempt and raw-output coverage for all 405 frozen runs"
+        )
+    if not claim_available and (attempt_ids or raw_ids):
+        raise BenchmarkError(
+            "attempt and raw-output provenance must be unavailable without a sealed receipt"
         )
 
     result_bindings = _object(

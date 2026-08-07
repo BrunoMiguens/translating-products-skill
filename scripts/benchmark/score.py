@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from .blind import (
     _parse_canonical_json,
@@ -1552,16 +1553,22 @@ def _normalized_validations(
     evidence_dir: Path,
     runs: Sequence[Mapping[str, object]],
     cases: Sequence[Mapping[str, object]],
+    *,
+    encoded: bytes | None = None,
 ) -> list[dict]:
     fields = {
         "schema_version", "run_id", "case_id", "status", "output", "findings",
         "validator_errors", "applicable_checks", "passed_checks", "failed_checks",
         "validator_error_checks",
     }
-    records = _canonical_jsonl_file(
-        evidence_dir / "validation.jsonl",
-        "validation.jsonl",
-        limit=_MAX_DOCUMENT_INPUT_BYTES,
+    records = (
+        _parse_canonical_jsonl(encoded, "validation.jsonl")
+        if encoded is not None
+        else _canonical_jsonl_file(
+            evidence_dir / "validation.jsonl",
+            "validation.jsonl",
+            limit=_MAX_DOCUMENT_INPUT_BYTES,
+        )
     )
     runs_by_id = {run["run_id"]: run for run in runs}
     invariants_by_case: dict[str, list[str]] = {}
@@ -1615,7 +1622,14 @@ def _normalized_validations(
     return result
 
 
-def _optional_jsonl(evidence_dir: Path, name: str) -> list[dict] | None:
+def _optional_jsonl(
+    evidence_dir: Path,
+    name: str,
+    *,
+    encoded: bytes | None = None,
+) -> list[dict] | None:
+    if encoded is not None:
+        return _parse_canonical_jsonl(encoded, name)
     path = evidence_dir / name
     try:
         path.lstat()
@@ -1626,7 +1640,13 @@ def _optional_jsonl(evidence_dir: Path, name: str) -> list[dict] | None:
     return _canonical_jsonl_file(path, name, limit=_MAX_DOCUMENT_INPUT_BYTES)
 
 
-def _normalized_scoring_evidence(paths: ScorePaths, loaded: Mapping[str, object]) -> dict:
+def _normalized_scoring_evidence(
+    paths: ScorePaths,
+    loaded: Mapping[str, object],
+    derived_inputs: Mapping[str, bytes] | None = None,
+) -> dict:
+    held_derived_set = derived_inputs is not None
+    derived_inputs = {} if derived_inputs is None else derived_inputs
     cases_by_id = {case["id"]: case for case in loaded["cases"]}
     bundle_by_id = {item["id"]: item for item in loaded["bundle"]["items"]}
     key_items = loaded["key"]["items"]
@@ -1702,12 +1722,126 @@ def _normalized_scoring_evidence(paths: ScorePaths, loaded: Mapping[str, object]
         ],
         "items": items,
         "validations": _normalized_validations(
-            Path(paths.evidence_dir), loaded["runs"], loaded["cases"]
+            Path(paths.evidence_dir), loaded["runs"], loaded["cases"],
+            encoded=derived_inputs.get("validation.jsonl"),
         ),
         "seeded_errors": normalized_seeded,
-        "review_mappings": _optional_jsonl(Path(paths.evidence_dir), "review-mappings.jsonl"),
-        "learned_metrics": _optional_jsonl(Path(paths.evidence_dir), "learned-metrics.jsonl"),
+        "review_mappings": (
+            None
+            if held_derived_set and "review-mappings.jsonl" not in derived_inputs
+            else _optional_jsonl(
+                Path(paths.evidence_dir), "review-mappings.jsonl",
+                encoded=derived_inputs.get("review-mappings.jsonl"),
+            )
+        ),
+        "learned_metrics": (
+            None
+            if held_derived_set and "learned-metrics.jsonl" not in derived_inputs
+            else _optional_jsonl(
+                Path(paths.evidence_dir), "learned-metrics.jsonl",
+                encoded=derived_inputs.get("learned-metrics.jsonl"),
+            )
+        ),
     }
+
+
+def _open_held_derived_inputs(
+    evidence_dir: Path,
+) -> tuple[int, dict[str, tuple[int, bytes, tuple[int, int, int, int]]]]:
+    parent_fd = -1
+    held: dict[str, tuple[int, bytes, tuple[int, int, int, int]]] = {}
+    try:
+        parent_fd = os.open(
+            evidence_dir,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        for name, required in (
+            ("validation.jsonl", True),
+            ("review-mappings.jsonl", False),
+            ("learned-metrics.jsonl", False),
+        ):
+            try:
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=parent_fd,
+                )
+            except FileNotFoundError:
+                if required:
+                    raise BenchmarkError(f"missing required scoring input: {name}")
+                continue
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                os.close(descriptor)
+                raise BenchmarkError(f"derived scoring input must be one regular file: {name}")
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, min(65536, _MAX_DOCUMENT_INPUT_BYTES + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > _MAX_DOCUMENT_INPUT_BYTES:
+                    os.close(descriptor)
+                    raise BenchmarkError(f"{name} exceeds the input size limit")
+            encoded = b"".join(chunks)
+            after = os.fstat(descriptor)
+            named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            identity = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+            current = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            if identity != current or (named.st_dev, named.st_ino) != identity[:2]:
+                os.close(descriptor)
+                raise BenchmarkError(f"derived scoring input changed while acquired: {name}")
+            held[name] = (descriptor, encoded, identity)
+        return parent_fd, held
+    except Exception:
+        for descriptor, _encoded, _identity in held.values():
+            os.close(descriptor)
+        if parent_fd >= 0:
+            os.close(parent_fd)
+        raise
+
+
+def _verify_held_derived_inputs(
+    parent_fd: int,
+    held: Mapping[str, tuple[int, bytes, tuple[int, int, int, int]]],
+) -> None:
+    for name, (descriptor, encoded, identity) in held.items():
+        metadata = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        current = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+        if (
+            current != identity
+            or (named.st_dev, named.st_ino) != identity[:2]
+            or metadata.st_nlink != 1
+        ):
+            raise BenchmarkError(f"derived scoring input changed during scoring: {name}")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        current_bytes = b""
+        while len(current_bytes) <= _MAX_DOCUMENT_INPUT_BYTES:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            current_bytes += chunk
+        if current_bytes != encoded:
+            raise BenchmarkError(f"derived scoring input bytes changed during scoring: {name}")
+
+
+def _close_held_derived_inputs(
+    parent_fd: int,
+    held: Mapping[str, tuple[int, bytes, tuple[int, int, int, int]]],
+) -> None:
+    for descriptor, _encoded, _identity in held.values():
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+    if parent_fd >= 0:
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _input_fingerprint(paths: ScorePaths) -> tuple[tuple[str, int, int, int, int, str], ...]:
@@ -1753,35 +1887,53 @@ def _input_fingerprint(paths: ScorePaths) -> tuple[tuple[str, int, int, int, int
 
 
 def score_paths(paths: ScorePaths) -> dict:
-    before = _input_fingerprint(paths)
-    loaded = _load_verified_inputs(paths)
-    metrics = score_evidence(_normalized_scoring_evidence(paths, loaded))
-    provenance = {
-        "dataset_sha256": loaded["prepared"]["dataset_sha256"],
-        "dataset_manifest_sha256": loaded["prepared"]["dataset_manifest_sha256"],
-        "run_manifest_sha256": loaded["prepared"]["run_manifest_sha256"],
-        "review_bundle_sha256": sha256_file(Path(paths.review_bundle)),
-        "condition_key_sha256": sha256_file(Path(paths.condition_key)),
-        "annotations_sha256": sha256_file(Path(paths.annotations)),
-        "annotation_lock_sha256": sha256_file(Path(paths.annotation_lock)),
-        "validation_sha256": sha256_file(Path(paths.evidence_dir) / "validation.jsonl"),
-        "bootstrap_seed": loaded["run_manifest"]["bootstrap_seed"],
-    }
-    for key, name in (
-        ("review_mappings_sha256", "review-mappings.jsonl"),
-        ("learned_metrics_sha256", "learned-metrics.jsonl"),
-    ):
-        path = Path(paths.evidence_dir) / name
-        provenance[key] = sha256_file(path) if path.exists() else None
-    document = {
-        "schema_version": SCHEMA_VERSION,
-        "provenance": provenance,
-        "metrics": metrics,
-        "gates": evaluate_gates(metrics),
-    }
-    if _input_fingerprint(paths) != before:
-        raise BenchmarkError("scoring inputs changed while the document was calculated")
-    return document
+    parent_fd, held = _open_held_derived_inputs(Path(paths.evidence_dir))
+    try:
+        before = _input_fingerprint(paths)
+        loaded = _load_verified_inputs(paths)
+        derived_bytes = {name: value[1] for name, value in held.items()}
+        metrics = score_evidence(
+            _normalized_scoring_evidence(paths, loaded, derived_bytes)
+        )
+        provenance = {
+            "dataset_sha256": loaded["prepared"]["dataset_sha256"],
+            "dataset_manifest_sha256": loaded["prepared"]["dataset_manifest_sha256"],
+            "run_manifest_sha256": loaded["prepared"]["run_manifest_sha256"],
+            "review_bundle_sha256": sha256_file(Path(paths.review_bundle)),
+            "condition_key_sha256": sha256_file(Path(paths.condition_key)),
+            "annotations_sha256": sha256_file(Path(paths.annotations)),
+            "annotation_lock_sha256": sha256_file(Path(paths.annotation_lock)),
+            "validation_sha256": sha256_bytes(derived_bytes["validation.jsonl"]),
+            "bootstrap_seed": loaded["run_manifest"]["bootstrap_seed"],
+            "claim_evidence": {
+                "status": "unavailable",
+                "reason": (
+                    "independently attested execution receipt and sealed derivation "
+                    "inputs are unavailable"
+                ),
+            },
+        }
+        for key, name in (
+            ("review_mappings_sha256", "review-mappings.jsonl"),
+            ("learned_metrics_sha256", "learned-metrics.jsonl"),
+        ):
+            provenance[key] = (
+                sha256_bytes(derived_bytes[name]) if name in derived_bytes else None
+            )
+        gates = evaluate_gates(metrics)
+        gates["overall"] = {"passed": None, "verdict": "unavailable"}
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "provenance": provenance,
+            "metrics": metrics,
+            "gates": gates,
+        }
+        _verify_held_derived_inputs(parent_fd, held)
+        if _input_fingerprint(paths) != before:
+            raise BenchmarkError("scoring inputs changed while the document was calculated")
+        return document
+    finally:
+        _close_held_derived_inputs(parent_fd, held)
 
 
 def _validate_output_target(output: Path, paths: ScorePaths) -> Path:
@@ -1819,15 +1971,34 @@ def _validate_output_target(output: Path, paths: ScorePaths) -> Path:
 
 
 def _unlink_created_output_if_same(parent_fd: int, output_fd: int, name: str) -> None:
-    """Remove only the directory entry still naming the inode created by this publisher."""
+    """Quarantine the current entry before deleting only the inode we created."""
     if parent_fd < 0 or output_fd < 0:
         return
+    quarantine = f".{name}.rollback-{uuid4().hex}"
     try:
         created = os.fstat(output_fd)
-        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if (created.st_dev, created.st_ino) != (current.st_dev, current.st_ino):
+        os.rename(
+            name,
+            quarantine,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        moved = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
+        if (created.st_dev, created.st_ino) != (moved.st_dev, moved.st_ino):
+            try:
+                os.link(
+                    quarantine,
+                    name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except OSError:
+                pass
+            else:
+                os.unlink(quarantine, dir_fd=parent_fd)
             return
-        os.unlink(name, dir_fd=parent_fd)
+        os.unlink(quarantine, dir_fd=parent_fd)
     except FileNotFoundError:
         return
     except OSError:

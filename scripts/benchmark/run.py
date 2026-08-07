@@ -992,6 +992,10 @@ def _ensure_run_manifest(
         manifest = read_json(target)
         if not isinstance(manifest, dict):
             raise BenchmarkError("run manifest must be an object")
+        if (evidence_dir / "runs.jsonl").exists() and "run_bindings" not in manifest:
+            raise BenchmarkError(
+                "legacy evidence with completed results has no original prompt bindings"
+            )
         existing = manifest.get("schedule")
         if existing is not None and existing != schedule_value:
             raise BenchmarkError("run manifest schedule mismatch")

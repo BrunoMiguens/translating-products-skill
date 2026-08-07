@@ -80,6 +80,9 @@ _OUTPUT_CONDITION_LEAK = re.compile(
     r"\bcondition\s*[:=]\s*(?:normal|suite|context[_ -]?only)\b|"
     r"\bskills[/\\]+(?:translating|reviewing|localizing)-[^\s/\\]+[/\\]+skill\.md\b|"
     r"(?:^|\n)\s*(?:\[(?:tool|assistant|system)\]|(?:tool|assistant|system)\s*:)|"
+    r"\bloaded\s+(?:the\s+)?(?:translating|reviewing|localizing)-[^\s/\\]+(?:\s+skill)?\b|"
+    r"\btranslation\s+suite\s+(?:enabled|loaded|active)\b|"
+    r"\b(?:treatment|condition)\s*[:=]\s*(?:translating|reviewing|localizing)-[^\s/\\]+\b|"
     r"(?:^|\s)(?:[/\\][^\s/\\]+)*[/\\](?:benchmark-(?:evidence|private|tmp)|\.benchmark-review)(?:[/\\]|\b))",
     re.IGNORECASE,
 )

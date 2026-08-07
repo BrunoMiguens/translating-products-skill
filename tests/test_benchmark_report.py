@@ -28,6 +28,8 @@ from tests.test_benchmark_score import base_evidence
 
 def fixed_score_document() -> dict:
     metrics = score_evidence(base_evidence())
+    gates = evaluate_gates(metrics)
+    gates["overall"] = {"passed": None, "verdict": "unavailable"}
     return {
         "schema_version": 1,
         "provenance": {
@@ -42,9 +44,12 @@ def fixed_score_document() -> dict:
             "bootstrap_seed": 20260804,
             "review_mappings_sha256": None,
             "learned_metrics_sha256": None,
+            "claim_evidence": unavailable(
+                "independently attested execution receipt and sealed derivation inputs unavailable"
+            ),
         },
         "metrics": metrics,
-        "gates": evaluate_gates(metrics),
+        "gates": gates,
     }
 
 
@@ -82,53 +87,18 @@ def fixed_report_provenance(scores: dict | None = None) -> dict:
             "configuration_sha256": "d" * 64,
         },
         "execution": {
-            "host": {"status": "available", "name": "fixture-host", "version": "1.2.3"},
-            "runner": {
-                "status": "available",
-                "name": "fixture-runner",
-                "version": "2.0",
-                "invocation_mode": "cli",
-            },
-            "model": {
-                "status": "available",
-                "provider": "fixture-provider",
-                "name": "fixture-model",
-                "version": "2026-08-03",
-            },
-            "generation_settings": [
-                {"name": "temperature", "value": 0.0},
-                {"name": "top_p", "value": 1.0},
-            ],
+            "host": unavailable("sealed host receipt unavailable"),
+            "runner": unavailable("sealed runner receipt unavailable"),
+            "model": unavailable("sealed provider/model receipt unavailable"),
+            "generation_settings": [],
         },
         "seeds": {
             "schedule": available(20260803),
             "blinding": available(20260805),
             "bootstrap": available(scores["provenance"]["bootstrap_seed"]),
         },
-        "attempt_history": [
-            {
-                "run_id": "run-1",
-                "attempt": 1,
-                "outcome": "infrastructure_failure",
-                "retry_of": None,
-                "retry_reason": None,
-                "started_at": unavailable("process did not start"),
-                "completed_at": unavailable("process did not start"),
-            },
-            {
-                "run_id": "run-2",
-                "attempt": 2,
-                "outcome": "success",
-                "retry_of": "run-1",
-                "retry_reason": "runner executable was temporarily unavailable",
-                "started_at": available("2026-08-03T00:00:00Z"),
-                "completed_at": available("2026-08-03T00:00:01Z"),
-            },
-        ],
-        "raw_outputs": [
-            {"run_id": "run-1", "sha256": "e" * 64},
-            {"run_id": "run-2", "sha256": "f" * 64},
-        ],
+        "attempt_history": [],
+        "raw_outputs": [],
         "result_bindings": {
             "structural_sha256": scores["provenance"]["validation_sha256"],
             "learned_metrics": unavailable("learned metrics were not produced"),
@@ -224,8 +194,8 @@ class ReportTests(unittest.TestCase):
             "Context-only",
             "review mappings unavailable",
             "learned metrics unavailable",
-            "Model: provider=fixture-provider",
-            "Runner configuration: name=fixture-runner",
+            "Model: unavailable",
+            "Runner configuration: unavailable",
         ):
             self.assertIn(expected, markdown)
 
@@ -286,15 +256,30 @@ class ReportTests(unittest.TestCase):
 
 
 class ReportFixRoundTests(unittest.TestCase):
-    def test_report_rejects_unavailable_execution_identity_even_when_scores_exist(self):
-        """Break: a scorecard could look canonical without a verifiable host/model execution."""
+    def test_report_suppresses_pass_and_invented_execution_without_claim_evidence(self):
+        """Break: self-authored identities and 405 invented hashes could manufacture a PASS."""
+        scores = fixed_score_document()
+        scores["provenance"]["claim_evidence"] = unavailable(
+            "independent execution receipt and sealed derivation inputs unavailable"
+        )
+        scores["gates"]["overall"] = {"passed": True, "reason": "fabricated pass"}
+        provenance = fixed_report_provenance(scores)
+
+        with self.assertRaisesRegex(BenchmarkError, "claim-bearing provenance unavailable"):
+            render_report(scores, provenance)
+
+    def test_report_rejects_self_asserted_execution_identity_without_a_sealed_receipt(self):
+        """Break: user-authored provider/model strings could be presented as attested execution."""
         scores = fixed_score_document()
         provenance = fixed_report_provenance(scores)
-        provenance["execution"]["model"] = unavailable(
-            "provider did not attest the actual model revision"
-        )
+        provenance["execution"]["model"] = {
+            "status": "available",
+            "provider": "self-asserted-provider",
+            "name": "self-asserted-model",
+            "version": "self-asserted-version",
+        }
 
-        with self.assertRaisesRegex(BenchmarkError, "execution model must be available"):
+        with self.assertRaisesRegex(BenchmarkError, "execution model must be unavailable"):
             render_report(scores, provenance)
 
     def test_passing_report_requires_complete_attempt_and_raw_output_coverage(self):
@@ -330,7 +315,7 @@ class ReportFixRoundTests(unittest.TestCase):
         self.assertTrue(scores["gates"]["overall"]["passed"])
         provenance = fixed_report_provenance(scores)
 
-        with self.assertRaisesRegex(BenchmarkError, "405 frozen runs"):
+        with self.assertRaisesRegex(BenchmarkError, "claim-bearing provenance unavailable"):
             render_report(scores, provenance)
 
     def test_report_requires_bound_exact_provenance_and_embeds_it_in_results(self):
@@ -348,7 +333,8 @@ class ReportFixRoundTests(unittest.TestCase):
         })
         text = markdown.decode()
         for expected in (
-            "fixture-host", "fixture-runner", "fixture-model", "temperature",
+            "sealed host receipt unavailable", "sealed runner receipt unavailable",
+            "sealed providerU+002Fmodel receipt unavailable",
             "Schedule seed", "Blinding seed", "Attempt and retry history",
             "Raw-output content hashes", "score-v1", "report-v1",
         ):
@@ -384,7 +370,9 @@ class ReportFixRoundTests(unittest.TestCase):
         wrong_code["code_versions"]["report"]["sha256"] = "0" * 64
         mutations.append(wrong_code)
         nonfinite = fixed_report_provenance(scores)
-        nonfinite["execution"]["generation_settings"][0]["value"] = math.inf
+        nonfinite["execution"]["generation_settings"] = [
+            {"name": "temperature", "value": math.inf}
+        ]
         mutations.append(nonfinite)
 
         for mutation in mutations:
@@ -457,7 +445,8 @@ class ReportFixRoundTests(unittest.TestCase):
             {"run_id": "run-2", "sha256": "e" * 64},
             {"run_id": "run-3", "sha256": "f" * 64},
         ]
-        render_report(scores, valid)
+        with self.assertRaisesRegex(BenchmarkError, "sealed receipt"):
+            render_report(scores, valid)
 
         invalid_histories = {
             "self": [attempt("run-1", 1, "timeout", "run-1", "self")],

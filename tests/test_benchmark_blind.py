@@ -248,6 +248,9 @@ class BlindingTests(unittest.TestCase):
             "condition: context_only",
             "Loaded skills/translating-products/SKILL.md",
             "[tool] read /private/benchmark-evidence/run.json",
+            "loaded translating-products skill",
+            "translation suite enabled",
+            "Treatment: translating-products",
         )
         for index, leak in enumerate(leaks):
             changed_runs = complete_synthetic_runs()

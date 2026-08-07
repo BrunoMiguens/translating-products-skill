@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from scripts.benchmark import score as score_module
 from scripts.benchmark.blind import (
     _snapshot_manifest,
     _validate_prepared_manifest,
@@ -916,6 +918,37 @@ class LockedScoringTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), b"replacement")
         self.assertTrue(created_inode.exists())
 
+    def test_score_rollback_never_unlinks_replacement_installed_after_identity_check(self):
+        """Break: stat then unlink could delete a replacement installed between both calls."""
+        output = self.root / "post-stat-raced-score.json"
+        created_inode = self.root / "post-stat-created-inode.json"
+        real_rename = os.rename
+
+        def raced_rename(source, destination, *args, **kwargs):
+            result = real_rename(source, destination, *args, **kwargs)
+            if source == output.name and str(destination).startswith(f".{output.name}.rollback-"):
+                created_inode.write_bytes(b"created inode was quarantined")
+                output.write_bytes(b"replacement-after-stat")
+            return result
+
+        fsync_calls = 0
+
+        def failing_fsync(_descriptor: int) -> None:
+            nonlocal fsync_calls
+            fsync_calls += 1
+            if fsync_calls == 2:
+                raise OSError("induced directory fsync failure")
+
+        with (
+            mock.patch("scripts.benchmark.score.os.rename", side_effect=raced_rename),
+            mock.patch("scripts.benchmark.score.os.fsync", side_effect=failing_fsync),
+        ):
+            with self.assertRaisesRegex(BenchmarkError, "cannot publish score output"):
+                _publish_exclusive_json(output, {"score": "original"})
+
+        self.assertEqual(output.read_bytes(), b"replacement-after-stat")
+        self.assertTrue(created_inode.exists())
+
     def _write_evidence(self) -> None:
         self.evidence.mkdir()
         snapshot = self.evidence / "input-snapshot"
@@ -1073,6 +1106,8 @@ class LockedScoringTests(unittest.TestCase):
         second = score_paths(self.paths)
         self.assertEqual(canonical_bytes(first), canonical_bytes(second))
         self.assertEqual(first["provenance"]["bootstrap_seed"], 20260804)
+        self.assertEqual(first["provenance"]["claim_evidence"]["status"], "unavailable")
+        self.assertIsNone(first["gates"]["overall"]["passed"])
         self.assertIsNone(first["gates"]["review"]["passed"])
         self.assertEqual(first["metrics"]["scorecards"]["overall"]["case_attempts"], 180)
         self.assertEqual(
@@ -1221,6 +1256,54 @@ class LockedScoringTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(BenchmarkError, "nesting"):
             verify_locked_inputs(self.paths)
+
+    def test_scoring_uses_held_derived_bytes_across_swap_and_restore(self):
+        """Break: a derived pathname could be swapped for scoring and restored before fingerprints."""
+        validation_path = self.evidence / "validation.jsonl"
+        saved_path = self.evidence / "validation.saved"
+        original_normalizer = score_module._normalized_scoring_evidence
+
+        def swap_then_restore(*args, **kwargs):
+            validation_path.rename(saved_path)
+            validation_path.write_bytes(b'{"malicious":true}\n')
+            try:
+                return original_normalizer(*args, **kwargs)
+            finally:
+                validation_path.unlink()
+                saved_path.rename(validation_path)
+
+        with mock.patch(
+            "scripts.benchmark.score._normalized_scoring_evidence",
+            side_effect=swap_then_restore,
+        ):
+            document = score_paths(self.paths)
+
+        self.assertIsNone(document["gates"]["overall"]["passed"])
+        self.assertEqual(
+            document["provenance"]["validation_sha256"],
+            sha256_bytes(validation_path.read_bytes()),
+        )
+
+    def test_scoring_does_not_admit_optional_derivation_created_after_acquisition(self):
+        """Break: an absent optional file could appear after the held input set was frozen."""
+        mappings_path = self.evidence / "review-mappings.jsonl"
+        original_normalizer = score_module._normalized_scoring_evidence
+
+        def create_then_remove(*args, **kwargs):
+            mappings_path.write_bytes(b'{"malicious":true}\n')
+            try:
+                return original_normalizer(*args, **kwargs)
+            finally:
+                mappings_path.unlink()
+
+        with mock.patch(
+            "scripts.benchmark.score._normalized_scoring_evidence",
+            side_effect=create_then_remove,
+        ):
+            document = score_paths(self.paths)
+
+        self.assertFalse(document["metrics"]["review"]["available"])
+        self.assertIsNone(document["provenance"]["review_mappings_sha256"])
 
 
 if __name__ == "__main__":

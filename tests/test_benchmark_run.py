@@ -872,6 +872,30 @@ print(json.dumps(envelope, sort_keys=True))
                 cases=[case], config=self.config(), templates=templates(),
             )
 
+    def test_resume_rejects_completed_legacy_evidence_without_original_prompt_bindings(self):
+        """Break: a changed prompt could be backfilled over an old output and silently reused."""
+        case = one_translation_case()
+        schedule = [RunSpec("legacy-binding", case["id"], "normal", 1)]
+        execute_schedule(
+            schedule, FakeRunner("old output"), self.evidence,
+            cases=[case], config=self.config(), templates=templates(),
+        )
+        manifest_path = self.evidence / "run-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.pop("run_bindings")
+        atomic_write_json(manifest_path, manifest)
+        changed_templates = templates()
+        changed_templates["normal-translation"] += "\nChanged after the old run."
+        resumed_runner = FakeRunner("must not run")
+
+        with self.assertRaisesRegex(BenchmarkError, "legacy evidence.*prompt bindings"):
+            execute_schedule(
+                schedule, resumed_runner, self.evidence,
+                cases=[case], config=self.config(), templates=changed_templates,
+            )
+
+        self.assertEqual(resumed_runner.prompts, [])
+
     def test_only_prestart_failure_retries_and_exception_still_cleans_project(self):
         """Break: retrying a started process or leaking a failed project biases later attempts."""
         case = one_translation_case()
