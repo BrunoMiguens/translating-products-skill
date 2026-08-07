@@ -75,23 +75,28 @@ def split_readme_inventory(text: str) -> tuple[str, str, str]:
 
 
 def _catalog_from_manifest(manifest: dict) -> dict:
+    def routing_record(item: dict) -> dict:
+        record = {}
+        for field in ROUTING_FIELDS:
+            if field == "selectors" and field not in item:
+                continue
+            record[field] = (
+                item.get(
+                    "ownership",
+                    {
+                        capability: item["phases"]
+                        for capability in item["capabilities"]
+                    },
+                )
+                if field == "ownership"
+                else item[field]
+            )
+        return record
+
     return {
         "schema_version": 2,
         "suite_version": manifest["suite_version"],
-        "skills": [
-            {
-                field: (
-                    item.get(
-                        "ownership",
-                        {capability: item["phases"] for capability in item["capabilities"]},
-                    )
-                    if field == "ownership"
-                    else item[field]
-                )
-                for field in ROUTING_FIELDS
-            }
-            for item in manifest["skills"]
-        ],
+        "skills": [routing_record(item) for item in manifest["skills"]],
     }
 
 
@@ -121,13 +126,17 @@ def _render_markdown(catalog: dict) -> str:
         dependencies = ", ".join(
             f"`{dependency}`" for dependency in item["depends_on"]
         ) or "none"
-        selectors = " OR ".join(
-            ", ".join(
-                f"`{axis}`: {', '.join(f'`{value}`' for value in values)}"
-                for axis, values in selector.items()
+        selectors = (
+            " OR ".join(
+                ", ".join(
+                    f"`{axis}`: {', '.join(f'`{value}`' for value in values)}"
+                    for axis, values in selector.items()
+                )
+                for selector in item["selectors"]
             )
-            for selector in item["selectors"]
-        ) or "none"
+            if "selectors" in item
+            else "universal"
+        )
         phases = ", ".join(f"`{phase}`" for phase in item["phases"]) or "none"
         required_context = ", ".join(
             f"`{context}`" for context in item["required_context"]

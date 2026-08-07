@@ -8,12 +8,16 @@ never installs, downloads, enables, or grants authority to a skill.
 
 An installed external specialist must provide the same record fields as a
 bundled specialist: `name`, `version`, `category`, `description`,
-`capabilities`, `depends_on`, `selectors`, `phases`, `specificity`,
-`required_context`, `conflicts`, and `supersedes`. The catalog itself uses
-schema version `2`.
+`capabilities`, `depends_on`, `phases`, `specificity`, `required_context`,
+`conflicts`, and `supersedes`. The catalog itself uses schema version `2`.
+`capabilities` and `phases` are non-empty. `ownership` is optional as described
+below. `selectors` is optional only to express universal applicability.
 
-`selectors` is a non-empty list of alternative matching rules. Each populated
-axis within one selector must match the task profile; values within an axis are
+When present, `selectors` is a non-empty list of non-empty alternative matching
+rules, and every axis has at least one value. An omitted field means universal
+applicability; `selectors: []`, an empty selector object, `null`, and empty axis
+values are malformed rather than wildcard spellings. Each populated axis
+within one selector must match the task profile; values within an axis are
 alternatives; multiple selectors are alternative routes into the skill. The
 only selector axes are `languages`, `locales`, `scripts`, `surfaces`,
 `platforms`, `formats`, `domains`, and `capabilities`. Locale values use
@@ -33,6 +37,14 @@ applies replacement only to shared capability-and-phase slices. It removes the
 broader module only when every one of those slices is covered; otherwise it
 keeps the broader module and returns the scoped override plan. Unrelated
 capabilities, phases, and dependencies remain active.
+
+Relationship validation runs on the complete bundled-plus-external graph
+before selector evaluation. Dependencies may cross execution phases because
+they declare load and contract requirements, not an execution-phase edge.
+Unknown and self targets, dependency cycles, supersedes cycles, mixed cycles,
+and a target appearing in both `depends_on` and `supersedes` are invalid. A
+superseding record must also share a category and owned capability-phase slice
+with its target and have strictly narrower `specificity`.
 
 Ignore an external candidate when any required metadata is missing, ambiguous,
 invalid, or conflicts cannot be resolved deterministically.
@@ -84,8 +96,37 @@ prompts, expected answers, or disguised answer tables fails validation.
 
 Contributors add an entry only after review. Each entry contains exactly
 `name`, `version_constraint`, `compatible_orchestrator_version`,
-`capabilities`, `authority_scope`, `dependencies`, `conflicts`,
-`evaluation_evidence`, and `review_date`. Reviewers verify metadata validity,
-installation identity, dependency and conflict behavior, authority boundaries,
-representative evaluation output, and host neutrality before accepting an
-entry.
+`capabilities`, `authority_scope`, `dependencies`, `conflicts`, `supersedes`,
+`reviewer`, `evaluation_evidence`, and `review_date`.
+
+`version_constraint` and `compatible_orchestrator_version` accept an exact
+`MAJOR.MINOR.PATCH` version or one comparison using `==`, `>=`, `<=`, `>`, or
+`<`, such as `>=1.0.0`. Compound ranges, wildcards, caret ranges, tilde ranges,
+prereleases, and build metadata are unsupported and fail clearly.
+
+`authority_scope` is an object containing exactly `phases`, `ownership`, and
+`selectors`. `phases` binds every declared execution phase. `ownership` binds
+every capability to its owned phases. `selectors` copies the admitted selector
+list, or is `null` when the admitted record omits selectors for universal
+applicability. This binds language, locale, script, surface, platform, format,
+domain, and requested-capability scope without granting authority through a
+broader review claim.
+
+`reviewer` is a stable, referenceable HTTPS identity URI with a non-root path;
+queries, fragments, embedded credentials, whitespace, and anonymous labels are
+invalid. `review_date` is a canonical `YYYY-MM-DD` calendar date that cannot be
+in the future. Both are immutable review claims because the evidence digest
+below binds them.
+
+`evaluation_evidence` contains exactly one lowercase `sha256:` digest. Compute
+it from canonical UTF-8 JSON with sorted object keys, no ASCII escaping, and
+`,`/`:` separators. The hashed object has `admitted_skill` set to the exact
+installed record and `registry_claims` set to the complete reviewed entry with
+`evaluation_evidence` omitted. The router recomputes this attestation, so an
+arbitrary label, placeholder digest, changed record, reviewer, or date cannot
+reuse an earlier review.
+
+Reviewers verify metadata validity, installation identity, dependency and
+conflict behavior, authority boundaries, representative evaluation output,
+and host neutrality before accepting an entry. The attestation proves which
+record and claims were reviewed; it does not replace that human review.

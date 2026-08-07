@@ -91,13 +91,55 @@ class ManifestTests(unittest.TestCase):
 
     def test_manifest_rejects_malformed_routing_collections(self):
         for field, value, message in (
+            ("capabilities", [], "capabilities must be a non-empty string list"),
+            ("phases", [], "phases must be a non-empty string list"),
             ("selectors", [], "selectors must be a non-empty selector list"),
+            ("selectors", [{}], "selector must contain at least one routing axis"),
+            (
+                "selectors",
+                [{"domains": []}],
+                "selector domains must be a non-empty string list",
+            ),
+            ("ownership", {}, "ownership must map every declared capability"),
+            ("selectors", None, "selectors must be a non-empty selector list"),
             ("required_context", "target_locale", "required_context must be a string list"),
             ("conflicts", [""], "conflicts must be a string list"),
             ("supersedes", [1], "supersedes must be a string list"),
         ):
             with self.subTest(field=field):
                 self.assert_manifest_rejected(field, value, message)
+
+    def test_manifest_rejects_empty_ownership_slice(self):
+        manifest = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )
+        record = manifest["skills"][0]
+        record["ownership"] = {
+            capability: list(record["phases"])
+            for capability in record["capabilities"]
+        }
+        record["ownership"][record["capabilities"][0]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "skills-manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError, "ownership phases must be a non-empty string list"
+            ):
+                load_manifest(path)
+
+    def test_manifest_treats_absent_selectors_as_universal_scope(self):
+        manifest = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )
+        del manifest["skills"][0]["selectors"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "skills-manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            loaded = load_manifest(path)
+
+        self.assertEqual(loaded.skills[0].selectors, ())
 
     def test_every_source_is_pinned_and_checksumed(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")

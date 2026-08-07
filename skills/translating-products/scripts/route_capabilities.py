@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+import hashlib
 import json
 from pathlib import Path
+import re
 import sys
+from urllib.parse import urlsplit
 
 
 ROUTING_AXES = (
@@ -53,7 +56,6 @@ EXTERNAL_SKILL_FIELDS = frozenset(
         "description",
         "capabilities",
         "depends_on",
-        "selectors",
         "phases",
         "specificity",
         "required_context",
@@ -61,7 +63,7 @@ EXTERNAL_SKILL_FIELDS = frozenset(
         "supersedes",
     )
 )
-EXTERNAL_OPTIONAL_FIELDS = frozenset(("ownership",))
+EXTERNAL_OPTIONAL_FIELDS = frozenset(("ownership", "selectors"))
 EXTERNAL_AUTHORIZATION_FIELDS = (
     "authorized_external_skills",
     "project_authorized_external_skills",
@@ -75,10 +77,26 @@ REGISTRY_FIELDS = frozenset(
         "authority_scope",
         "dependencies",
         "conflicts",
+        "supersedes",
+        "reviewer",
         "evaluation_evidence",
         "review_date",
     )
 )
+REGISTRY_AUTHORITY_FIELDS = frozenset(("phases", "ownership", "selectors"))
+SEMVER = re.compile(
+    r"^(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)$"
+)
+VERSION_CONSTRAINT = re.compile(
+    r"^(?P<operator>>=|<=|==|>|<)?"
+    r"(?P<version>(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*))$"
+)
+REVIEW_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+SHA256_EVIDENCE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def normalize_locale(value: str) -> str:
@@ -144,12 +162,19 @@ def selector_matches(profile: dict, selector: dict) -> bool:
     return True
 
 
-def _external_string_list(value: object, field: str, skill_name: str) -> list[str]:
-    if not isinstance(value, list) or any(
+def _external_string_list(
+    value: object,
+    field: str,
+    skill_name: str,
+    *,
+    allow_empty: bool = False,
+) -> list[str]:
+    if not isinstance(value, list) or (not allow_empty and not value) or any(
         not isinstance(item, str) or not item.strip() for item in value
     ):
+        qualifier = "string list" if allow_empty else "non-empty string list"
         raise ValueError(
-            f"external skill {skill_name} has invalid {field}: expected string list"
+            f"external skill {skill_name} has invalid {field}: expected {qualifier}"
         )
     return value
 
@@ -191,30 +216,26 @@ def validate_external_catalog(catalog: object) -> list[dict]:
                 raise ValueError(f"external skill {name} has invalid {field}")
         if item["specificity"] not in SPECIFICITY_ORDER:
             raise ValueError(f"external skill {name} has invalid specificity")
-        for field in (
-            "capabilities",
-            "depends_on",
-            "phases",
-            "required_context",
-            "conflicts",
-            "supersedes",
-        ):
+        for field in ("capabilities", "phases"):
+            if item[field] == []:
+                raise ValueError(f"external skill {name} requires non-empty {field}")
             _external_string_list(item[field], field, name)
-        if not item["capabilities"] or not item["phases"]:
-            raise ValueError(f"external skill {name} requires non-empty capabilities and phases")
-        if not item["selectors"]:
-            raise ValueError(f"external skill {name} must declare selectors")
-        if not isinstance(item["selectors"], list):
-            raise ValueError(f"external skill {name} has invalid selectors")
-        for selector in item["selectors"]:
-            if not isinstance(selector, dict) or not selector:
-                raise ValueError(f"external skill {name} has invalid selector")
-            for axis, values in selector.items():
-                if axis not in ROUTING_AXES:
-                    raise ValueError(
-                        f"external skill {name} has unknown selector axis: {axis}"
-                    )
-                _external_string_list(values, f"selector {axis}", name)
+        for field in ("depends_on", "required_context", "conflicts", "supersedes"):
+            _external_string_list(item[field], field, name, allow_empty=True)
+        if "selectors" in item:
+            if not item["selectors"]:
+                raise ValueError(f"external skill {name} must declare selectors")
+            if not isinstance(item["selectors"], list):
+                raise ValueError(f"external skill {name} has invalid selectors")
+            for selector in item["selectors"]:
+                if not isinstance(selector, dict) or not selector:
+                    raise ValueError(f"external skill {name} has invalid selector")
+                for axis, values in selector.items():
+                    if axis not in ROUTING_AXES:
+                        raise ValueError(
+                            f"external skill {name} has unknown selector axis: {axis}"
+                        )
+                    _external_string_list(values, f"selector {axis}", name)
         unknown_phases = sorted(set(item["phases"]) - set(PHASES))
         if unknown_phases:
             raise ValueError(
@@ -224,12 +245,180 @@ def validate_external_catalog(catalog: object) -> list[dict]:
     return skills
 
 
+def _registry_string_list(
+    value: object,
+    field: str,
+    name: str,
+    *,
+    allow_empty: bool = False,
+) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or (not allow_empty and not value)
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+        or len(value) != len(set(value))
+    ):
+        qualifier = "string list" if allow_empty else "non-empty string list"
+        raise ValueError(
+            f"compatibility registry skill {name} has invalid {field}: "
+            f"expected unique {qualifier}"
+        )
+    return value
+
+
+def _parse_version(value: str, field: str, name: str) -> tuple[int, int, int]:
+    match = SEMVER.fullmatch(value)
+    if match is None:
+        raise ValueError(
+            f"compatibility registry skill {name} has invalid {field}: {value}"
+        )
+    return tuple(int(match[group]) for group in ("major", "minor", "patch"))
+
+
+def _parse_constraint(
+    value: str, field: str, name: str
+) -> tuple[str, tuple[int, int, int]]:
+    match = VERSION_CONSTRAINT.fullmatch(value)
+    if match is None:
+        label = (
+            "version constraint"
+            if field == "version_constraint"
+            else "orchestrator compatibility constraint"
+        )
+        raise ValueError(f"unsupported {label} for {name}: {value}")
+    return match.group("operator") or "==", _parse_version(
+        match.group("version"), field, name
+    )
+
+
+def _constraint_satisfied(
+    version: str,
+    constraint: str,
+    field: str,
+    name: str,
+) -> bool:
+    actual = _parse_version(version, field, name)
+    operator, expected = _parse_constraint(constraint, field, name)
+    return {
+        "==": actual == expected,
+        ">=": actual >= expected,
+        "<=": actual <= expected,
+        ">": actual > expected,
+        "<": actual < expected,
+    }[operator]
+
+
+def _validate_registry_selector(selector: object, name: str) -> None:
+    if not isinstance(selector, dict) or not selector:
+        raise ValueError(
+            f"compatibility registry skill {name} has invalid authority selector"
+        )
+    for axis, values in selector.items():
+        if axis not in ROUTING_AXES:
+            raise ValueError(
+                f"compatibility registry skill {name} has unknown authority "
+                f"selector axis: {axis}"
+            )
+        _registry_string_list(values, f"authority selector {axis}", name)
+
+
+def _validate_authority_scope(scope: object, name: str) -> dict:
+    if not isinstance(scope, dict) or set(scope) != REGISTRY_AUTHORITY_FIELDS:
+        raise ValueError(
+            f"compatibility registry skill {name} has invalid authority_scope"
+        )
+    phases = _registry_string_list(scope["phases"], "authority phases", name)
+    unknown_phases = sorted(set(phases) - set(PHASES))
+    if unknown_phases:
+        raise ValueError(
+            f"compatibility registry skill {name} has unknown authority phases: "
+            + ", ".join(unknown_phases)
+        )
+    ownership = scope["ownership"]
+    if not isinstance(ownership, dict) or not ownership:
+        raise ValueError(
+            f"compatibility registry skill {name} has invalid authority ownership"
+        )
+    for capability, owned_phases in ownership.items():
+        if not isinstance(capability, str) or not capability.strip():
+            raise ValueError(
+                f"compatibility registry skill {name} has invalid authority capability"
+            )
+        values = _registry_string_list(
+            owned_phases, "authority ownership phases", name
+        )
+        if not set(values).issubset(phases):
+            raise ValueError(
+                f"compatibility registry skill {name} authority ownership phases "
+                "must be declared phases"
+            )
+    selectors = scope["selectors"]
+    if selectors is not None:
+        if not isinstance(selectors, list) or not selectors:
+            raise ValueError(
+                f"compatibility registry skill {name} has invalid authority selectors"
+            )
+        for selector in selectors:
+            _validate_registry_selector(selector, name)
+    return scope
+
+
+def _validate_reviewer(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip() or any(
+        character.isspace() for character in value
+    ):
+        raise ValueError(f"compatibility registry skill {name} has invalid reviewer")
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"compatibility registry skill {name} has invalid reviewer")
+    return value
+
+
+def _validate_review_date(value: object, name: str) -> date:
+    if not isinstance(value, str) or REVIEW_DATE.fullmatch(value) is None:
+        raise ValueError(f"compatibility registry review date is invalid: {name}")
+    try:
+        reviewed = date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(
+            f"compatibility registry review date is invalid: {name}"
+        ) from None
+    if reviewed > date.today():
+        raise ValueError(
+            f"compatibility registry review date is in the future: {name}"
+        )
+    return reviewed
+
+
+def _validate_evidence(value: object, name: str) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or len(value) != 1
+        or not isinstance(value[0], str)
+        or SHA256_EVIDENCE.fullmatch(value[0]) is None
+    ):
+        raise ValueError(
+            f"compatibility registry skill {name} has invalid evaluation_evidence"
+        )
+    return value
+
+
 def _authorization_names(request: dict, registry: object) -> set[str]:
     authorized: set[str] = set()
     for field in EXTERNAL_AUTHORIZATION_FIELDS:
         if field not in request:
             continue
-        values = _external_string_list(request[field], field, "request")
+        values = _external_string_list(
+            request[field], field, "request", allow_empty=True
+        )
         authorized.update(values)
     if registry is None:
         return authorized
@@ -258,56 +447,157 @@ def _authorization_names(request: dict, registry: object) -> set[str]:
             "version_constraint",
             "compatible_orchestrator_version",
             "review_date",
+            "reviewer",
         ):
             if not isinstance(entry[field], str) or not entry[field].strip():
                 raise ValueError(f"compatibility registry skill {name} has invalid {field}")
-        for field in (
-            "capabilities",
-            "authority_scope",
-            "dependencies",
-            "conflicts",
-            "evaluation_evidence",
-        ):
-            values = _external_string_list(entry[field], field, name)
-            if field in {"capabilities", "authority_scope", "evaluation_evidence"} and not values:
-                raise ValueError(f"compatibility registry skill {name} has empty {field}")
+        _parse_constraint(entry["version_constraint"], "version_constraint", name)
+        _parse_constraint(
+            entry["compatible_orchestrator_version"],
+            "compatible_orchestrator_version",
+            name,
+        )
+        _registry_string_list(entry["capabilities"], "capabilities", name)
+        for field in ("dependencies", "conflicts", "supersedes"):
+            _registry_string_list(
+                entry[field], field, name, allow_empty=True
+            )
+        _validate_authority_scope(entry["authority_scope"], name)
+        _validate_reviewer(entry["reviewer"], name)
+        _validate_review_date(entry["review_date"], name)
+        _validate_evidence(entry["evaluation_evidence"], name)
         authorized.add(name)
     return authorized
 
 
-def _validate_merged_relationships(skills: list[dict], external_names: set[str]) -> None:
+def _validate_merged_relationships(
+    skills: list[dict], external_names: set[str]
+) -> None:
     by_name = {skill["name"]: skill for skill in skills}
-    for name in sorted(external_names):
+    for name in sorted(by_name):
         skill = by_name[name]
+        label = "external skill" if name in external_names else "bundled skill"
         for field in ("depends_on", "conflicts", "supersedes"):
             for target in sorted(set(skill[field])):
                 if target not in by_name:
-                    raise ValueError(f"external skill {name} has unknown {field}: {target}")
+                    raise ValueError(f"{label} {name} has unknown {field}: {target}")
                 if target == name:
-                    raise ValueError(f"external skill {name} cannot {field} itself")
-    graph = {
-        name: tuple(by_name[name]["depends_on"] + by_name[name]["supersedes"])
-        for name in by_name
+                    verb = {
+                        "depends_on": "depend on",
+                        "conflicts": "conflict with",
+                        "supersedes": "supersede",
+                    }[field]
+                    raise ValueError(f"{label} {name} cannot {verb} itself")
+        for target in sorted(set(skill["depends_on"]) & set(skill["supersedes"])):
+            raise ValueError(
+                f"{label} {name} cannot both depend on and supersede {target}"
+            )
+
+    def reject_cycle(graph: dict[str, tuple[str, ...]], kind: str) -> None:
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in visiting:
+                raise ValueError(f"{kind} cycle at {name}")
+            if name in visited:
+                return
+            visiting.add(name)
+            for target in sorted(graph[name]):
+                visit(target)
+            visiting.remove(name)
+            visited.add(name)
+
+        for name in sorted(graph):
+            visit(name)
+
+    dependency_graph = {
+        name: tuple(by_name[name]["depends_on"]) for name in by_name
     }
-    visiting: set[str] = set()
-    visited: set[str] = set()
+    supersedes_graph = {
+        name: tuple(by_name[name]["supersedes"]) for name in by_name
+    }
+    reject_cycle(dependency_graph, "dependency")
+    reject_cycle(supersedes_graph, "supersedes")
+    reject_cycle(
+        {
+            name: tuple(dependency_graph[name] + supersedes_graph[name])
+            for name in by_name
+        },
+        "relationship",
+    )
 
-    def visit(name: str) -> None:
-        if name in visiting:
-            raise ValueError(f"relationship cycle: {name}")
-        if name in visited:
-            return
-        visiting.add(name)
-        for target in sorted(graph[name]):
-            visit(target)
-        visiting.remove(name)
-        visited.add(name)
+    for name in sorted(by_name):
+        skill = by_name[name]
+        label = "external skill" if name in external_names else "bundled skill"
+        for target in sorted(set(skill["supersedes"])):
+            superseded = by_name[target]
+            if skill["category"] != superseded["category"]:
+                raise ValueError(
+                    f"{label} {name} cannot supersede {target} across categories"
+                )
+            if SPECIFICITY_ORDER[skill["specificity"]] <= SPECIFICITY_ORDER[
+                superseded["specificity"]
+            ]:
+                raise ValueError(
+                    f"{label} {name} must be more specific than superseded skill: {target}"
+                )
+            replacement_ownership = _ownership_map(skill)
+            target_ownership = _ownership_map(superseded)
+            if not any(
+                replacement_ownership.get(capability, set()) & phases
+                for capability, phases in target_ownership.items()
+            ):
+                raise ValueError(
+                    f"{label} {name} supersedes {target} without shared ownership"
+                )
 
-    for name in sorted(graph):
-        visit(name)
+
+def _canonical_selectors(selectors: object) -> object:
+    if selectors is None:
+        return None
+    return tuple(
+        sorted(
+            tuple(
+                (axis, tuple(sorted(set(values))))
+                for axis, values in sorted(selector.items())
+            )
+            for selector in selectors
+        )
+    )
 
 
-def _validate_registry_bindings(registry: object, skills: list[dict], suite_version: str) -> None:
+def _authority_matches(scope: dict, skill: dict) -> bool:
+    reviewed_ownership = {
+        capability: set(phases)
+        for capability, phases in scope["ownership"].items()
+    }
+    return (
+        set(scope["phases"]) == set(skill["phases"])
+        and reviewed_ownership == _ownership_map(skill)
+        and _canonical_selectors(scope["selectors"])
+        == _canonical_selectors(skill.get("selectors"))
+    )
+
+
+def _review_attestation_digest(skill: dict, entry: dict) -> str:
+    claims = {
+        field: value
+        for field, value in entry.items()
+        if field != "evaluation_evidence"
+    }
+    canonical = json.dumps(
+        {"admitted_skill": skill, "registry_claims": claims},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _validate_registry_bindings(
+    registry: object, skills: list[dict], suite_version: str
+) -> None:
     if registry is None:
         return
     by_name = {skill["name"]: skill for skill in skills}
@@ -320,22 +610,31 @@ def _validate_registry_bindings(registry: object, skills: list[dict], suite_vers
         skill = by_name.get(name)
         if skill is None:
             raise ValueError(f"compatibility registry references unknown skill: {name}")
-        if entry["version_constraint"] != skill["version"]:
+        if not _constraint_satisfied(
+            skill["version"], entry["version_constraint"], "version_constraint", name
+        ):
             raise ValueError(f"compatibility registry version mismatch: {name}")
-        if entry["compatible_orchestrator_version"] != suite_version:
+        if not _constraint_satisfied(
+            suite_version,
+            entry["compatible_orchestrator_version"],
+            "compatible_orchestrator_version",
+            name,
+        ):
             raise ValueError(f"compatibility registry suite mismatch: {name}")
-        if entry["capabilities"] != skill["capabilities"]:
+        if set(entry["capabilities"]) != set(skill["capabilities"]):
             raise ValueError(f"compatibility registry capabilities mismatch: {name}")
-        if entry["dependencies"] != skill["depends_on"] or entry["conflicts"] != skill["conflicts"]:
+        if (
+            set(entry["dependencies"]) != set(skill["depends_on"])
+            or set(entry["conflicts"]) != set(skill["conflicts"])
+            or set(entry["supersedes"]) != set(skill["supersedes"])
+        ):
             raise ValueError(f"compatibility registry relationships mismatch: {name}")
-        if sorted(entry["authority_scope"]) != sorted(_ownership_map(skill)):
+        if not _authority_matches(entry["authority_scope"], skill):
             raise ValueError(f"compatibility registry authority mismatch: {name}")
-        try:
-            reviewed = date.fromisoformat(entry["review_date"])
-        except ValueError:
-            raise ValueError(f"compatibility registry review date is invalid: {name}") from None
-        if reviewed > date.today():
-            raise ValueError(f"compatibility registry review date is in the future: {name}")
+        _validate_review_date(entry["review_date"], name)
+        expected_evidence = _review_attestation_digest(skill, entry)
+        if entry["evaluation_evidence"] != [expected_evidence]:
+            raise ValueError(f"compatibility registry evidence mismatch: {name}")
 
 
 def _frontmatter_values(path: Path) -> dict[str, str]:
@@ -525,6 +824,10 @@ def matching_skill_names(
     selected = []
     reasons: dict[str, list[str]] = {}
     for item in catalog["skills"]:
+        if "selectors" not in item:
+            selected.append(item["name"])
+            reasons[item["name"]] = ["selector:universal"]
+            continue
         matched = [
             index
             for index, selector in enumerate(item["selectors"])

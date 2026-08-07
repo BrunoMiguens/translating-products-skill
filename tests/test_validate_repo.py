@@ -112,6 +112,8 @@ def manifest_with(
 def skill(
     name: str,
     *,
+    category: str = "core",
+    capabilities: tuple[str, ...] = ("capability:test",),
     depends_on: tuple[str, ...] = (),
     selectors: tuple[Selector, ...] = (
         Selector((("capabilities", ("capability:test",)),)),
@@ -121,13 +123,14 @@ def skill(
     required_context: tuple[str, ...] = (),
     conflicts: tuple[str, ...] = (),
     supersedes: tuple[str, ...] = (),
+    ownership: tuple[tuple[str, tuple[str, ...]], ...] | None = None,
 ) -> SkillRecord:
     return SkillRecord(
         name=name,
         version="0.1.0",
-        category="core",
+        category=category,
         description="Use when testing repository validation.",
-        capabilities=("capability:test",),
+        capabilities=capabilities,
         depends_on=depends_on,
         selectors=selectors,
         phases=phases,
@@ -135,7 +138,9 @@ def skill(
         required_context=required_context,
         conflicts=conflicts,
         supersedes=supersedes,
-        ownership=(("capability:test", phases),),
+        ownership=ownership or tuple(
+            (capability, phases) for capability in capabilities
+        ),
     )
 
 
@@ -524,7 +529,7 @@ class ValidatorTests(unittest.TestCase):
             errors,
         )
 
-    def test_routing_metadata_rejects_empty_self_and_supersedes_cycles(self):
+    def test_routing_metadata_allows_universal_scope_and_rejects_self_and_supersedes_cycles(self):
         first = skill(
             "translating-first",
             selectors=(),
@@ -547,7 +552,7 @@ class ValidatorTests(unittest.TestCase):
             partial=True,
         )
 
-        self.assertIn(
+        self.assertNotIn(
             "skills-manifest.json: translating-first must declare at least one selector",
             errors,
         )
@@ -560,6 +565,97 @@ class ValidatorTests(unittest.TestCase):
         self.assertIn(
             "skills-manifest.json: supersedes cycle at translating-first", errors
         )
+
+    def test_bundled_relationship_rules_match_external_admission(self):
+        cross_category = skill(
+            "translating-cross-category",
+            category="language",
+            specificity="locale",
+            supersedes=("translating-base",),
+        )
+        base = skill("translating-base")
+        non_narrowing = skill(
+            "translating-non-narrowing",
+            category="language",
+            specificity="language",
+            supersedes=("translating-language",),
+        )
+        language = skill(
+            "translating-language",
+            category="language",
+            specificity="language",
+        )
+        unowned = skill(
+            "translating-unowned",
+            category="language",
+            capabilities=("capability:other",),
+            specificity="locale",
+            supersedes=("translating-language",),
+        )
+        mixed_a = skill(
+            "translating-mixed-a", depends_on=("translating-mixed-b",)
+        )
+        mixed_b = skill(
+            "translating-mixed-b", supersedes=("translating-mixed-a",)
+        )
+        skills = (
+            base,
+            cross_category,
+            language,
+            non_narrowing,
+            unowned,
+            mixed_a,
+            mixed_b,
+        )
+
+        errors = validate_repository(
+            Path("/nonexistent"),
+            manifest_with(
+                skills=skills,
+                minimum_skill_versions={record.name: "0.1.0" for record in skills},
+            ),
+            partial=True,
+        )
+
+        self.assertIn(
+            "skills-manifest.json: translating-cross-category cannot supersede "
+            "translating-base across categories",
+            errors,
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-non-narrowing must be more specific "
+            "than superseded skill translating-language",
+            errors,
+        )
+        self.assertIn(
+            "skills-manifest.json: translating-unowned supersedes translating-language "
+            "without shared ownership",
+            errors,
+        )
+        self.assertIn(
+            "skills-manifest.json: relationship cycle at translating-mixed-a", errors
+        )
+
+    def test_bundled_relationship_rules_permit_cross_phase_dependencies(self):
+        review = skill("review", phases=("review",), specificity="quality")
+        surface = skill(
+            "surface",
+            depends_on=("review",),
+            phases=("inspect", "integrate"),
+            specificity="surface",
+        )
+        skills = (review, surface)
+
+        errors = validate_repository(
+            Path("/nonexistent"),
+            manifest_with(
+                skills=skills,
+                minimum_skill_versions={record.name: "0.1.0" for record in skills},
+            ),
+            partial=True,
+        )
+
+        self.assertEqual(errors, [])
 
     def test_routing_metadata_rejects_unknown_axes_self_dependencies_and_overlap(self):
         base = skill("translating-base")

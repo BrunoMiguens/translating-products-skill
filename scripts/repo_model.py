@@ -130,7 +130,11 @@ def _load_selectors(raw: object) -> tuple[Selector, ...]:
     return tuple(_load_selector(selector) for selector in raw)
 
 
-def _load_ownership(item: dict[str, object], capabilities: tuple[str, ...], phases: tuple[str, ...]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+def _load_ownership(
+    item: dict[str, object],
+    capabilities: tuple[str, ...],
+    phases: tuple[str, ...],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     raw = item.get("ownership")
     if raw is None:
         return tuple((capability, phases) for capability in capabilities)
@@ -147,34 +151,41 @@ def _load_ownership(item: dict[str, object], capabilities: tuple[str, ...], phas
 
 def load_manifest(path: Path) -> Manifest:
     raw = json.loads(path.read_text(encoding="utf-8"))
-    skills = tuple(
-        SkillRecord(
-            name=item["name"],
-            version=item["version"],
-            category=item["category"],
-            description=item["description"],
-            capabilities=tuple(item["capabilities"]),
-            depends_on=tuple(item["depends_on"]),
-            selectors=_load_selectors(item["selectors"]),
-            phases=_load_phases(item["phases"]),
-            specificity=_load_specificity(item["specificity"]),
-            required_context=_load_string_list(
-                item["required_context"], "required_context", allow_empty=True
-            ),
-            conflicts=_load_string_list(
-                item["conflicts"], "conflicts", allow_empty=True
-            ),
-            supersedes=_load_string_list(
-                item["supersedes"], "supersedes", allow_empty=True
-            ),
-            ownership=_load_ownership(
-                item,
-                tuple(item["capabilities"]),
-                _load_phases(item["phases"]),
-            ),
+    skills = []
+    for item in raw["skills"]:
+        capabilities = _load_string_list(item["capabilities"], "capabilities")
+        phases = _load_phases(item["phases"])
+        skills.append(
+            SkillRecord(
+                name=item["name"],
+                version=item["version"],
+                category=item["category"],
+                description=item["description"],
+                capabilities=capabilities,
+                depends_on=tuple(item["depends_on"]),
+                selectors=(
+                    _load_selectors(item["selectors"])
+                    if "selectors" in item
+                    else ()
+                ),
+                phases=phases,
+                specificity=_load_specificity(item["specificity"]),
+                required_context=_load_string_list(
+                    item["required_context"], "required_context", allow_empty=True
+                ),
+                conflicts=_load_string_list(
+                    item["conflicts"], "conflicts", allow_empty=True
+                ),
+                supersedes=_load_string_list(
+                    item["supersedes"], "supersedes", allow_empty=True
+                ),
+                ownership=_load_ownership(
+                    item,
+                    capabilities,
+                    phases,
+                ),
+            )
         )
-        for item in raw["skills"]
-    )
     sources = tuple(
         SourceRecord(
             id=item["id"],
@@ -194,7 +205,7 @@ def load_manifest(path: Path) -> Manifest:
         suite_version=raw["suite_version"],
         orchestrator=raw["orchestrator"],
         minimum_skill_versions=raw["minimum_skill_versions"],
-        skills=skills,
+        skills=tuple(skills),
         sources=sources,
     )
 

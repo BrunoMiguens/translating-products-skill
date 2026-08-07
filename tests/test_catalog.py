@@ -90,6 +90,23 @@ class CatalogTests(unittest.TestCase):
             },
         )
 
+    def test_catalog_preserves_absent_selectors_as_universal_scope(self):
+        manifest = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )
+        del manifest["skills"][0]["selectors"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = root / "skills-manifest.json"
+            json_path = root / "catalog.json"
+            markdown_path = root / "catalog.md"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            render_catalog(manifest_path, json_path, markdown_path)
+            catalog = json.loads(json_path.read_text(encoding="utf-8"))
+
+        self.assertNotIn("selectors", catalog["skills"][0])
+
     def test_check_mode_reports_stale_outputs_without_rewriting(self):
         with tempfile.TemporaryDirectory() as tmp:
             json_path = Path(tmp) / "catalog.json"

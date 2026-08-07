@@ -14,9 +14,11 @@ Use this sequence for every specialist change:
    `description`, with a trigger-oriented description beginning with
    `Use when`.
 2. Update its schema-`2` manifest record: `name`, `version`, `category`,
-   `description`, `capabilities`, `depends_on`, `selectors`, `phases`,
+   `description`, `capabilities`, `depends_on`, `phases`,
    `specificity`, `required_context`, `conflicts`, and `supersedes`.
-3. Use declarative selectors only. Each populated axis in one selector is
+   Add `selectors` for scoped matching; omit it only for universal applicability.
+3. Use declarative selectors only. A present selector list, every selector
+   object, and every populated axis must be non-empty. Each populated axis is
    conjunctive; values on an axis are alternatives; multiple selectors are
    alternative matches. The supported JSON axes are `languages`, `locales`,
    `scripts`, `surfaces`, `platforms`, `formats`, `domains`, and
@@ -26,9 +28,10 @@ Use this sequence for every specialist change:
 4. Declare phases from `inspect`, `translate`, `refine`, `integrate`, and
    `review`, and declare an allowed specificity. Dependencies, conflicts, and
    explicit `supersedes` relationships must make ownership and composition
-   deterministic. A superseding specialist must declare non-empty `ownership`
-   capabilities; partial overlap keeps the broader specialist active and
-   replaces only the shared ownership.
+   deterministic. A superseding specialist must have non-empty effective
+   `ownership`; omitted ownership derives the full declared capability/phase
+   scope. Partial overlap keeps the broader specialist active and replaces only
+   the shared ownership. A skill cannot both depend on and supersede one target.
 5. Add positive and negative routing cases that demonstrate both selection and
    non-selection. A catalog-only fixture must prove a compatible third-party
    specialist is selectable without changing router code.
@@ -73,6 +76,11 @@ unauthorized records, and invalid external metadata before routing.
 Add reviewed installed integrations to the orchestrator's
 [compatibility registry](skills/translating-products/references/compatibility-registry.json).
 Registry entries record compatibility; they do not install or enable a skill.
+Use the extension contract's structured phase/ownership/selector authority,
+supported version constraints, referenceable reviewer identity, canonical
+review date, and SHA-256 record attestation; placeholders are not review
+evidence.
+
 Runtime routing may use an external specialist only when it is explicitly
 selected by the user, configured by the project, or present in the reviewed
 registry. Never add a runtime path that downloads an unknown skill.

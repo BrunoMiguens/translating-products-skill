@@ -205,6 +205,7 @@ def validate_repository(
     errors = []
     skills_root = root / "skills"
     declared = {skill.name for skill in manifest.skills}
+    by_name = {skill.name: skill for skill in manifest.skills}
     present = (
         {path.name for path in skills_root.iterdir() if path.is_dir()}
         if skills_root.exists()
@@ -231,10 +232,6 @@ def validate_repository(
     errors.extend(validate_fixture_separation(root))
 
     for skill in sorted(manifest.skills, key=lambda item: item.name):
-        if not skill.selectors:
-            errors.append(
-                f"skills-manifest.json: {skill.name} must declare at least one selector"
-            )
         for selector in skill.selectors:
             for axis, _values in selector.criteria:
                 if axis not in ROUTING_AXES:
@@ -282,6 +279,39 @@ def validate_repository(
                 errors.append(
                     f"skills-manifest.json: {skill.name} cannot supersede itself"
                 )
+            else:
+                target = by_name[superseded]
+                if skill.category != target.category:
+                    errors.append(
+                        f"skills-manifest.json: {skill.name} cannot supersede "
+                        f"{superseded} across categories"
+                    )
+                elif (
+                    skill.specificity in SPECIFICITIES
+                    and target.specificity in SPECIFICITIES
+                    and SPECIFICITIES.index(skill.specificity)
+                    <= SPECIFICITIES.index(target.specificity)
+                ):
+                    errors.append(
+                        f"skills-manifest.json: {skill.name} must be more specific "
+                        f"than superseded skill {superseded}"
+                    )
+                replacement_ownership = {
+                    capability: set(phases)
+                    for capability, phases in skill.ownership
+                }
+                target_ownership = {
+                    capability: set(phases)
+                    for capability, phases in target.ownership
+                }
+                if not any(
+                    replacement_ownership.get(capability, set()) & phases
+                    for capability, phases in target_ownership.items()
+                ):
+                    errors.append(
+                        f"skills-manifest.json: {skill.name} supersedes {superseded} "
+                        "without shared ownership"
+                    )
         for target in sorted(set(skill.depends_on) & set(skill.supersedes)):
             errors.append(
                 f"skills-manifest.json: {skill.name} cannot both depend on and "
@@ -300,9 +330,11 @@ def validate_repository(
 
     visiting: set[str] = set()
     visited: set[str] = set()
+    dependency_cycle_nodes: set[str] = set()
 
     def visit(name: str) -> None:
         if name in visiting:
+            dependency_cycle_nodes.add(name)
             errors.append(f"skills-manifest.json: dependency cycle at {name}")
             return
         if name in visited:
@@ -323,9 +355,11 @@ def validate_repository(
 
     visiting.clear()
     visited.clear()
+    supersedes_cycle_nodes: set[str] = set()
 
     def visit_supersedes(name: str) -> None:
         if name in visiting:
+            supersedes_cycle_nodes.add(name)
             errors.append(f"skills-manifest.json: supersedes cycle at {name}")
             return
         if name in visited:
@@ -339,6 +373,32 @@ def validate_repository(
 
     for name in sorted(declared):
         visit_supersedes(name)
+
+    relationship_graph = defaultdict(tuple)
+    for skill in sorted(manifest.skills, key=lambda item: item.name):
+        relationship_graph[skill.name] = skill.depends_on + skill.supersedes
+
+    visiting.clear()
+    visited.clear()
+
+    def visit_relationship(name: str) -> None:
+        if name in visiting:
+            if name not in dependency_cycle_nodes | supersedes_cycle_nodes:
+                errors.append(
+                    f"skills-manifest.json: relationship cycle at {name}"
+                )
+            return
+        if name in visited:
+            return
+        visiting.add(name)
+        for target in sorted(relationship_graph[name]):
+            if target in declared:
+                visit_relationship(target)
+        visiting.remove(name)
+        visited.add(name)
+
+    for name in sorted(declared):
+        visit_relationship(name)
 
     known_capabilities = {
         capability
