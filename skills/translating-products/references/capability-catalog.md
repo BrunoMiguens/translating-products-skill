@@ -2,6 +2,10 @@
 
 Suite version: `0.2.0`
 
+## Disclosure
+
+Translations produced with this suite are AI-generated and have not been reviewed by a human translator.
+
 ## Authority order
 
 1. `explicit-user-requirements`

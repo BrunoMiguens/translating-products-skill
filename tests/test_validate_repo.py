@@ -1145,6 +1145,13 @@ class InventoryMarkerTests(unittest.TestCase):
                 (ROOT / "skills-manifest.json").read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
+            checklist = root / "docs/release-checklist.md"
+            checklist.parent.mkdir()
+            checklist.write_text(
+                "Version: `<!-- suite-version:start -->0.2.0"
+                "<!-- suite-version:end -->`\n",
+                encoding="utf-8",
+            )
             references = root / "skills/translating-products/references"
             references.mkdir(parents=True)
             render_catalog(

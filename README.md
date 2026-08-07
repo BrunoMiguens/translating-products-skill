@@ -126,7 +126,7 @@ an unknown skill during a translation task.
 This section is rendered from [`skills-manifest.json`](skills-manifest.json)
 by [`scripts/render_catalog.py`](scripts/render_catalog.py). The generated
 [capability catalog](skills/translating-products/references/capability-catalog.md)
-is the machine-oriented routing view of the same 22 records.
+is the machine-oriented routing view of the same manifest records.
 
 <!-- skill-inventory:start -->
 | Skill | Category | When to use |

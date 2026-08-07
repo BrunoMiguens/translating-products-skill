@@ -27,6 +27,12 @@ AUTHORITY_ORDER = (
 )
 INVENTORY_START = "<!-- skill-inventory:start -->"
 INVENTORY_END = "<!-- skill-inventory:end -->"
+SUITE_VERSION_START = "<!-- suite-version:start -->"
+SUITE_VERSION_END = "<!-- suite-version:end -->"
+AI_DISCLOSURE = (
+    "Translations produced with this suite are AI-generated and have not been "
+    "reviewed by a human translator."
+)
 ROUTING_FIELDS = (
     "name",
     "version",
@@ -96,6 +102,7 @@ def _catalog_from_manifest(manifest: dict) -> dict:
     return {
         "schema_version": 2,
         "suite_version": manifest["suite_version"],
+        "disclosure": AI_DISCLOSURE,
         "skills": [routing_record(item) for item in manifest["skills"]],
     }
 
@@ -105,6 +112,10 @@ def _render_markdown(catalog: dict) -> str:
         "# Capability catalog",
         "",
         f"Suite version: `{catalog['suite_version']}`",
+        "",
+        "## Disclosure",
+        "",
+        catalog["disclosure"],
         "",
         "## Authority order",
         "",
@@ -234,6 +245,29 @@ def render_readme_inventory(
     return True
 
 
+def render_release_checklist_version(
+    manifest_path: Path,
+    checklist_path: Path,
+    *,
+    check: bool = False,
+) -> bool:
+    if not checklist_path.exists():
+        raise InventoryMarkerError("docs/release-checklist.md is missing")
+    text = checklist_path.read_text(encoding="utf-8")
+    if text.count(SUITE_VERSION_START) != 1 or text.count(SUITE_VERSION_END) != 1:
+        raise InventoryMarkerError("release checklist suite-version marker is malformed")
+    start = text.index(SUITE_VERSION_START) + len(SUITE_VERSION_START)
+    end = text.index(SUITE_VERSION_END)
+    if start > end:
+        raise InventoryMarkerError("release checklist suite-version markers are reversed")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = text[:start] + manifest["suite_version"] + text[end:]
+    if check:
+        return text == expected
+    checklist_path.write_text(expected, encoding="utf-8")
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -257,7 +291,16 @@ def main() -> int:
     except InventoryMarkerError as error:
         print(f"README.md: {error}", file=sys.stderr)
         readme_matched = False
-    return 0 if catalog_matched and readme_matched else 1
+    try:
+        checklist_matched = render_release_checklist_version(
+            root / "skills-manifest.json",
+            root / "docs" / "release-checklist.md",
+            check=args.check,
+        )
+    except InventoryMarkerError as error:
+        print(f"docs/release-checklist.md: {error}", file=sys.stderr)
+        checklist_matched = False
+    return 0 if catalog_matched and readme_matched and checklist_matched else 1
 
 
 if __name__ == "__main__":

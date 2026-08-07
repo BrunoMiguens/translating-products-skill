@@ -11,6 +11,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "smoke_install.sh"
 MANIFEST = ROOT / "skills-manifest.json"
+HOST_SKILL_ROOTS = {
+    "claude-code": ".claude/skills",
+    "codex": ".agents/skills",
+    "cursor": ".agents/skills",
+    "universal": ".agents/skills",
+}
 
 
 FAKE_NPX = textwrap.dedent(
@@ -24,29 +30,48 @@ FAKE_NPX = textwrap.dedent(
     argv = sys.argv[1:]
     cwd = Path.cwd()
     agent = argv[argv.index("--agent") + 1]
-    with Path(os.environ["SMOKE_LOG"]).open("a", encoding="utf-8") as log:
-        log.write(json.dumps({{"cwd": str(cwd), "argv": argv}}) + "\\n")
-
     mode = os.environ.get("SMOKE_FAKE_MODE", "success")
     if mode == "fail-codex" and agent == "codex":
         raise SystemExit(9)
 
-    manifest = json.loads(
-        Path(os.environ["SMOKE_MANIFEST"]).read_text(encoding="utf-8")
-    )
-    names = [skill["name"] for skill in manifest["skills"]]
+    source = Path(argv[2])
+    discovered = sorted(source.glob("skills/*/SKILL.md"))
+    names = [path.parent.name for path in discovered]
+    if "*" not in argv:
+        requested = argv[argv.index("--skill") + 1]
+        discovered = [
+            path for path in discovered if path.parent.name == requested
+        ]
+        names = [path.parent.name for path in discovered]
     if mode in {{"missing", "duplicate"}}:
-        names = names[:-1]
+        discovered = discovered[:-1]
+        names = [path.parent.name for path in discovered]
 
-    for name in names:
-        skill_file = cwd / ".agents" / "skills" / name / "SKILL.md"
+    roots = {{
+        "claude-code": ".claude/skills",
+        "codex": ".agents/skills",
+        "cursor": ".agents/skills",
+        "universal": ".agents/skills",
+    }}
+    installed = []
+    for source_file in discovered:
+        name = source_file.parent.name
+        skill_file = cwd / roots[agent] / name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
-        skill_file.write_text(f"---\\nname: {{name}}\\n---\\n", encoding="utf-8")
+        skill_file.write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
+        installed.append(str(skill_file))
 
     if mode == "duplicate":
-        duplicate = cwd / ".duplicate" / "translating-core" / "SKILL.md"
+        duplicate = cwd / roots[agent] / ".duplicate" / names[0] / "SKILL.md"
         duplicate.parent.mkdir(parents=True, exist_ok=True)
         duplicate.write_text("duplicate\\n", encoding="utf-8")
+    with Path(os.environ["SMOKE_LOG"]).open("a", encoding="utf-8") as log:
+        log.write(
+            json.dumps(
+                {{"cwd": str(cwd), "argv": argv, "installed": installed, "names": names}}
+            )
+            + "\\n"
+        )
     """
 )
 
@@ -77,6 +102,13 @@ class SmokeInstallTests(unittest.TestCase):
                 suite_script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
                 suite_manifest = suite_root / MANIFEST.name
                 suite_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+                for skill in manifest["skills"]:
+                    skill_file = suite_root / "skills" / skill["name"] / "SKILL.md"
+                    skill_file.parent.mkdir(parents=True, exist_ok=True)
+                    skill_file.write_text(
+                        f"---\\nname: {skill['name']}\\n---\\n",
+                        encoding="utf-8",
+                    )
             env = os.environ.copy()
             env.update(
                 {
@@ -103,13 +135,15 @@ class SmokeInstallTests(unittest.TestCase):
                 ]
             else:
                 entries = []
-            targets_exist = [Path(entry["cwd"]).exists() for entry in entries]
+            calls = entries[::2]
+            targets_exist = [Path(entry["cwd"]).exists() for entry in calls]
             scratch_exists = (
-                bool(entries) and Path(entries[0]["cwd"]).parent.exists()
+                bool(calls) and Path(calls[0]["cwd"]).parent.exists()
             )
             snapshot = {
                 "result": result,
-                "entries": entries,
+                "entries": calls,
+                "individual_entries": entries[1::2],
                 "targets_exist": targets_exist,
                 "scratch_exists": scratch_exists,
                 "protected": protected.read_text(encoding="utf-8"),
@@ -140,6 +174,11 @@ class SmokeInstallTests(unittest.TestCase):
             ["claude-code", "codex", "cursor", "universal"],
         )
         self.assertEqual(len({entry["cwd"] for entry in entries}), 4)
+        individual_entries = run["individual_entries"]
+        self.assertEqual(len(individual_entries), 4)
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        entrypoint = manifest["orchestrator"]
+        manifest_names = [item["name"] for item in manifest["skills"]]
         for entry, target_exists in zip(entries, run["targets_exist"]):
             self.assertEqual(
                 entry["argv"],
@@ -159,25 +198,59 @@ class SmokeInstallTests(unittest.TestCase):
             self.assertFalse(target_exists)
             self.assertFalse(target.is_relative_to(run["home"]))
             self.assertFalse(target.is_relative_to(ROOT))
+            installed = [Path(path) for path in entry["installed"]]
+            self.assertEqual(
+                [path.parent.name for path in installed], sorted(manifest_names)
+            )
+            self.assertEqual(
+                [path.relative_to(target).parts[:2] for path in installed],
+                [tuple(HOST_SKILL_ROOTS[entry["argv"][6]].split("/"))] * len(installed),
+            )
+        for entry in individual_entries:
+            agent = entry["argv"][6]
+            target = Path(entry["cwd"])
+            self.assertEqual(
+                entry["argv"],
+                [
+                    "skills",
+                    "add",
+                    str(ROOT),
+                    "--skill",
+                    entrypoint,
+                    "--agent",
+                    agent,
+                    "--yes",
+                    "--copy",
+                ],
+            )
+            self.assertEqual(
+                [Path(path).relative_to(target).as_posix() for path in entry["installed"]],
+                [f"{HOST_SKILL_ROOTS[agent]}/{entrypoint}/SKILL.md"],
+            )
         self.assertFalse(run["scratch_exists"])
         self.assertEqual(run["protected"], "sentinel\n")
 
     def test_suite_size_is_derived_from_the_manifest(self):
         manifest = {
+            "orchestrator": "route-entry",
             "skills": [
-                {"name": "translating-products"},
-                {"name": "translating-core"},
-                {"name": "reviewing-translations"},
-                {"name": "translating-demo"},
+                {"name": "route-entry", "depends_on": ["route-core"]},
+                {"name": "route-core", "depends_on": ["route-review"]},
+                {"name": "route-review", "depends_on": []},
+                {"name": "route-demo", "depends_on": []},
             ]
         }
         run = self.run_smoke(manifest=manifest)
         self.assertEqual(run["result"].returncode, 0, run["result"].stderr)
         self.assertEqual(len(run["entries"]), 4)
+        self.assertEqual(len(run["individual_entries"]), 4)
+        for entry in run["individual_entries"]:
+            self.assertEqual(entry["names"], ["route-entry"])
 
         script = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn('if [[ "$expected_count" != "22" ]]', script)
-        self.assertIn("print(len(names))", script)
+        self.assertIn("print(len(names), entrypoint)", script)
+        self.assertNotIn('"translating-products"', script)
 
     def test_reports_duplicate_and_missing_skill_for_the_specific_agent(self):
         run = self.run_smoke("duplicate")
@@ -187,8 +260,10 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(
             result.stderr.splitlines(),
             [
-                "claude-code: duplicate skills: translating-core",
-                "claude-code: missing skills: translating-german",
+                "claude-code: skills not directly under .claude/skills: "
+                ".claude/skills/.duplicate/localizing-software/SKILL.md",
+                "claude-code: duplicate skills: localizing-software",
+                "claude-code: missing skills: translating-web",
             ],
         )
         self.assertFalse(run["scratch_exists"])
@@ -198,11 +273,13 @@ class SmokeInstallTests(unittest.TestCase):
         run = self.run_smoke("missing")
         result = run["result"]
         self.assertNotEqual(result.returncode, 0)
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        names = sorted(item["name"] for item in manifest["skills"])
         self.assertEqual(
             result.stderr.splitlines(),
             [
-                "claude-code: expected 22 SKILL.md files, found 21",
-                "claude-code: missing skills: translating-german",
+                f"claude-code: expected {len(names)} SKILL.md files, found {len(names) - 1}",
+                f"claude-code: missing skills: {names[-1]}",
             ],
         )
 
@@ -210,7 +287,8 @@ class SmokeInstallTests(unittest.TestCase):
         run = self.run_smoke("fail-codex")
         result = run["result"]
         self.assertEqual(result.returncode, 9)
-        self.assertEqual(len(run["entries"]), 2)
+        self.assertEqual(len(run["entries"]), 1)
+        self.assertEqual(len(run["individual_entries"]), 1)
         self.assertFalse(run["scratch_exists"])
         self.assertEqual(run["protected"], "sentinel\n")
 

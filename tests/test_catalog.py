@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.render_catalog import render_catalog, render_readme_inventory
+from scripts.render_catalog import (
+    render_catalog,
+    render_readme_inventory,
+    render_release_checklist_version,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +64,61 @@ class CatalogTests(unittest.TestCase):
                 [item["name"] for item in manifest["skills"]],
             )
             self.assertIn("Authority order", markdown_path.read_text(encoding="utf-8"))
+
+    def test_catalog_disclosure_is_generated_and_check_detects_its_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            json_path = Path(tmp) / "catalog.json"
+            markdown_path = Path(tmp) / "catalog.md"
+            render_catalog(ROOT / "skills-manifest.json", json_path, markdown_path)
+
+            markdown = markdown_path.read_text(encoding="utf-8")
+            disclosure = (
+                "Translations produced with this suite are AI-generated and have "
+                "not been reviewed by a human translator."
+            )
+            self.assertIn(disclosure, markdown)
+            self.assertEqual(
+                json.loads(json_path.read_text(encoding="utf-8"))["disclosure"],
+                disclosure,
+            )
+
+            markdown_path.write_text(
+                markdown.replace(disclosure, ""), encoding="utf-8"
+            )
+            self.assertFalse(
+                render_catalog(
+                    ROOT / "skills-manifest.json",
+                    json_path,
+                    markdown_path,
+                    check=True,
+                )
+            )
+
+    def test_release_checklist_version_is_rendered_from_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = json.loads(
+                (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+            )
+            manifest["suite_version"] = "9.8.7"
+            manifest_path = root / "skills-manifest.json"
+            checklist = root / "release-checklist.md"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            checklist.write_text(
+                "Version: `<!-- suite-version:start -->stale"
+                "<!-- suite-version:end -->`\n",
+                encoding="utf-8",
+            )
+
+            self.assertTrue(render_release_checklist_version(manifest_path, checklist))
+            self.assertEqual(
+                checklist.read_text(encoding="utf-8"),
+                "Version: `<!-- suite-version:start -->9.8.7"
+                "<!-- suite-version:end -->`\n",
+            )
+            self.assertTrue(
+                render_release_checklist_version(manifest_path, checklist, check=True)
+            )
 
     def test_catalog_entries_expose_only_routing_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
