@@ -15,20 +15,30 @@ trap cleanup EXIT
 
 : > "$scratch_marker"
 
-read -r expected_count entrypoint <<< "$(
+manifest_contract="$(
   python3 - "$manifest" <<'PY'
 import json
 from pathlib import Path
 import sys
 
 manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-skills = {skill["name"]: skill for skill in manifest["skills"]}
-names = list(skills)
-if len(names) != len(set(names)):
-    raise SystemExit("manifest contains duplicate skill names")
+records = manifest["skills"]
+names = [skill["name"] for skill in records]
+duplicates = sorted({name for name in names if names.count(name) > 1})
+if duplicates:
+    raise SystemExit("manifest contains duplicate skill names: " + ", ".join(duplicates))
+skills = {skill["name"]: skill for skill in records}
 entrypoint = manifest.get("orchestrator")
 if entrypoint not in skills:
     raise SystemExit("manifest orchestrator is not a declared skill")
+specialists = [
+    skill["name"]
+    for skill in records
+    if "language:japanese" in skill.get("capabilities", [])
+]
+if len(specialists) != 1:
+    raise SystemExit("manifest must declare exactly one language:japanese specialist")
+specialist = specialists[0]
 
 required = set()
 pending = [entrypoint]
@@ -49,9 +59,10 @@ if not required:
     raise SystemExit(
         "manifest orchestrator dependency closure is empty"
     )
-print(len(names), entrypoint)
+print(len(names), entrypoint, specialist)
 PY
 )"
+read -r expected_count entrypoint specialist <<< "$manifest_contract"
 
 for agent in claude-code codex cursor universal; do
   target="$scratch/$agent/full"
@@ -147,18 +158,19 @@ if errors:
     raise SystemExit(1)
 PY
 
-  individual_target="$scratch/$agent/individual"
-  mkdir -p -- "$individual_target"
-  (
-    cd "$individual_target"
-    npx skills add "$repo_root" \
-      --skill "$entrypoint" \
-      --agent "$agent" \
-      --yes \
-      --copy
-  )
+  for individual_skill in "$entrypoint" "$specialist"; do
+    individual_target="$scratch/$agent/individual/$individual_skill"
+    mkdir -p -- "$individual_target"
+    (
+      cd "$individual_target"
+      npx skills add "$repo_root" \
+        --skill "$individual_skill" \
+        --agent "$agent" \
+        --yes \
+        --copy
+    )
 
-  python3 - "$manifest" "$individual_target" "$agent" "$expected_count" "$entrypoint" individual <<'PY'
+    python3 - "$manifest" "$individual_target" "$agent" "$expected_count" "$individual_skill" individual <<'PY'
 from collections import Counter
 import json
 from pathlib import Path
@@ -220,6 +232,7 @@ if errors:
     print("\n".join(errors), file=sys.stderr)
     raise SystemExit(1)
 PY
+  done
 done
 
 printf 'cross-agent installation smoke test passed\n'

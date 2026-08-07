@@ -135,7 +135,34 @@ class SmokeInstallTests(unittest.TestCase):
                 ]
             else:
                 entries = []
-            calls = entries[::2]
+            manifest_data = (
+                json.loads(MANIFEST.read_text(encoding="utf-8"))
+                if manifest is None
+                else manifest
+            )
+            entrypoint = manifest_data["orchestrator"]
+            specialist = next(
+                skill["name"]
+                for skill in manifest_data["skills"]
+                if "language:japanese" in skill.get("capabilities", [])
+            )
+            calls = [
+                entry
+                for entry in entries
+                if entry["argv"][entry["argv"].index("--skill") + 1] == "*"
+            ]
+            entrypoint_entries = [
+                entry
+                for entry in entries
+                if entry["argv"][entry["argv"].index("--skill") + 1]
+                == entrypoint
+            ]
+            specialist_entries = [
+                entry
+                for entry in entries
+                if entry["argv"][entry["argv"].index("--skill") + 1]
+                == specialist
+            ]
             targets_exist = [Path(entry["cwd"]).exists() for entry in calls]
             scratch_exists = (
                 bool(calls) and Path(calls[0]["cwd"]).parent.exists()
@@ -143,7 +170,8 @@ class SmokeInstallTests(unittest.TestCase):
             snapshot = {
                 "result": result,
                 "entries": calls,
-                "individual_entries": entries[1::2],
+                "individual_entries": entrypoint_entries,
+                "japanese_entries": specialist_entries,
                 "targets_exist": targets_exist,
                 "scratch_exists": scratch_exists,
                 "protected": protected.read_text(encoding="utf-8"),
@@ -178,6 +206,16 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(len(individual_entries), 4)
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         entrypoint = manifest["orchestrator"]
+        specialist = next(
+            skill["name"]
+            for skill in manifest["skills"]
+            if "language:japanese" in skill.get("capabilities", [])
+        )
+        specialist_dependencies = next(
+            skill["depends_on"]
+            for skill in manifest["skills"]
+            if skill["name"] == specialist
+        )
         manifest_names = [item["name"] for item in manifest["skills"]]
         for entry, target_exists in zip(entries, run["targets_exist"]):
             self.assertEqual(
@@ -227,6 +265,31 @@ class SmokeInstallTests(unittest.TestCase):
                 [Path(path).relative_to(target).as_posix() for path in entry["installed"]],
                 [f"{HOST_SKILL_ROOTS[agent]}/{entrypoint}/SKILL.md"],
             )
+        japanese_entries = run["japanese_entries"]
+        self.assertEqual(len(japanese_entries), 4)
+        for entry in japanese_entries:
+            agent = entry["argv"][6]
+            target = Path(entry["cwd"])
+            self.assertEqual(
+                entry["argv"],
+                [
+                    "skills",
+                    "add",
+                    str(ROOT),
+                    "--skill",
+                    specialist,
+                    "--agent",
+                    agent,
+                    "--yes",
+                    "--copy",
+                ],
+            )
+            self.assertEqual(
+                [Path(path).relative_to(target).as_posix() for path in entry["installed"]],
+                [f"{HOST_SKILL_ROOTS[agent]}/{specialist}/SKILL.md"],
+            )
+            self.assertFalse(set(specialist_dependencies) & set(entry["names"]))
+            self.assertEqual(entry["names"], [specialist])
         self.assertFalse(run["scratch_exists"])
         self.assertEqual(run["protected"], "sentinel\n")
 
@@ -238,18 +301,26 @@ class SmokeInstallTests(unittest.TestCase):
                 {"name": "route-core", "depends_on": ["route-review"]},
                 {"name": "route-review", "depends_on": []},
                 {"name": "route-demo", "depends_on": []},
+                {
+                    "name": "route-japanese",
+                    "depends_on": ["route-core"],
+                    "capabilities": ["language:japanese"],
+                },
             ]
         }
         run = self.run_smoke(manifest=manifest)
         self.assertEqual(run["result"].returncode, 0, run["result"].stderr)
         self.assertEqual(len(run["entries"]), 4)
         self.assertEqual(len(run["individual_entries"]), 4)
+        self.assertEqual(len(run["japanese_entries"]), 4)
         for entry in run["individual_entries"]:
             self.assertEqual(entry["names"], ["route-entry"])
+        for entry in run["japanese_entries"]:
+            self.assertEqual(entry["names"], ["route-japanese"])
 
         script = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn('if [[ "$expected_count" != "22" ]]', script)
-        self.assertIn("print(len(names), entrypoint)", script)
+        self.assertIn("print(len(names), entrypoint, specialist)", script)
         self.assertNotIn('"translating-products"', script)
 
     def test_reports_duplicate_and_missing_skill_for_the_specific_agent(self):
@@ -289,6 +360,33 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 9)
         self.assertEqual(len(run["entries"]), 1)
         self.assertEqual(len(run["individual_entries"]), 1)
+        self.assertEqual(len(run["japanese_entries"]), 1)
+        self.assertFalse(run["scratch_exists"])
+        self.assertEqual(run["protected"], "sentinel\n")
+
+    def test_rejects_duplicate_manifest_names_before_installing(self):
+        manifest = {
+            "orchestrator": "route-entry",
+            "skills": [
+                {"name": "route-entry", "depends_on": []},
+                {"name": "route-core", "depends_on": []},
+                {"name": "route-core", "depends_on": []},
+                {
+                    "name": "route-japanese",
+                    "depends_on": [],
+                    "capabilities": ["language:japanese"],
+                },
+            ],
+        }
+        run = self.run_smoke(manifest=manifest)
+        self.assertNotEqual(run["result"].returncode, 0)
+        self.assertEqual(
+            run["result"].stderr,
+            "manifest contains duplicate skill names: route-core\n",
+        )
+        self.assertEqual(run["entries"], [])
+        self.assertEqual(run["individual_entries"], [])
+        self.assertEqual(run["japanese_entries"], [])
         self.assertFalse(run["scratch_exists"])
         self.assertEqual(run["protected"], "sentinel\n")
 
