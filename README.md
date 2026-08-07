@@ -3,8 +3,9 @@
 Human Translation Skills is a portable Agent Skills suite for producing
 native-sounding, culturally appropriate product translations while preserving
 meaning, terminology, structure, and platform constraints. One orchestrator
-selects the smallest useful combination from 22 independently discoverable
-core, quality, surface, platform, script, and language skills.
+selects the smallest useful combination from the manifest's independently
+discoverable core, quality, surface, platform, writing-system, and language
+skills.
 
 > **AI disclosure:** Translations produced with this suite are AI-generated
 > and have not been reviewed by a human translator. If your project adds human
@@ -17,8 +18,9 @@ host-specific invocation syntax.
 
 ## Install and discover
 
-Run these commands from a clone of this repository to preview the discovered
-skills or install the complete suite locally:
+Run these commands from a clone of this repository to preview the exact
+manifest-derived skills that will be installed or install the complete suite
+locally:
 
 ```bash
 npx skills add . --list
@@ -57,19 +59,30 @@ full-suite command when you want automatic orchestration.
 
 ## How translation is orchestrated
 
-Start with `translating-products`. It classifies the target languages,
-locales, product surfaces, domains, and scripts, then activates the smallest
-ordered set needed for the request:
+Start with `translating-products`. For each exact target locale, it builds a
+task profile from language, locale range, writing system, surface, platform,
+format, domain, requested capability, audience, purpose, register, and
+protected structural constraints. It declaratively matches that profile to the
+catalog's selectors, expands declared dependencies, and runs the smallest
+sufficient route. Routing does not depend on a hardcoded surface-to-skill or
+language-product classification.
 
-1. `translating-core` preserves meaning, terminology, and structure.
-2. Relevant surface and platform specialists apply product constraints.
-3. Relevant script and language specialists refine locale-specific output.
-4. `reviewing-translations` performs structural and linguistic QA.
+Each route executes `inspect → translate → refine → integrate → review`.
+Surface, platform, and format skills inspect and integrate protected product
+structure; core produces the first semantic draft; writing-system, language,
+and locale guidance refines only its owned linguistic dimension; review checks
+the completed result. Locale guidance refines language guidance, which refines
+broader writing-system defaults, without overriding semantic fidelity,
+approved terminology, or protected values.
 
 A task can therefore use several skills without loading unrelated guidance.
-For example, Japanese iOS onboarding routes through core, mobile, iOS,
-Japanese, and review. Arabic web marketing additionally uses web, marketing,
-RTL, and Arabic specialists.
+Latin, CJK, and RTL are possible coherent writing-system capability modules,
+not an exhaustive taxonomy. A request for Portuguese, Japanese, and Arabic
+creates three independent linguistic branches: Portuguese applies its locale
+guidance, Japanese applies its language guidance, and Arabic can add the RTL
+module. Shared artifact inspection and approved context are reused, but drafts
+and QA stay isolated until reintegration so one locale cannot leak vocabulary
+or register into another.
 
 If the project has no translation context, the orchestrator pauses before
 translation and asks one setup question at a time. After approval it creates:
@@ -103,8 +116,10 @@ benefit; unsupported hosts run the same stages sequentially.
 
 Reviewed external skills can be integrated through the documented adapter
 contract when they are already installed and authorized by the user, project,
-or compatibility registry. The orchestrator never downloads an unknown skill
-during a translation task.
+or compatibility registry. The orchestrator discovers their selectors,
+dependencies, phases, specificity, context, conflicts, and authority metadata
+through the same public contract it uses for bundled skills. It never downloads
+an unknown skill during a translation task.
 
 ## Skill inventory
 

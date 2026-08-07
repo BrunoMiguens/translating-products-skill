@@ -52,7 +52,7 @@ FAKE_NPX = textwrap.dedent(
 
 
 class SmokeInstallTests(unittest.TestCase):
-    def run_smoke(self, mode: str = "success"):
+    def run_smoke(self, mode: str = "success", manifest: dict | None = None):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fake_bin = root / "bin"
@@ -66,6 +66,17 @@ class SmokeInstallTests(unittest.TestCase):
             protected.parent.mkdir(parents=True)
             protected.write_text("sentinel\n", encoding="utf-8")
             log = root / "npx.jsonl"
+            if manifest is None:
+                suite_root = ROOT
+                suite_script = SCRIPT
+                suite_manifest = MANIFEST
+            else:
+                suite_root = root / "suite"
+                suite_script = suite_root / "scripts" / SCRIPT.name
+                suite_script.parent.mkdir(parents=True)
+                suite_script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+                suite_manifest = suite_root / MANIFEST.name
+                suite_manifest.write_text(json.dumps(manifest), encoding="utf-8")
             env = os.environ.copy()
             env.update(
                 {
@@ -73,13 +84,13 @@ class SmokeInstallTests(unittest.TestCase):
                     "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
                     "SMOKE_FAKE_MODE": mode,
                     "SMOKE_LOG": str(log),
-                    "SMOKE_MANIFEST": str(MANIFEST),
+                    "SMOKE_MANIFEST": str(suite_manifest),
                 }
             )
 
             result = subprocess.run(
-                ["bash", str(SCRIPT)],
-                cwd=ROOT,
+                ["bash", str(suite_script)],
+                cwd=suite_root,
                 env=env,
                 capture_output=True,
                 text=True,
@@ -150,6 +161,23 @@ class SmokeInstallTests(unittest.TestCase):
             self.assertFalse(target.is_relative_to(ROOT))
         self.assertFalse(run["scratch_exists"])
         self.assertEqual(run["protected"], "sentinel\n")
+
+    def test_suite_size_is_derived_from_the_manifest(self):
+        manifest = {
+            "skills": [
+                {"name": "translating-products"},
+                {"name": "translating-core"},
+                {"name": "reviewing-translations"},
+                {"name": "translating-demo"},
+            ]
+        }
+        run = self.run_smoke(manifest=manifest)
+        self.assertEqual(run["result"].returncode, 0, run["result"].stderr)
+        self.assertEqual(len(run["entries"]), 4)
+
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn('if [[ "$expected_count" != "22" ]]', script)
+        self.assertIn("print(len(names))", script)
 
     def test_reports_duplicate_and_missing_skill_for_the_specific_agent(self):
         run = self.run_smoke("duplicate")

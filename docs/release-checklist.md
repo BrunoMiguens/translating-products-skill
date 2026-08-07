@@ -11,6 +11,29 @@ first stable release is still blocked by the missing public remote,
 host-evaluation record, and proficient bilingual reviews. No human translator
 review is claimed.
 
+## Task 7 verification — 2026-08-07
+
+The schema `2` manifest declared 22 skills on this date. The following commands
+were run from the repository worktree and exited `0`:
+
+```bash
+python3 scripts/render_catalog.py
+python3 scripts/render_catalog.py --check
+python3 scripts/validate_repo.py
+python3 -m unittest discover -s tests -v
+npx skills add . --list
+git diff --check
+bash scripts/smoke_install.sh
+```
+
+The validator reported `validated 22 skills and 7 sources`; the full unittest
+suite passed; the discovery preview listed the 22 manifest skills; and the
+smoke installer copied and compared the exact 22-skill inventory for
+`claude-code`, `codex`, `cursor`, and `universal` in disposable marked
+temporary directories before removing them. This installation evidence checks
+suite packaging, discovery, and host portability. It does not pass or claim the
+separate PT-PT human-curated benchmark or any human translator review.
+
 ## Gates
 
 | Gate | Status | Current evidence or required record |

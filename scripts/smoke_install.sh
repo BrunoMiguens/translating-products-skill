@@ -39,11 +39,6 @@ print(len(names))
 PY
 )"
 
-if [[ "$expected_count" != "22" ]]; then
-  printf 'manifest: expected 22 skills, found %s\n' "$expected_count" >&2
-  exit 1
-fi
-
 for agent in claude-code codex cursor universal; do
   target="$scratch/$agent"
   mkdir -p -- "$target"

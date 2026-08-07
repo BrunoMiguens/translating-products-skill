@@ -34,22 +34,32 @@ numbers, links, code, or approved terminology.
 
 ## Routing and minimal order
 
-The orchestrator classifies languages, locales, surfaces, domains, and scripts
-and matches those dimensions against the generated catalog. Dependencies are
-expanded and emitted in manifest order. The typical sequence is core, selected
-surface/platform skills, selected script/language skills, then review. The
-orchestrator itself coordinates the sequence and is not inserted into its own
-route.
+For every exact target locale, the orchestrator builds a task profile with
+source and target locale, language, explicit or observed writing system,
+surface, platform, format, domain, requested capability, audience, purpose,
+register, and protected constraints. It matches declarative catalog selectors
+on those axes, adds the mandatory core and review capabilities, expands
+dependencies, resolves conflicts and explicit supersession, then orders the
+result by phase, ownership, specificity, and stable manifest order. The router
+enumerates generic axes; it contains no surface-to-skill table or
+language-product combination rule.
 
-For Japanese iOS onboarding the minimal route is:
+Every selected route executes `inspect → translate → refine → integrate →
+review`. Inspection produces a translation contract without inventing target
+wording. Core translates against that contract. Writing-system, language, and
+locale skills refine only their owned dimension. Integration restores approved
+wording to the artifact without changing protected structure, and review checks
+the completed output. The orchestrator coordinates this sequence and is not
+inserted into its own route.
 
-```text
-translating-core
-→ translating-mobile
-→ translating-ios
-→ translating-japanese
-→ reviewing-translations
-```
+Locale guidance refines language guidance, which refines broader
+writing-system defaults; no narrower skill may override semantic fidelity,
+approved terminology, or protected values. Latin, CJK, and RTL are examples of
+coherent capability modules, not an exhaustive taxonomy. A Portuguese,
+Japanese, and Arabic request shares artifact inspection and approved context,
+then produces independent per-locale profiles, routes, drafts, and QA before
+reintegration. This prevents linguistic decisions from one branch leaking into
+another.
 
 Unknown languages can use core when it can cover the task coherently. Missing
 essential capabilities are reported rather than invented, and no route
@@ -122,9 +132,12 @@ requests use only committed material.
 An externally installed skill is eligible only when its metadata satisfies the
 [extension contract](../skills/translating-products/references/extension-contract.md)
 and it is user-selected, project-configured, or in the reviewed compatibility
-registry. Registry trust is compatibility evidence, not installation. An
-absent or unauthorized external specialist falls back to bundled guidance; an
-unknown specialist is never downloaded during a translation task.
+registry. The public contract exposes selectors, phases, specificity, required
+context, dependencies, conflicts, supersession, and authority boundaries, so
+an authorized specialist can be discovered without router changes. Registry
+trust is compatibility evidence, not installation. An absent or unauthorized
+external specialist falls back to bundled guidance; an unknown specialist is
+never downloaded during a translation task.
 
 ## Source-data and prompt-injection boundary
 
@@ -170,4 +183,17 @@ and `description` frontmatter. Skill bodies avoid host-specific invocation
 tokens and undocumented paths outside their own directories. This keeps the
 same suite discoverable by Claude Code, Codex, Cursor, and universal Agent
 Skills hosts. Capability routing and policy scripts use Python's standard
-library and do not depend on a host SDK.
+library and do not depend on a host SDK. `npx skills add . --list` previews
+the manifest-backed inventory, `npx skills add . --all` installs the unified
+suite, and `npx skills add . --skill translating-japanese --agent claude-code`
+illustrates separate specialist installation. `--skill '*' --agent HOST`
+selects the complete suite for an explicit host. The smoke installer verifies
+the exact manifest inventory in disposable targets for Claude Code, Codex,
+Cursor, and universal hosts; it never writes a developer's global skill
+directory. Individual installation remains discoverable but does not install
+transitive dependencies, so orchestration uses the full-suite command.
+
+The public catalog and README disclose that translations are AI-generated and
+have not been reviewed by a human translator. This is publication and
+installation information; generated translation output does not repeat a
+generic runtime warning or claim human review.
