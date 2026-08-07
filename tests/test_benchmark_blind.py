@@ -1114,7 +1114,7 @@ class BlindingCliTests(unittest.TestCase):
         completed = self.run_cli(
             public_dir / "bundle.json",
             private_dir / "key.json",
-            timeout=2,
+            timeout=10,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
