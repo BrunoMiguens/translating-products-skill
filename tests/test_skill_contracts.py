@@ -357,6 +357,9 @@ class SkillContractTests(unittest.TestCase):
             "1:20",
             "2026-08-07T12:30:00Z",
             "2026-08-07 12:30:00+01:00",
+            "foo:",
+            "foo:\tbar",
+            "'foo'bar'",
         ):
             with self.subTest(scalar=scalar):
                 content = (
@@ -420,6 +423,23 @@ class SkillContractTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(expected, result.stderr)
+
+    def test_public_cli_rejects_host_incompatible_frontmatter_scalars(self):
+        candidate = external_skill("external-host-frontmatter")
+        for scalar in ("foo:", "foo:\tbar", "'foo'bar'"):
+            with self.subTest(scalar=scalar):
+                text = installed_skill_text(candidate).replace(
+                    f"description: {candidate['description']}\n",
+                    f"description: {scalar}\n",
+                )
+                result = run_public_cli(
+                    [candidate],
+                    authorized=(candidate["name"],),
+                    skill_texts={candidate["name"]: text},
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("unsupported frontmatter scalar", result.stderr)
 
     def test_public_cli_attestation_binds_the_complete_portable_skill_tree(self):
         candidate = external_skill("external-tree-bound")

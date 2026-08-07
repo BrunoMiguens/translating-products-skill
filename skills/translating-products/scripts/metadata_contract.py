@@ -260,7 +260,10 @@ def _parse_scalar(value: str) -> str:
     if value.startswith("'"):
         if len(value) < 2 or not value.endswith("'"):
             raise ValueError("unsupported frontmatter scalar")
-        return value[1:-1].replace("''", "'")
+        inner = value[1:-1]
+        if "'" in inner.replace("''", ""):
+            raise ValueError("unsupported frontmatter scalar")
+        return inner.replace("''", "'")
     if value.startswith('"'):
         try:
             parsed = json.loads(value)
@@ -273,7 +276,7 @@ def _parse_scalar(value: str) -> str:
         value[0] in "-?:,|>[]{}&*!`#%@"
         or value.endswith(("'", '"'))
         or re.search(r"(^|[ \t])#", value)
-        or ": " in value
+        or re.search(r":[ \t]|:$", value)
         or YAML_IMPLICIT_SCALAR.fullmatch(value)
     ):
         raise ValueError("unsupported frontmatter scalar")
