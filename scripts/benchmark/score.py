@@ -1930,7 +1930,12 @@ def _validate_output_target(output: Path, paths: ScorePaths) -> Path:
         raise BenchmarkError(f"cannot validate score output path: {error}") from error
 
 
-def _rename_noreplace(parent_fd: int, source: str, destination: str) -> None:
+def _rename_noreplace(
+    source_parent_fd: int,
+    source: str,
+    destination_parent_fd: int,
+    destination: str,
+) -> None:
     """Atomically publish one private name without replacing any destination type."""
     libc = ctypes.CDLL(None, use_errno=True)
     encoded_source = os.fsencode(source)
@@ -1939,12 +1944,20 @@ def _rename_noreplace(parent_fd: int, source: str, destination: str) -> None:
         function = libc.renameatx_np
         function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
         function.restype = ctypes.c_int
-        result = function(parent_fd, encoded_source, parent_fd, encoded_destination, 0x00000004)
+        result = function(
+            source_parent_fd, encoded_source,
+            destination_parent_fd, encoded_destination,
+            0x00000004,
+        )
     elif sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
         function = libc.renameat2
         function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
         function.restype = ctypes.c_int
-        result = function(parent_fd, encoded_source, parent_fd, encoded_destination, 0x00000001)
+        result = function(
+            source_parent_fd, encoded_source,
+            destination_parent_fd, encoded_destination,
+            0x00000001,
+        )
     else:
         raise OSError(
             getattr(os, "ENOTSUP", 45),
@@ -1959,16 +1972,23 @@ def _publish_exclusive_json(output: Path, value: object) -> str:
     encoded = canonical_bytes(value)
     resolved_parent = output.parent.resolve(strict=True)
     parent_fd = -1
+    staging_parent_fd = -1
     staging_fd = -1
-    staging_name = f".{output.name}.staging-{uuid4().hex}"
-    staging_created = False
-    published = False
+    staging_dir_name = f".{output.name}.staging-{uuid4().hex}"
+    staging_name = "payload"
+    staging_dir_created = False
     try:
         parent_fd = os.open(resolved_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         parent_before = os.fstat(parent_fd)
+        os.mkdir(staging_dir_name, 0o700, dir_fd=parent_fd)
+        staging_dir_created = True
+        staging_parent_fd = os.open(
+            staging_dir_name,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        staging_fd = os.open(staging_name, flags, 0o600, dir_fd=parent_fd)
-        staging_created = True
+        staging_fd = os.open(staging_name, flags, 0o600, dir_fd=staging_parent_fd)
         offset = 0
         while offset < len(encoded):
             written = os.write(staging_fd, encoded[offset:])
@@ -1987,9 +2007,9 @@ def _publish_exclusive_json(output: Path, value: object) -> str:
         if (parent_before.st_dev, parent_before.st_ino) != (current_parent.st_dev, current_parent.st_ino):
             raise BenchmarkError("score output parent changed during publication")
         os.fsync(parent_fd)
-        _rename_noreplace(parent_fd, staging_name, output.name)
-        published = True
-        staging_created = False
+        _rename_noreplace(
+            staging_parent_fd, staging_name, parent_fd, output.name
+        )
         return sha256_bytes(encoded)
     except BenchmarkError:
         raise
@@ -1998,8 +2018,31 @@ def _publish_exclusive_json(output: Path, value: object) -> str:
             raise BenchmarkError(f"score output already exists: {output}") from error
         raise BenchmarkError(f"cannot publish score output: {error}") from error
     finally:
+        if staging_parent_fd >= 0 and staging_fd >= 0:
+            try:
+                created = os.fstat(staging_fd)
+                current = os.stat(
+                    staging_name,
+                    dir_fd=staging_parent_fd,
+                    follow_symlinks=False,
+                )
+                if (
+                    stat.S_ISREG(current.st_mode)
+                    and (created.st_dev, created.st_ino)
+                    == (current.st_dev, current.st_ino)
+                ):
+                    os.unlink(staging_name, dir_fd=staging_parent_fd)
+            except (FileNotFoundError, OSError):
+                pass
         if staging_fd >= 0:
             os.close(staging_fd)
+        if staging_parent_fd >= 0:
+            os.close(staging_parent_fd)
+        if staging_dir_created and parent_fd >= 0:
+            try:
+                os.rmdir(staging_dir_name, dir_fd=parent_fd)
+            except OSError:
+                pass
         if parent_fd >= 0:
             os.close(parent_fd)
 

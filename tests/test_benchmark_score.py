@@ -964,6 +964,25 @@ class LockedScoringTests(unittest.TestCase):
         self.assertTrue(created_inode.exists())
         self.assertEqual(list(self.root.glob(f".{output.name}.rollback-*")), [])
 
+    def test_score_publication_cleans_its_private_staging_inode_on_every_failure(self):
+        """Break: prepublication and atomic-rename failures could leak hidden score bytes."""
+        failures = (
+            ("prepublication", "os.fsync", OSError("induced prepublication failure")),
+            ("rename", "_rename_noreplace", OSError("induced rename failure")),
+        )
+        for index, (label, target, error) in enumerate(failures):
+            output = self.root / f"cleanup-{index}.json"
+            with self.subTest(label=label), mock.patch(
+                f"scripts.benchmark.score.{target}", side_effect=error,
+            ):
+                with self.assertRaisesRegex(BenchmarkError, "cannot publish score output"):
+                    _publish_exclusive_json(output, {"score": "private"})
+            self.assertFalse(output.exists())
+            self.assertEqual(
+                list(self.root.glob(f".{output.name}.staging-*")),
+                [],
+            )
+
     def _write_evidence(self) -> None:
         self.evidence.mkdir()
         snapshot = self.evidence / "input-snapshot"
