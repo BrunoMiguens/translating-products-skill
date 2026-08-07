@@ -82,6 +82,10 @@ _OUTPUT_CONDITION_LEAK = re.compile(
     r"(?:^|\n)\s*(?:\[(?:tool|assistant|system)\]|(?:tool|assistant|system)\s*:)|"
     r"\bloaded\s+(?:the\s+)?(?:translating|reviewing|localizing)-[^\s/\\]+(?:\s+skill)?\b|"
     r"\btranslation\s+suite\s+(?:enabled|loaded|active)\b|"
+    r"\b(?:used|using)\s+(?:the\s+)?(?:translating|reviewing|localizing)-[^\s/\\]+\s+skill\b|"
+    r"\b(?:translating|reviewing|localizing)-[^\s/\\]+\s+skill\s+(?:was\s+)?(?:loaded|used|enabled)\b|"
+    r"\b(?:output|response|translation)\s+came\s+from\s+(?:the\s+)?(?:normal|suite|context[_ -]?only)\s+condition\b|"
+    r"\btranslation\s+suite\s+(?:was\s+)?used\b|"
     r"\b(?:treatment|condition)\s*[:=]\s*(?:translating|reviewing|localizing)-[^\s/\\]+\b|"
     r"(?:^|\s)(?:[/\\][^\s/\\]+)*[/\\](?:benchmark-(?:evidence|private|tmp)|\.benchmark-review)(?:[/\\]|\b))",
     re.IGNORECASE,
@@ -720,9 +724,13 @@ def _validate_prepared_manifest(
     required = {
         "schema_version", "dataset", "suite", "runner_config_sha256",
         "execution_config_sha256", "schedule_seed", "bootstrap_seed", "evidence",
-        "schedule", "input_snapshot",
+        "schedule", "input_snapshot", "run_bindings",
     }
-    allowed = required | {"sandbox_probe", "run_bindings"}
+    allowed = required | {"sandbox_probe"}
+    if "run_bindings" not in manifest:
+        raise BenchmarkError(
+            "run manifest run bindings are required for completed evidence"
+        )
     if not required <= set(manifest) or not set(manifest) <= allowed:
         missing = sorted(required - set(manifest))
         unknown = sorted(set(manifest) - allowed)
@@ -807,25 +815,24 @@ def _validate_prepared_manifest(
         raise BenchmarkError("run manifest evidence path mismatch")
 
     run_ids = _validate_schedule_manifest(manifest)
-    if "run_bindings" in manifest:
-        bindings = manifest["run_bindings"]
-        if not isinstance(bindings, Mapping) or set(bindings) != set(run_ids):
-            raise BenchmarkError("run manifest run bindings do not cover the schedule")
-        binding_fields = {
-            "case_sha256", "prompt_sha256", "execution_config_sha256",
-            "input_snapshot_sha256", "sha256",
-        }
-        for run_id, binding in bindings.items():
-            if not isinstance(binding, Mapping) or set(binding) != binding_fields:
-                raise BenchmarkError(f"run manifest binding is malformed: {run_id}")
-            for field in binding_fields:
-                value = binding[field]
-                if field == "input_snapshot_sha256" and value is None:
-                    continue
-                _require_sha256(value, f"run manifest binding {run_id} {field}")
-            payload = {name: binding[name] for name in binding_fields - {"sha256"}}
-            if binding["sha256"] != sha256_bytes(canonical_bytes(payload)):
-                raise BenchmarkError(f"run manifest binding hash mismatch: {run_id}")
+    bindings = manifest["run_bindings"]
+    if not isinstance(bindings, Mapping) or set(bindings) != set(run_ids):
+        raise BenchmarkError("run manifest run bindings do not cover the schedule")
+    binding_fields = {
+        "case_sha256", "prompt_sha256", "execution_config_sha256",
+        "input_snapshot_sha256", "sha256",
+    }
+    for run_id, binding in bindings.items():
+        if not isinstance(binding, Mapping) or set(binding) != binding_fields:
+            raise BenchmarkError(f"run manifest binding is malformed: {run_id}")
+        for field in binding_fields:
+            value = binding[field]
+            if field == "input_snapshot_sha256" and value is None:
+                continue
+            _require_sha256(value, f"run manifest binding {run_id} {field}")
+        payload = {name: binding[name] for name in binding_fields - {"sha256"}}
+        if binding["sha256"] != sha256_bytes(canonical_bytes(payload)):
+            raise BenchmarkError(f"run manifest binding hash mismatch: {run_id}")
     input_snapshot = manifest.get("input_snapshot")
     if not isinstance(input_snapshot, dict):
         raise BenchmarkError("run manifest input snapshot is malformed")

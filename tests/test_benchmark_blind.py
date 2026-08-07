@@ -251,6 +251,10 @@ class BlindingTests(unittest.TestCase):
             "loaded translating-products skill",
             "translation suite enabled",
             "Treatment: translating-products",
+            "I used the translating-products skill",
+            "The translating-products skill was loaded",
+            "This output came from the suite condition",
+            "The translation suite was used",
         )
         for index, leak in enumerate(leaks):
             changed_runs = complete_synthetic_runs()
@@ -622,6 +626,16 @@ class BlindingCliTests(unittest.TestCase):
             },
             "input_snapshot": _snapshot_manifest(snapshot),
         })
+        manifest["run_bindings"] = {}
+        for run_id in run_ids:
+            binding = {
+                "case_sha256": "1" * 64,
+                "prompt_sha256": "2" * 64,
+                "execution_config_sha256": manifest["execution_config_sha256"],
+                "input_snapshot_sha256": manifest["input_snapshot"]["sha256"],
+            }
+            binding["sha256"] = sha256_bytes(canonical_bytes(binding))
+            manifest["run_bindings"][run_id] = binding
         atomic_write_json(self.evidence / "run-manifest.json", manifest)
 
     def _bind_dirty_suite(
@@ -870,6 +884,26 @@ class BlindingCliTests(unittest.TestCase):
                 self.assertFalse(review.exists())
                 self.assertFalse(key.exists())
         atomic_write_json(manifest_path, original)
+
+    def test_cli_rejects_completed_legacy_evidence_without_run_bindings(self):
+        """Break: blinding could promote old outputs whose original prompts were never bound."""
+        manifest_path = self.evidence / "run-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.pop("run_bindings")
+        atomic_write_json(manifest_path, manifest)
+        public_dir = self.root / "public-legacy-bindings"
+        private_dir = self.root / "private-legacy-bindings"
+        public_dir.mkdir()
+        private_dir.mkdir()
+
+        completed = self.run_cli(
+            public_dir / "bundle.json", private_dir / "key.json"
+        )
+
+        self.assertEqual(completed.returncode, 2, completed.stdout)
+        self.assertIn("run bindings", completed.stderr)
+        self.assertFalse((public_dir / "bundle.json").exists())
+        self.assertFalse((private_dir / "key.json").exists())
 
     def test_cli_accepts_a_complete_optional_sandbox_probe(self):
         """Break: exact optional validation must preserve a complete prepared probe object."""

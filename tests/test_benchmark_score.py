@@ -907,7 +907,7 @@ class LockedScoringTests(unittest.TestCase):
             nonlocal calls
             calls += 1
             if calls == 2:
-                output.rename(created_inode)
+                created_inode.write_bytes(b"private staging remained separate")
                 output.write_bytes(b"replacement")
                 raise OSError("induced directory fsync failure")
 
@@ -918,18 +918,10 @@ class LockedScoringTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), b"replacement")
         self.assertTrue(created_inode.exists())
 
-    def test_score_rollback_never_unlinks_replacement_installed_after_identity_check(self):
-        """Break: stat then unlink could delete a replacement installed between both calls."""
+    def test_score_publication_never_unlinks_replacement_installed_before_publish(self):
+        """Break: cleanup of a private staged inode could touch a concurrently claimed target."""
         output = self.root / "post-stat-raced-score.json"
         created_inode = self.root / "post-stat-created-inode.json"
-        real_rename = os.rename
-
-        def raced_rename(source, destination, *args, **kwargs):
-            result = real_rename(source, destination, *args, **kwargs)
-            if source == output.name and str(destination).startswith(f".{output.name}.rollback-"):
-                created_inode.write_bytes(b"created inode was quarantined")
-                output.write_bytes(b"replacement-after-stat")
-            return result
 
         fsync_calls = 0
 
@@ -937,17 +929,40 @@ class LockedScoringTests(unittest.TestCase):
             nonlocal fsync_calls
             fsync_calls += 1
             if fsync_calls == 2:
+                created_inode.write_bytes(b"private staging remained separate")
+                output.write_bytes(b"replacement-after-stat")
                 raise OSError("induced directory fsync failure")
 
-        with (
-            mock.patch("scripts.benchmark.score.os.rename", side_effect=raced_rename),
-            mock.patch("scripts.benchmark.score.os.fsync", side_effect=failing_fsync),
-        ):
+        with mock.patch("scripts.benchmark.score.os.fsync", side_effect=failing_fsync):
             with self.assertRaisesRegex(BenchmarkError, "cannot publish score output"):
                 _publish_exclusive_json(output, {"score": "original"})
 
         self.assertEqual(output.read_bytes(), b"replacement-after-stat")
         self.assertTrue(created_inode.exists())
+
+    def test_score_rollback_preserves_a_concurrent_directory_replacement_in_place(self):
+        """Break: quarantine could move an unrelated directory and fail to restore its public name."""
+        output = self.root / "directory-raced-score.json"
+        created_inode = self.root / "directory-raced-created.json"
+        fsync_calls = 0
+
+        def raced_fsync(_descriptor: int) -> None:
+            nonlocal fsync_calls
+            fsync_calls += 1
+            if fsync_calls == 2:
+                created_inode.write_bytes(b"private staging remained separate")
+                output.mkdir()
+                (output / "sentinel").write_bytes(b"preserve-directory")
+                raise OSError("induced directory fsync failure")
+
+        with mock.patch("scripts.benchmark.score.os.fsync", side_effect=raced_fsync):
+            with self.assertRaisesRegex(BenchmarkError, "cannot publish score output"):
+                _publish_exclusive_json(output, {"score": "original"})
+
+        self.assertTrue(output.is_dir())
+        self.assertEqual((output / "sentinel").read_bytes(), b"preserve-directory")
+        self.assertTrue(created_inode.exists())
+        self.assertEqual(list(self.root.glob(f".{output.name}.rollback-*")), [])
 
     def _write_evidence(self) -> None:
         self.evidence.mkdir()
@@ -1040,6 +1055,16 @@ class LockedScoringTests(unittest.TestCase):
             },
             "input_snapshot": _snapshot_manifest(snapshot),
         })
+        manifest["run_bindings"] = {}
+        for run_id in run_ids:
+            binding = {
+                "case_sha256": "1" * 64,
+                "prompt_sha256": "2" * 64,
+                "execution_config_sha256": manifest["execution_config_sha256"],
+                "input_snapshot_sha256": manifest["input_snapshot"]["sha256"],
+            }
+            binding["sha256"] = sha256_bytes(canonical_bytes(binding))
+            manifest["run_bindings"][run_id] = binding
         atomic_write_json(self.evidence / "run-manifest.json", manifest)
 
     def _write_blind_artifacts(self) -> None:
@@ -1099,42 +1124,19 @@ class LockedScoringTests(unittest.TestCase):
             check=False,
         )
 
-    def test_locked_paths_and_cli_produce_one_canonical_deterministic_document(self):
-        """Break: scoring could skip lock verification or publish unstable/non-atomic JSON."""
+    def test_locked_paths_and_cli_fail_closed_without_an_all_input_seal(self):
+        """Break: mutable pathname inputs could produce claim-shaped diagnostic metrics."""
         verify_locked_inputs(self.paths)
-        first = score_paths(self.paths)
-        second = score_paths(self.paths)
-        self.assertEqual(canonical_bytes(first), canonical_bytes(second))
-        self.assertEqual(first["provenance"]["bootstrap_seed"], 20260804)
-        self.assertEqual(first["provenance"]["claim_evidence"]["status"], "unavailable")
-        self.assertIsNone(first["gates"]["overall"]["passed"])
-        self.assertIsNone(first["gates"]["review"]["passed"])
-        self.assertEqual(first["metrics"]["scorecards"]["overall"]["case_attempts"], 180)
-        self.assertEqual(
-            first["metrics"]["scorecards"]["task"]["translation"]["case_attempts"],
-            120,
-        )
-        self.assertEqual(
-            first["metrics"]["scorecards"]["surface"]["web"]["case_attempts"],
-            36,
-        )
-        self.assertEqual(
-            first["metrics"]["scorecards"]["difficulty"]["simple"]["case_attempts"],
-            60,
-        )
-        self.assertEqual(
-            first["metrics"]["operational"]["latency_seconds"]["by_condition"]["normal"],
-            {"count": 180, "mean": 1.0, "total": 180.0},
-        )
+        with self.assertRaisesRegex(
+            BenchmarkError, "sealed immutable scoring input manifest unavailable",
+        ):
+            score_paths(self.paths)
 
         output = self.root / "score.json"
         completed = self.run_score_cli(output)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(json.loads(completed.stdout), {
-            "output": str(output),
-            "sha256": sha256_bytes(output.read_bytes()),
-        })
-        self.assertEqual(output.read_bytes(), canonical_bytes(first))
+        self.assertEqual(completed.returncode, 2, completed.stdout)
+        self.assertIn("sealed immutable scoring input manifest unavailable", completed.stderr)
+        self.assertFalse(output.exists())
 
     def test_cli_never_overwrites_existing_or_writes_inside_consumed_trees(self):
         """Break: score publication could replace prior results or frozen input bytes."""
@@ -1247,7 +1249,9 @@ class LockedScoringTests(unittest.TestCase):
         validation_path = self.evidence / "validation.jsonl"
         records = validation_path.read_bytes().splitlines(keepends=True)
         validation_path.write_bytes(b"".join(records[:-1]))
-        with self.assertRaisesRegex(BenchmarkError, "validation identities"):
+        with self.assertRaisesRegex(
+            BenchmarkError, "sealed immutable scoring input manifest unavailable",
+        ):
             score_paths(self.paths)
 
         validation_path.write_bytes(b"".join(records))
@@ -1275,14 +1279,12 @@ class LockedScoringTests(unittest.TestCase):
         with mock.patch(
             "scripts.benchmark.score._normalized_scoring_evidence",
             side_effect=swap_then_restore,
-        ):
-            document = score_paths(self.paths)
-
-        self.assertIsNone(document["gates"]["overall"]["passed"])
-        self.assertEqual(
-            document["provenance"]["validation_sha256"],
-            sha256_bytes(validation_path.read_bytes()),
-        )
+        ) as normalizer:
+            with self.assertRaisesRegex(
+                BenchmarkError, "sealed immutable scoring input manifest unavailable",
+            ):
+                score_paths(self.paths)
+        normalizer.assert_not_called()
 
     def test_scoring_does_not_admit_optional_derivation_created_after_acquisition(self):
         """Break: an absent optional file could appear after the held input set was frozen."""
@@ -1299,11 +1301,66 @@ class LockedScoringTests(unittest.TestCase):
         with mock.patch(
             "scripts.benchmark.score._normalized_scoring_evidence",
             side_effect=create_then_remove,
-        ):
-            document = score_paths(self.paths)
+        ) as normalizer:
+            with self.assertRaisesRegex(
+                BenchmarkError, "sealed immutable scoring input manifest unavailable",
+            ):
+                score_paths(self.paths)
+        normalizer.assert_not_called()
 
-        self.assertFalse(document["metrics"]["review"]["available"])
-        self.assertIsNone(document["provenance"]["review_mappings_sha256"])
+    def test_scoring_refuses_before_a_coherent_annotation_swap_can_change_metrics(self):
+        """Break: a locked alternate annotation tree could be scored then swapped back."""
+        alternate_dir = self.root / "alternate-annotations"
+        alternate_dir.mkdir()
+        alternate = ReviewStore(self.review_bundle, alternate_dir)
+        try:
+            for review_item in alternate.bundle["items"]:
+                labels = tuple(review_item["outputs"])
+                alternate.append({
+                    "item_id": review_item["id"],
+                    "revision": 1,
+                    "comparisons": {
+                        f"{left}:{right}": "left_clear"
+                        for index, left in enumerate(labels)
+                        for right in labels[index + 1 :]
+                    },
+                    "confidence": "high",
+                    "mqm": [],
+                    "major_or_worse": {label: False for label in labels},
+                    "note": "",
+                })
+            alternate.lock(reviewer_id="alternate-pt-PT-reviewer", attestation={
+                "schema_version": 1,
+                "reviewer_locale": "pt-PT",
+                "pt_pt_proficient": True,
+                "independence_and_conflicts": "Independent alternate fixture.",
+                "continued_blindness_acknowledged": True,
+                "condition_key_not_accessed": True,
+                "automated_findings_not_accessed": True,
+                "rubric_completed": True,
+            })
+        finally:
+            alternate.close()
+        saved_dir = self.root / "original-annotations-saved"
+        original_verify = score_module._verify_annotation_paths
+
+        def swap_then_restore(*args, **kwargs):
+            self.annotations_dir.rename(saved_dir)
+            alternate_dir.rename(self.annotations_dir)
+            try:
+                return original_verify(*args, **kwargs)
+            finally:
+                self.annotations_dir.rename(alternate_dir)
+                saved_dir.rename(self.annotations_dir)
+
+        with mock.patch(
+            "scripts.benchmark.score._verify_annotation_paths",
+            side_effect=swap_then_restore,
+        ):
+            with self.assertRaisesRegex(
+                BenchmarkError, "sealed immutable scoring input manifest unavailable",
+            ):
+                score_paths(self.paths)
 
 
 if __name__ == "__main__":

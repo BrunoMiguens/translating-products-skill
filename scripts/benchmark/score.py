@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import math
 import os
 import random
@@ -1887,53 +1888,12 @@ def _input_fingerprint(paths: ScorePaths) -> tuple[tuple[str, int, int, int, int
 
 
 def score_paths(paths: ScorePaths) -> dict:
-    parent_fd, held = _open_held_derived_inputs(Path(paths.evidence_dir))
-    try:
-        before = _input_fingerprint(paths)
-        loaded = _load_verified_inputs(paths)
-        derived_bytes = {name: value[1] for name, value in held.items()}
-        metrics = score_evidence(
-            _normalized_scoring_evidence(paths, loaded, derived_bytes)
-        )
-        provenance = {
-            "dataset_sha256": loaded["prepared"]["dataset_sha256"],
-            "dataset_manifest_sha256": loaded["prepared"]["dataset_manifest_sha256"],
-            "run_manifest_sha256": loaded["prepared"]["run_manifest_sha256"],
-            "review_bundle_sha256": sha256_file(Path(paths.review_bundle)),
-            "condition_key_sha256": sha256_file(Path(paths.condition_key)),
-            "annotations_sha256": sha256_file(Path(paths.annotations)),
-            "annotation_lock_sha256": sha256_file(Path(paths.annotation_lock)),
-            "validation_sha256": sha256_bytes(derived_bytes["validation.jsonl"]),
-            "bootstrap_seed": loaded["run_manifest"]["bootstrap_seed"],
-            "claim_evidence": {
-                "status": "unavailable",
-                "reason": (
-                    "independently attested execution receipt and sealed derivation "
-                    "inputs are unavailable"
-                ),
-            },
-        }
-        for key, name in (
-            ("review_mappings_sha256", "review-mappings.jsonl"),
-            ("learned_metrics_sha256", "learned-metrics.jsonl"),
-        ):
-            provenance[key] = (
-                sha256_bytes(derived_bytes[name]) if name in derived_bytes else None
-            )
-        gates = evaluate_gates(metrics)
-        gates["overall"] = {"passed": None, "verdict": "unavailable"}
-        document = {
-            "schema_version": SCHEMA_VERSION,
-            "provenance": provenance,
-            "metrics": metrics,
-            "gates": gates,
-        }
-        _verify_held_derived_inputs(parent_fd, held)
-        if _input_fingerprint(paths) != before:
-            raise BenchmarkError("scoring inputs changed while the document was calculated")
-        return document
-    finally:
-        _close_held_derived_inputs(parent_fd, held)
+    if not isinstance(paths, ScorePaths):
+        raise BenchmarkError("score paths must be ScorePaths")
+    raise BenchmarkError(
+        "sealed immutable scoring input manifest unavailable; "
+        "refusing metric computation"
+    )
 
 
 def _validate_output_target(output: Path, paths: ScorePaths) -> Path:
@@ -1970,87 +1930,76 @@ def _validate_output_target(output: Path, paths: ScorePaths) -> Path:
         raise BenchmarkError(f"cannot validate score output path: {error}") from error
 
 
-def _unlink_created_output_if_same(parent_fd: int, output_fd: int, name: str) -> None:
-    """Quarantine the current entry before deleting only the inode we created."""
-    if parent_fd < 0 or output_fd < 0:
-        return
-    quarantine = f".{name}.rollback-{uuid4().hex}"
-    try:
-        created = os.fstat(output_fd)
-        os.rename(
-            name,
-            quarantine,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
+def _rename_noreplace(parent_fd: int, source: str, destination: str) -> None:
+    """Atomically publish one private name without replacing any destination type."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    encoded_source = os.fsencode(source)
+    encoded_destination = os.fsencode(destination)
+    if sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
+        function = libc.renameatx_np
+        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        function.restype = ctypes.c_int
+        result = function(parent_fd, encoded_source, parent_fd, encoded_destination, 0x00000004)
+    elif sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        function = libc.renameat2
+        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        function.restype = ctypes.c_int
+        result = function(parent_fd, encoded_source, parent_fd, encoded_destination, 0x00000001)
+    else:
+        raise OSError(
+            getattr(os, "ENOTSUP", 45),
+            "atomic no-replace rename is unavailable on this platform",
         )
-        moved = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
-        if (created.st_dev, created.st_ino) != (moved.st_dev, moved.st_ino):
-            try:
-                os.link(
-                    quarantine,
-                    name,
-                    src_dir_fd=parent_fd,
-                    dst_dir_fd=parent_fd,
-                    follow_symlinks=False,
-                )
-            except OSError:
-                pass
-            else:
-                os.unlink(quarantine, dir_fd=parent_fd)
-            return
-        os.unlink(quarantine, dir_fd=parent_fd)
-    except FileNotFoundError:
-        return
-    except OSError:
-        return
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), destination)
 
 
 def _publish_exclusive_json(output: Path, value: object) -> str:
     encoded = canonical_bytes(value)
     resolved_parent = output.parent.resolve(strict=True)
     parent_fd = -1
-    output_fd = -1
-    created = False
+    staging_fd = -1
+    staging_name = f".{output.name}.staging-{uuid4().hex}"
+    staging_created = False
+    published = False
     try:
         parent_fd = os.open(resolved_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         parent_before = os.fstat(parent_fd)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        output_fd = os.open(output.name, flags, 0o600, dir_fd=parent_fd)
-        created = True
+        staging_fd = os.open(staging_name, flags, 0o600, dir_fd=parent_fd)
+        staging_created = True
         offset = 0
         while offset < len(encoded):
-            written = os.write(output_fd, encoded[offset:])
+            written = os.write(staging_fd, encoded[offset:])
             if written <= 0:
                 raise OSError("short write while publishing score output")
             offset += written
-        os.fsync(output_fd)
-        metadata = os.fstat(output_fd)
-        linked = os.stat(output.name, dir_fd=parent_fd, follow_symlinks=False)
+        os.fsync(staging_fd)
+        metadata = os.fstat(staging_fd)
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_nlink != 1
             or metadata.st_size != len(encoded)
-            or (metadata.st_dev, metadata.st_ino) != (linked.st_dev, linked.st_ino)
         ):
             raise BenchmarkError("score output publication integrity check failed")
         current_parent = output.parent.stat()
         if (parent_before.st_dev, parent_before.st_ino) != (current_parent.st_dev, current_parent.st_ino):
             raise BenchmarkError("score output parent changed during publication")
         os.fsync(parent_fd)
+        _rename_noreplace(parent_fd, staging_name, output.name)
+        published = True
+        staging_created = False
         return sha256_bytes(encoded)
     except BenchmarkError:
-        if created:
-            _unlink_created_output_if_same(parent_fd, output_fd, output.name)
         raise
     except OSError as error:
-        if created:
-            _unlink_created_output_if_same(parent_fd, output_fd, output.name)
         if error.errno == getattr(os, "EEXIST", 17):
             raise BenchmarkError(f"score output already exists: {output}") from error
         raise BenchmarkError(f"cannot publish score output: {error}") from error
     finally:
-        if output_fd >= 0:
-            os.close(output_fd)
+        if staging_fd >= 0:
+            os.close(staging_fd)
         if parent_fd >= 0:
             os.close(parent_fd)
 
