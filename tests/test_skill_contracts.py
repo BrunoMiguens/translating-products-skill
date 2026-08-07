@@ -1,6 +1,7 @@
 import copy
 from datetime import date, timedelta
 import hashlib
+import importlib.util
 import json
 import subprocess
 import sys
@@ -15,6 +16,7 @@ ROUTER = ROOT / "skills/translating-products/scripts/route_capabilities.py"
 
 def request(*, authorized=()):
     return {
+        "schema_version": 2,
         "source_locale": "en-GB",
         "targets": [{"locale": "pt-PT", "register": "neutral"}],
         "surfaces": [],
@@ -88,7 +90,12 @@ def installed_skill_text(skill: dict) -> str:
 
 
 def write_installed_skill(
-    root: Path, skill: dict, *, skill_text: str | None = None
+    root: Path,
+    skill: dict,
+    *,
+    skill_text: str | None = None,
+    extra_files: dict[str, bytes] | None = None,
+    symlinks: dict[str, str] | None = None,
 ) -> None:
     skill_root = root / skill["name"]
     skill_root.mkdir(parents=True)
@@ -96,9 +103,17 @@ def write_installed_skill(
         skill_text if skill_text is not None else installed_skill_text(skill),
         encoding="utf-8",
     )
-    skill_root.joinpath("capability-manifest.json").write_text(
-        json.dumps({"schema_version": 2, "skill": skill}), encoding="utf-8"
+    skill_root.joinpath("capability-manifest.json").write_bytes(
+        json.dumps({"schema_version": 2, "skill": skill}).encode("utf-8")
     )
+    for relative, content in (extra_files or {}).items():
+        path = skill_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    for relative, target in (symlinks or {}).items():
+        path = skill_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(target)
 
 
 def run_public_cli(
@@ -108,6 +123,8 @@ def run_public_cli(
     registry: dict | None = None,
     singular: bool = False,
     skill_texts: dict[str, str] | None = None,
+    extra_files: dict[str, dict[str, bytes]] | None = None,
+    symlinks: dict[str, dict[str, str]] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -128,6 +145,8 @@ def run_public_cli(
                 installed_root,
                 skill,
                 skill_text=(skill_texts or {}).get(skill["name"]),
+                extra_files=(extra_files or {}).get(skill["name"]),
+                symlinks=(symlinks or {}).get(skill["name"]),
             )
         command = [
             sys.executable,
@@ -156,6 +175,7 @@ def reviewed_registry_entry(
     skill_text: str | None = None,
     reviewer: str = "https://github.com/translation-reviewer",
     attested_reviewer: str | None = None,
+    extra_files: dict[str, bytes] | None = None,
 ) -> dict:
     ownership = skill.get("ownership") or {
         capability: list(skill["phases"])
@@ -180,19 +200,36 @@ def reviewed_registry_entry(
     attested_claims = copy.deepcopy(claims)
     if attested_reviewer is not None:
         attested_claims["reviewer"] = attested_reviewer
+    skill_bytes = (
+        skill_text if skill_text is not None else installed_skill_text(skill)
+    ).encode("utf-8")
+    manifest_bytes = json.dumps({"schema_version": 2, "skill": skill}).encode("utf-8")
+    installed_files = {
+        "SKILL.md": skill_bytes,
+        "capability-manifest.json": manifest_bytes,
+        **(extra_files or {}),
+    }
+    file_inventory = [
+        {
+            "path": path,
+            "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
+            "size": len(content),
+        }
+        for path, content in sorted(installed_files.items())
+    ]
+    tree_canonical = json.dumps(
+        file_inventory,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
     canonical = json.dumps(
         {
             "admitted_skill": skill,
             "installed_skill": {
                 "name": skill["name"],
-                "skill_md_sha256": "sha256:"
-                + hashlib.sha256(
-                    (
-                        skill_text
-                        if skill_text is not None
-                        else installed_skill_text(skill)
-                    ).encode("utf-8")
-                ).hexdigest(),
+                "tree_sha256": "sha256:" + hashlib.sha256(tree_canonical).hexdigest(),
+                "files": file_inventory,
             },
             "registry_claims": attested_claims,
         },
@@ -207,6 +244,124 @@ def reviewed_registry_entry(
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_external_metadata_uses_the_portable_bundled_contract(self):
+        spec = importlib.util.spec_from_file_location("router_metadata", ROUTER)
+        router = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(router)
+        cases = (
+            ("name", lambda skill: skill.__setitem__("name", "External Skill"), "invalid name"),
+            ("version", lambda skill: skill.__setitem__("version", "v1"), "invalid version"),
+            ("category", lambda skill: skill.__setitem__("category", "misc"), "invalid category"),
+            ("duplicate", lambda skill: skill["capabilities"].append(skill["capabilities"][0]), "unique capabilities"),
+            ("context", lambda skill: skill.__setitem__("required_context", ["target_local"]), "unknown required_context"),
+            ("locale", lambda skill: skill.__setitem__("selectors", [{"locales": ["not_a_locale_"]}]), "invalid selector locale"),
+        )
+        for label, mutate, expected in cases:
+            with self.subTest(label=label):
+                candidate = external_skill("external-portable")
+                mutate(candidate)
+                with self.assertRaisesRegex(ValueError, expected):
+                    router.validate_external_catalog({"schema_version": 2, "skills": [candidate]})
+
+    def test_installed_frontmatter_accepts_quoted_scalars_but_rejects_ambiguity(self):
+        candidate = external_skill("external-quoted-frontmatter")
+        quoted = (
+            "---\n"
+            f"name: \"{candidate['name']}\"\n"
+            f"description: '{candidate['description']}'\n"
+            "---\n\n# Installed specialist\n"
+        )
+        valid = run_public_cli(
+            [candidate],
+            authorized=(candidate["name"],),
+            skill_texts={candidate["name"]: quoted},
+        )
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+
+        for label, inserted, expected in (
+            ("duplicate", f"name: {candidate['name']}\n", "duplicate frontmatter field: name"),
+            ("unknown", "version: 1.0.0\n", "unexpected frontmatter field: version"),
+            ("multiline", "description: |\n", "unsupported frontmatter scalar"),
+        ):
+            with self.subTest(label=label):
+                text = installed_skill_text(candidate).replace(
+                    f"description: {candidate['description']}\n", inserted
+                    + f"description: {candidate['description']}\n"
+                )
+                result = run_public_cli(
+                    [candidate],
+                    authorized=(candidate["name"],),
+                    skill_texts={candidate["name"]: text},
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(expected, result.stderr)
+
+    def test_public_cli_attestation_binds_the_complete_portable_skill_tree(self):
+        candidate = external_skill("external-tree-bound")
+        reviewed_files = {
+            "scripts/check.py": b"print('reviewed')\n",
+            "references/rules.md": b"reviewed rules\n",
+            "assets/nested/example.txt": b"reviewed asset\n",
+        }
+        registry = {
+            "schema_version": 2,
+            "skills": [reviewed_registry_entry(candidate, extra_files=reviewed_files)],
+        }
+
+        for _location in range(2):
+            unchanged = run_public_cli(
+                [candidate],
+                registry=registry,
+                extra_files={candidate["name"]: reviewed_files},
+            )
+            self.assertEqual(unchanged.returncode, 0, unchanged.stderr)
+
+        mutations = (
+            {**reviewed_files, "scripts/check.py": b"print('changed')\n"},
+            {**reviewed_files, "references/rules.md": b"changed rules\n"},
+            {**reviewed_files, "assets/nested/example.txt": b"changed asset\n"},
+            {**reviewed_files, "references/added.md": b"added\n"},
+            {key: value for key, value in reviewed_files.items() if key != "references/rules.md"},
+        )
+        for installed_files in mutations:
+            with self.subTest(files=sorted(installed_files)):
+                result = run_public_cli(
+                    [candidate],
+                    registry=registry,
+                    extra_files={candidate["name"]: installed_files},
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("compatibility registry evidence mismatch", result.stderr)
+
+        symlinked = run_public_cli(
+            [candidate],
+            registry=registry,
+            extra_files={candidate["name"]: {
+                key: value for key, value in reviewed_files.items()
+                if key != "references/rules.md"
+            }},
+            symlinks={candidate["name"]: {"references/rules.md": "../SKILL.md"}},
+        )
+        self.assertEqual(symlinked.returncode, 2)
+        self.assertIn("unsafe installed skill tree", symlinked.stderr)
+
+    def test_public_cli_uses_only_submitted_entries_from_a_reusable_registry(self):
+        active = external_skill("external-active-entry")
+        inactive = external_skill("external-inactive-entry")
+        registry = {
+            "schema_version": 2,
+            "skills": [
+                reviewed_registry_entry(active),
+                reviewed_registry_entry(inactive),
+            ],
+        }
+
+        result = run_public_cli([active], registry=registry)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(active["name"], json.loads(result.stdout)["routes"][0]["selected"])
+
     def test_public_cli_attestation_rejects_installed_skill_content_substitution(self):
         candidate = external_skill("external-content-bound")
         original = installed_skill_text(candidate)
@@ -227,10 +382,10 @@ class SkillContractTests(unittest.TestCase):
 
         self.assertEqual(first_location.returncode, 0, first_location.stderr)
         self.assertEqual(second_location.returncode, 0, second_location.stderr)
-        for label, substituted in (
-            ("body", changed_body),
-            ("frontmatter", changed_frontmatter),
-            ("newline-bytes", original.replace("\n", "\r\n")),
+        for label, substituted, expected in (
+            ("body", changed_body, "compatibility registry evidence mismatch"),
+            ("frontmatter", changed_frontmatter, "unexpected frontmatter field"),
+            ("newline-bytes", original.replace("\n", "\r\n"), "compatibility registry evidence mismatch"),
         ):
             with self.subTest(label=label):
                 result = run_public_cli(
@@ -242,7 +397,7 @@ class SkillContractTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(result.stdout, "")
                 self.assertIn(
-                    "compatibility registry evidence mismatch: external-content-bound",
+                    expected,
                     result.stderr,
                 )
 

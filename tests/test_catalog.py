@@ -101,6 +101,10 @@ class CatalogTests(unittest.TestCase):
                 (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
             )
             manifest["suite_version"] = "9.8.7"
+            for skill in manifest["skills"]:
+                if skill["name"] == manifest["orchestrator"]:
+                    skill["version"] = "9.8.7"
+                    break
             manifest_path = root / "skills-manifest.json"
             checklist = root / "release-checklist.md"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")

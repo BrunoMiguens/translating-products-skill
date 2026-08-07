@@ -2,6 +2,7 @@ import importlib.util
 import ast
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,7 @@ def complete_profile(**overrides):
 
 def routing_request(targets, *, platforms=(), domains=()):
     return {
+        "schema_version": 2,
         "source_locale": "en-GB",
         "targets": targets,
         "surfaces": ["web"],
@@ -147,6 +149,7 @@ class RoutingTests(unittest.TestCase):
     def test_multi_locale_request_isolates_each_linguistic_branch(self):
         router = load_module("route_capabilities_multi", ROUTER)
         request = {
+            "schema_version": 2,
             "source_locale": "en-GB",
             "targets": [
                 {"locale": "pt-PT", "register": "familiar"},
@@ -352,6 +355,25 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(completed.stdout, "")
         self.assertRegex(completed.stderr, r"^invalid request: .+\n$")
 
+    def test_request_schema_rejects_unsupported_versions_and_unknown_keys(self):
+        router = load_module("route_capabilities_request_schema", ROUTER)
+        valid = routing_request([{"locale": "pt-PT", "register": "familiar"}])
+
+        cases = (
+            ({key: value for key, value in valid.items() if key != "schema_version"},
+             "request must use schema_version 2"),
+            ({**valid, "schema_version": 3}, "request must use schema_version 2"),
+            ({**valid, "platfoms": ["ios"]}, "unknown request field: $.platfoms"),
+            ({**valid, "targets": [{"locale": "pt-PT", "platforms": ["ios"]}]},
+             "unknown request field: $.targets[0].platforms"),
+            ({**valid, "surfaces": ["web", "web"]},
+             "surfaces must contain unique values"),
+        )
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(ValueError, re.escape(expected)):
+                    router.normalize_request(payload)
+
     def test_dependencies_expand_transitively_and_order_before_dependents(self):
         router = load_module("route_capabilities_dependencies", ROUTER)
         catalog = synthetic_catalog(
@@ -519,7 +541,7 @@ class RoutingTests(unittest.TestCase):
 
         self.assertEqual(result["selected"], ["narrower"])
 
-    def test_supersession_rejects_a_surviving_skill_without_its_dependency(self):
+    def test_full_supersession_retains_a_surviving_load_only_dependency(self):
         router = load_module("route_capabilities_supersession_closure", ROUTER)
         catalog = synthetic_catalog(
             synthetic_skill(
@@ -542,10 +564,20 @@ class RoutingTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(
-            ValueError, "missing selected dependency: consumer, broader"
-        ):
-            router.route_profile(complete_profile(domains=["closure-demo"]), catalog)
+        result = router.route_profile(complete_profile(domains=["closure-demo"]), catalog)
+
+        self.assertEqual(result["selected"], ["broader", "consumer", "narrower"])
+        self.assertEqual(result["load_only"], ["broader"])
+        self.assertNotIn("broader", result["phases"]["refine"])
+        self.assertEqual(result["phases"]["refine"], ["consumer", "narrower"])
+        self.assertEqual(
+            result["ownership_overrides"],
+            {
+                "narrower": [
+                    {"skill": "broader", "ownership": {"grammar": ["refine"]}}
+                ]
+            },
+        )
 
     def test_invalid_route_diagnostics_are_manifest_ordered_across_hash_seeds(self):
         dependency_catalog = synthetic_catalog(
@@ -667,6 +699,7 @@ class RoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(result["selected"], ["narrower-locale"])
+        self.assertEqual(result["load_only"], [])
         self.assertEqual(result["ownership_overrides"], {})
 
     def test_refine_only_replacement_preserves_broader_inspection(self):

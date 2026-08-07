@@ -25,10 +25,14 @@ FAKE_NPX = textwrap.dedent(
     import json
     import os
     from pathlib import Path
+    import shutil
     import sys
 
     argv = sys.argv[1:]
     cwd = Path.cwd()
+    if argv == ["skills", "--version"]:
+        print("fake-1.0.0")
+        raise SystemExit(0)
     agent = argv[argv.index("--agent") + 1]
     mode = os.environ.get("SMOKE_FAKE_MODE", "success")
     if mode == "fail-codex" and agent == "codex":
@@ -56,10 +60,17 @@ FAKE_NPX = textwrap.dedent(
     installed = []
     for source_file in discovered:
         name = source_file.parent.name
-        skill_file = cwd / roots[agent] / name / "SKILL.md"
-        skill_file.parent.mkdir(parents=True, exist_ok=True)
-        skill_file.write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
-        installed.append(str(skill_file))
+        skill_root = cwd / roots[agent] / name
+        shutil.copytree(source_file.parent, skill_root)
+        installed.extend(
+            str(path) for path in sorted(skill_root.rglob("*")) if path.is_file()
+        )
+
+    if mode == "omit-resource":
+        resources = [Path(path) for path in installed if not path.endswith("/SKILL.md")]
+        if resources:
+            resources[0].unlink()
+            installed.remove(str(resources[0]))
 
     if mode == "duplicate":
         duplicate = cwd / roots[agent] / ".duplicate" / names[0] / "SKILL.md"
@@ -172,6 +183,11 @@ class SmokeInstallTests(unittest.TestCase):
                 "entries": calls,
                 "individual_entries": entrypoint_entries,
                 "japanese_entries": specialist_entries,
+                "all_individual_entries": [
+                    entry
+                    for entry in entries
+                    if entry["argv"][entry["argv"].index("--skill") + 1] != "*"
+                ],
                 "targets_exist": targets_exist,
                 "scratch_exists": scratch_exists,
                 "protected": protected.read_text(encoding="utf-8"),
@@ -195,7 +211,7 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout,
-            "cross-agent installation smoke test passed\n",
+            "cross-agent installation smoke test passed (skills CLI fake-1.0.0)\n",
         )
         self.assertEqual(
             [entry["argv"][6] for entry in entries],
@@ -206,16 +222,6 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(len(individual_entries), 4)
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         entrypoint = manifest["orchestrator"]
-        specialist = next(
-            skill["name"]
-            for skill in manifest["skills"]
-            if "language:japanese" in skill.get("capabilities", [])
-        )
-        specialist_dependencies = next(
-            skill["depends_on"]
-            for skill in manifest["skills"]
-            if skill["name"] == specialist
-        )
         manifest_names = [item["name"] for item in manifest["skills"]]
         for entry, target_exists in zip(entries, run["targets_exist"]):
             self.assertEqual(
@@ -237,12 +243,20 @@ class SmokeInstallTests(unittest.TestCase):
             self.assertFalse(target.is_relative_to(run["home"]))
             self.assertFalse(target.is_relative_to(ROOT))
             installed = [Path(path) for path in entry["installed"]]
-            self.assertEqual(
-                [path.parent.name for path in installed], sorted(manifest_names)
+            installed_skill_names = sorted(
+                {
+                    path.relative_to(target / HOST_SKILL_ROOTS[entry["argv"][6]]).parts[0]
+                    for path in installed
+                }
             )
             self.assertEqual(
-                [path.relative_to(target).parts[:2] for path in installed],
-                [tuple(HOST_SKILL_ROOTS[entry["argv"][6]].split("/"))] * len(installed),
+                installed_skill_names, sorted(manifest_names)
+            )
+            self.assertTrue(
+                all(
+                    path.is_relative_to(target / HOST_SKILL_ROOTS[entry["argv"][6]])
+                    for path in installed
+                )
             )
         for entry in individual_entries:
             agent = entry["argv"][6]
@@ -261,35 +275,32 @@ class SmokeInstallTests(unittest.TestCase):
                     "--copy",
                 ],
             )
-            self.assertEqual(
+            self.assertIn(
+                f"{HOST_SKILL_ROOTS[agent]}/{entrypoint}/SKILL.md",
                 [Path(path).relative_to(target).as_posix() for path in entry["installed"]],
-                [f"{HOST_SKILL_ROOTS[agent]}/{entrypoint}/SKILL.md"],
             )
-        japanese_entries = run["japanese_entries"]
-        self.assertEqual(len(japanese_entries), 4)
-        for entry in japanese_entries:
-            agent = entry["argv"][6]
-            target = Path(entry["cwd"])
-            self.assertEqual(
-                entry["argv"],
-                [
-                    "skills",
-                    "add",
-                    str(ROOT),
-                    "--skill",
-                    specialist,
-                    "--agent",
-                    agent,
-                    "--yes",
-                    "--copy",
-                ],
-            )
-            self.assertEqual(
-                [Path(path).relative_to(target).as_posix() for path in entry["installed"]],
-                [f"{HOST_SKILL_ROOTS[agent]}/{specialist}/SKILL.md"],
-            )
-            self.assertFalse(set(specialist_dependencies) & set(entry["names"]))
-            self.assertEqual(entry["names"], [specialist])
+        expected_individual = {entrypoint}
+        seen_categories = set()
+        for item in manifest["skills"]:
+            category = item.get("category", "uncategorized")
+            if category not in seen_categories:
+                seen_categories.add(category)
+                expected_individual.add(item["name"])
+            source_files = [
+                path for path in (ROOT / "skills" / item["name"]).rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+            ]
+            if len(source_files) > 1:
+                expected_individual.add(item["name"])
+        all_individual = run["all_individual_entries"]
+        self.assertEqual(len(all_individual), len(expected_individual) * 4)
+        self.assertEqual(
+            {entry["argv"][entry["argv"].index("--skill") + 1] for entry in all_individual},
+            expected_individual,
+        )
+        for entry in all_individual:
+            requested = entry["argv"][entry["argv"].index("--skill") + 1]
+            self.assertEqual(entry["names"], [requested])
         self.assertFalse(run["scratch_exists"])
         self.assertEqual(run["protected"], "sentinel\n")
 
@@ -312,16 +323,14 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(run["result"].returncode, 0, run["result"].stderr)
         self.assertEqual(len(run["entries"]), 4)
         self.assertEqual(len(run["individual_entries"]), 4)
-        self.assertEqual(len(run["japanese_entries"]), 4)
+        self.assertEqual(len(run["all_individual_entries"]), 4)
         for entry in run["individual_entries"]:
             self.assertEqual(entry["names"], ["route-entry"])
-        for entry in run["japanese_entries"]:
-            self.assertEqual(entry["names"], ["route-japanese"])
-
         script = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn('if [[ "$expected_count" != "22" ]]', script)
-        self.assertIn("print(len(names), entrypoint, specialist)", script)
+        self.assertIn("seen_categories", script)
         self.assertNotIn('"translating-products"', script)
+        self.assertNotIn('"language:japanese"', script)
 
     def test_reports_duplicate_and_missing_skill_for_the_specific_agent(self):
         run = self.run_smoke("duplicate")
@@ -349,10 +358,16 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(
             result.stderr.splitlines(),
             [
-                f"claude-code: expected {len(names)} SKILL.md files, found {len(names) - 1}",
+                f"claude-code: expected {len(names)} installed skills, found {len(names) - 1}",
                 f"claude-code: missing skills: {names[-1]}",
             ],
         )
+
+    def test_rejects_an_installation_missing_a_nested_resource(self):
+        run = self.run_smoke("omit-resource")
+
+        self.assertNotEqual(run["result"].returncode, 0)
+        self.assertIn("installed inventory mismatch", run["result"].stderr)
 
     def test_cleans_scratch_when_the_installer_fails(self):
         run = self.run_smoke("fail-codex")
@@ -360,7 +375,7 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 9)
         self.assertEqual(len(run["entries"]), 1)
         self.assertEqual(len(run["individual_entries"]), 1)
-        self.assertEqual(len(run["japanese_entries"]), 1)
+        self.assertEqual(len(run["all_individual_entries"]), 7)
         self.assertFalse(run["scratch_exists"])
         self.assertEqual(run["protected"], "sentinel\n")
 

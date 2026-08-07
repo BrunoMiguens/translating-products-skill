@@ -1,8 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib.util
 import json
 from pathlib import Path
+
+
+_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "skills/translating-products/scripts/metadata_contract.py"
+)
+_CONTRACT_SPEC = importlib.util.spec_from_file_location(
+    "translation_metadata_contract", _CONTRACT_PATH
+)
+if _CONTRACT_SPEC is None or _CONTRACT_SPEC.loader is None:
+    raise RuntimeError("unable to load translation metadata contract")
+_CONTRACT = importlib.util.module_from_spec(_CONTRACT_SPEC)
+_CONTRACT_SPEC.loader.exec_module(_CONTRACT)
+validate_manifest_document = _CONTRACT.validate_manifest_document
+parse_frontmatter_text = _CONTRACT.parse_frontmatter_text
 
 
 ROUTING_AXES = (
@@ -150,7 +166,9 @@ def _load_ownership(
 
 
 def load_manifest(path: Path) -> Manifest:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw = validate_manifest_document(
+        json.loads(path.read_text(encoding="utf-8"))
+    )
     skills = []
     for item in raw["skills"]:
         capabilities = _load_string_list(item["capabilities"], "capabilities")

@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from scripts.repo_model import Manifest, Selector, SkillRecord, SourceRecord
+from scripts.repo_model import Manifest, Selector, SkillRecord, SourceRecord, load_manifest
 from scripts.render_catalog import (
     InventoryMarkerError,
     render_catalog,
@@ -159,6 +159,82 @@ def write_skill(root: Path, name: str, body: str = "# Demo\n") -> Path:
 
 
 class ValidatorTests(unittest.TestCase):
+    def test_manifest_loader_rejects_identity_schema_and_version_drift(self):
+        original = json.loads((ROOT / "skills-manifest.json").read_text(encoding="utf-8"))
+
+        def duplicate_name(manifest):
+            manifest["skills"][1]["name"] = manifest["skills"][0]["name"]
+
+        def unknown_top_level(manifest):
+            manifest["extra"] = True
+
+        def unknown_skill_field(manifest):
+            manifest["skills"][0]["extra"] = True
+
+        def bad_schema(manifest):
+            manifest["schema_version"] = 3
+
+        def bad_name(manifest):
+            manifest["skills"][0]["name"] = "Invalid Name"
+
+        def bad_version(manifest):
+            manifest["skills"][0]["version"] = "v1"
+
+        def bad_category(manifest):
+            manifest["skills"][0]["category"] = "misc"
+
+        def duplicate_collection(manifest):
+            manifest["skills"][0]["capabilities"].append(
+                manifest["skills"][0]["capabilities"][0]
+            )
+
+        def suite_mismatch(manifest):
+            manifest["suite_version"] = "9.0.0"
+
+        def minimum_exceeds_declared(manifest):
+            name = next(iter(manifest["minimum_skill_versions"]))
+            manifest["minimum_skill_versions"][name] = "9.0.0"
+
+        cases = (
+            (duplicate_name, "duplicate skill name"),
+            (unknown_top_level, "unknown manifest fields"),
+            (unknown_skill_field, "unknown skill fields"),
+            (bad_schema, "manifest must use schema_version 2"),
+            (bad_name, "invalid name"),
+            (bad_version, "invalid version"),
+            (bad_category, "invalid category"),
+            (duplicate_collection, "unique capabilities"),
+            (suite_mismatch, "suite_version must equal orchestrator version"),
+            (minimum_exceeds_declared, "minimum version exceeds declared version"),
+        )
+        for mutate, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                manifest = json.loads(json.dumps(original))
+                mutate(manifest)
+                path = Path(tmp) / "skills-manifest.json"
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, expected):
+                    load_manifest(path)
+
+    def test_repository_rejects_manifest_frontmatter_description_drift(self):
+        declared = skill("translating-demo")
+        drifted = SkillRecord(
+            **{**declared.__dict__, "description": "A different manifest description."}
+        )
+        manifest = manifest_with(
+            skills=(drifted,),
+            minimum_skill_versions={"translating-demo": "0.1.0"},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_skill(root, "translating-demo")
+            errors = validate_repository(root, manifest, partial=True)
+
+        self.assertIn(
+            "skills/translating-demo/SKILL.md: frontmatter description does not match manifest",
+            errors,
+        )
+
     def test_validation_rejects_benchmark_text_copied_into_a_skill(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

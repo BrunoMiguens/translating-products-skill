@@ -18,6 +18,7 @@ from scripts.repo_model import (
     SPECIFICITIES,
     Manifest,
     load_manifest,
+    parse_frontmatter_text,
 )
 from scripts.render_catalog import InventoryMarkerError, split_readme_inventory
 
@@ -148,26 +149,7 @@ def validate_fixture_separation(root: Path) -> list[str]:
 
 
 def parse_frontmatter(path: Path) -> dict[str, str]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if not lines or lines[0] != "---":
-        raise ValueError("missing opening frontmatter delimiter")
-    try:
-        end = lines.index("---", 1)
-    except ValueError as error:
-        raise ValueError("missing closing frontmatter delimiter") from error
-
-    result: dict[str, str] = {}
-    for line in lines[1:end]:
-        if ":" not in line:
-            raise ValueError(f"invalid frontmatter line: {line}")
-        key, value = line.split(":", 1)
-        key = key.strip()
-        if key not in FRONTMATTER_FIELDS:
-            raise ValueError(f"unexpected frontmatter field: {key}")
-        if key in result:
-            raise ValueError(f"duplicate frontmatter field: {key}")
-        result[key] = value.strip()
-    return result
+    return parse_frontmatter_text(path.read_text(encoding="utf-8"), label=str(path))
 
 
 def validate_skill(path: Path) -> list[str]:
@@ -224,10 +206,22 @@ def validate_repository(
         if not path.exists():
             errors.append(f"skills/{name}/SKILL.md: file is missing")
             continue
+        skill_errors = validate_skill(path)
         errors.extend(
             f"{path.relative_to(root)}: {message}"
-            for message in validate_skill(path)
+            for message in skill_errors
         )
+        if not skill_errors:
+            metadata = parse_frontmatter(path)
+            record = by_name[name]
+            if metadata["name"] != record.name:
+                errors.append(
+                    f"{path.relative_to(root)}: frontmatter name does not match manifest"
+                )
+            if metadata["description"] != record.description:
+                errors.append(
+                    f"{path.relative_to(root)}: frontmatter description does not match manifest"
+                )
 
     errors.extend(validate_fixture_separation(root))
 

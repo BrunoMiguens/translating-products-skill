@@ -37,6 +37,9 @@ applies replacement only to shared capability-and-phase slices. It removes the
 broader module only when every one of those slices is covered; otherwise it
 keeps the broader module and returns the scoped override plan. Unrelated
 capabilities, phases, and dependencies remain active.
+When a fully overridden module remains a required dependency of another
+selected module, it stays in the topological load order as explicit
+`load_only` contract material but is omitted from every execution phase.
 
 Relationship validation runs on the complete bundled-plus-external graph
 before selector evaluation. Dependencies may cross execution phases because
@@ -79,10 +82,13 @@ portable `name` and `description` frontmatter plus a matching
 `capability-manifest.json` identity record; the router rejects symlinked,
 missing, ambiguous, or mismatched installations.
 
-For reviewed admission, the router decodes `SKILL.md` as UTF-8 and binds its
-complete, exact byte sequence into the evidence attestation. Newline bytes are
-not normalized. Installation paths are deliberately excluded, so relocating
-unchanged installed content does not change its identity.
+For reviewed admission, the router recursively inventories the complete skill
+tree, including `SKILL.md`, the capability manifest, scripts, references,
+assets, and nested regular files. It rejects symlinks, special files, unsafe or
+case-colliding relative paths, and excessive file/tree sizes. Canonical
+relative paths, exact byte digests, and lengths form a deterministic tree
+digest. Installation paths are excluded, so relocation preserves identity
+while adding, removing, renaming, or changing any file invalidates admission.
 
 The
 request authorizes names with `authorized_external_skills` for an explicit user
@@ -93,6 +99,12 @@ names, unauthorized entries, and invalid metadata fail deterministically before
 routing. If an authorized specialist is unavailable, use compatible bundled
 guidance. Never install a specialist at runtime. A public CLI test must prove
 that a compatible third-party record is selected without modifying the router.
+Every reusable registry entry has its claim syntax validated, but only entries
+whose external records are submitted and installed for this invocation are
+content- and authority-bound. Inactive entries do not require installation.
+
+Routing requests use exact schema version `2`. Unknown top-level or target
+fields are rejected with their JSON path.
 
 ## Specialist authoring checklist
 
@@ -139,12 +151,13 @@ below binds them.
 it from canonical UTF-8 JSON with sorted object keys, no ASCII escaping, and
 `,`/`:` separators. The hashed object has `admitted_skill` set to the exact
 installed record, `installed_skill` set to an object containing the skill
-`name` and `skill_md_sha256`, and `registry_claims` set to the complete reviewed
+`name`, sorted canonical `files` inventory, and `tree_sha256`, and
+`registry_claims` set to the complete reviewed
 entry with `evaluation_evidence` omitted and `reviewer` canonicalized as above.
-`skill_md_sha256` is the lowercase `sha256:` digest of the exact installed
-`SKILL.md` bytes, including their original newline bytes. The router recomputes
+Each file entry contains exactly `path`, lowercase `sha256:`, and `size`;
+`tree_sha256` hashes that inventory as canonical JSON. The router recomputes
 this path-neutral attestation, so an arbitrary label, placeholder digest,
-changed record, changed `SKILL.md`, reviewer, or date cannot reuse an earlier
+changed record or tree, reviewer, or date cannot reuse an earlier
 review.
 
 Reviewers verify metadata validity, installation identity, dependency and

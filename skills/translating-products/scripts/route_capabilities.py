@@ -4,11 +4,18 @@ import argparse
 from datetime import date
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import sys
 import unicodedata
 from urllib.parse import unquote_to_bytes, urlsplit
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from metadata_contract import parse_frontmatter_text, validate_name, validate_skill_record
 
 
 ROUTING_AXES = (
@@ -69,6 +76,17 @@ EXTERNAL_AUTHORIZATION_FIELDS = (
     "authorized_external_skills",
     "project_authorized_external_skills",
 )
+REQUEST_FIELDS = frozenset(
+    (
+        "schema_version",
+        "source_locale",
+        "targets",
+        *SHARED_LIST_FIELDS,
+        *TEXT_FIELDS,
+        *EXTERNAL_AUTHORIZATION_FIELDS,
+    )
+)
+TARGET_FIELDS = frozenset(("locale", "register", *TARGET_LIST_FIELDS))
 REGISTRY_FIELDS = frozenset(
     (
         "name",
@@ -109,6 +127,9 @@ URL_PATH_CHARACTERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
     "-._~!$&'()*+,;=:@/"
 )
+MAX_INSTALLED_FILES = 1024
+MAX_INSTALLED_FILE_BYTES = 10 * 1024 * 1024
+MAX_INSTALLED_TREE_BYTES = 50 * 1024 * 1024
 
 
 def normalize_locale(value: str) -> str:
@@ -195,6 +216,13 @@ def validate_external_catalog(catalog: object) -> list[dict]:
     """Validate one installed external manifest or capability catalog."""
     if not isinstance(catalog, dict) or catalog.get("schema_version") != 2:
         raise ValueError("external catalog must use schema_version 2")
+    valid_fields = (
+        {"schema_version", "skills"}
+        if "skills" in catalog
+        else {"schema_version", "skill"}
+    )
+    if set(catalog) != valid_fields:
+        raise ValueError("external catalog has unknown or ambiguous fields")
     skills = catalog.get("skills")
     if skills is None and isinstance(catalog.get("skill"), dict):
         skills = [catalog["skill"]]
@@ -203,56 +231,11 @@ def validate_external_catalog(catalog: object) -> list[dict]:
 
     names: set[str] = set()
     for item in skills:
-        if not isinstance(item, dict):
-            raise ValueError("external catalog skill must be an object")
-        name = item.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("external catalog skill name must be a non-empty string")
-        missing = sorted(EXTERNAL_SKILL_FIELDS - set(item))
-        if missing:
-            raise ValueError(
-                f"external skill {name} is missing fields: {', '.join(missing)}"
-            )
-        unknown = sorted(
-            set(item) - EXTERNAL_SKILL_FIELDS - EXTERNAL_OPTIONAL_FIELDS
-        )
-        if unknown:
-            raise ValueError(
-                f"external skill {name} has unknown fields: {', '.join(unknown)}"
-            )
+        validate_skill_record(item, label_prefix="external skill")
+        name = item["name"]
         if name in names:
             raise ValueError(f"duplicate external skill name: {name}")
         names.add(name)
-        for field in ("version", "category", "description", "specificity"):
-            if not isinstance(item[field], str) or not item[field].strip():
-                raise ValueError(f"external skill {name} has invalid {field}")
-        if item["specificity"] not in SPECIFICITY_ORDER:
-            raise ValueError(f"external skill {name} has invalid specificity")
-        for field in ("capabilities", "phases"):
-            if item[field] == []:
-                raise ValueError(f"external skill {name} requires non-empty {field}")
-            _external_string_list(item[field], field, name)
-        for field in ("depends_on", "required_context", "conflicts", "supersedes"):
-            _external_string_list(item[field], field, name, allow_empty=True)
-        if "selectors" in item:
-            if not item["selectors"]:
-                raise ValueError(f"external skill {name} must declare selectors")
-            if not isinstance(item["selectors"], list):
-                raise ValueError(f"external skill {name} has invalid selectors")
-            for selector in item["selectors"]:
-                if not isinstance(selector, dict) or not selector:
-                    raise ValueError(f"external skill {name} has invalid selector")
-                for axis, values in selector.items():
-                    if axis not in ROUTING_AXES:
-                        raise ValueError(
-                            f"external skill {name} has unknown selector axis: {axis}"
-                        )
-                    _external_string_list(values, f"selector {axis}", name)
-        unknown_phases = sorted(set(item["phases"]) - set(PHASES))
-        if unknown_phases:
-            raise ValueError(
-                f"external skill {name} has unknown phases: {', '.join(unknown_phases)}"
-            )
         _ownership_map(item, name)
     return skills
 
@@ -671,7 +654,7 @@ def _authority_matches(scope: dict, skill: dict) -> bool:
 
 
 def _review_attestation_digest(
-    skill: dict, entry: dict, installed_skill_digest: str
+    skill: dict, entry: dict, installed_skill: dict
 ) -> str:
     claims = {
         field: value
@@ -682,10 +665,7 @@ def _review_attestation_digest(
     canonical = json.dumps(
         {
             "admitted_skill": skill,
-            "installed_skill": {
-                "name": skill["name"],
-                "skill_md_sha256": installed_skill_digest,
-            },
+            "installed_skill": installed_skill,
             "registry_claims": claims,
         },
         ensure_ascii=False,
@@ -699,7 +679,7 @@ def _validate_registry_bindings(
     registry: object,
     skills: list[dict],
     suite_version: str,
-    installed_skill_digests: dict[str, str],
+    installed_skills: dict[str, dict],
 ) -> None:
     if registry is None:
         return
@@ -710,9 +690,10 @@ def _validate_registry_bindings(
         if name in seen:
             raise ValueError(f"duplicate compatibility registry skill: {name}")
         seen.add(name)
-        skill = by_name.get(name)
-        if skill is None:
-            raise ValueError(f"compatibility registry references unknown skill: {name}")
+        installed_skill = installed_skills.get(name)
+        if installed_skill is None:
+            continue
+        skill = by_name[name]
         if not _constraint_satisfied(
             skill["version"], entry["version_constraint"], "version_constraint", name
         ):
@@ -735,37 +716,92 @@ def _validate_registry_bindings(
         if not _authority_matches(entry["authority_scope"], skill):
             raise ValueError(f"compatibility registry authority mismatch: {name}")
         _validate_review_date(entry["review_date"], name)
-        installed_skill_digest = installed_skill_digests.get(name)
-        if installed_skill_digest is None:
-            raise ValueError(
-                f"compatibility registry skill is not an installed external skill: {name}"
-            )
         expected_evidence = _review_attestation_digest(
-            skill, entry, installed_skill_digest
+            skill, entry, installed_skill
         )
         if entry["evaluation_evidence"] != [expected_evidence]:
             raise ValueError(f"compatibility registry evidence mismatch: {name}")
 
 
-def _frontmatter_values(content: str, label: str) -> dict[str, str]:
-    lines = content.splitlines()
-    if not lines or lines[0] != "---":
-        raise ValueError(f"installed skill has invalid frontmatter: {label}")
-    values: dict[str, str] = {}
-    for line in lines[1:]:
-        if line == "---":
-            return values
-        if ":" not in line:
-            raise ValueError(f"installed skill has invalid frontmatter: {label}")
-        key, value = line.split(":", 1)
-        values[key.strip()] = value.strip()
-    raise ValueError(f"installed skill has invalid frontmatter: {label}")
+def _portable_relative_path(relative: Path, seen: set[str], name: str) -> str:
+    parts = relative.parts
+    if not parts or any(
+        part in {"", ".", ".."}
+        or "\\" in part
+        or unicodedata.normalize("NFC", part) != part
+        or any(unicodedata.category(character).startswith("C") for character in part)
+        for part in parts
+    ):
+        raise ValueError(f"unsafe installed skill tree path: {name}")
+    canonical = relative.as_posix()
+    collision_key = canonical.casefold()
+    if collision_key in seen:
+        raise ValueError(f"ambiguous installed skill tree path: {name}")
+    seen.add(collision_key)
+    return canonical
 
 
-def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> str:
+def _installed_tree(installed: Path, name: str) -> tuple[list[dict], dict[str, bytes]]:
+    inventory: list[dict] = []
+    contents: dict[str, bytes] = {}
+    seen: set[str] = set()
+    total_size = 0
+
+    def visit(directory: Path) -> None:
+        nonlocal total_size
+        try:
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError:
+            raise ValueError(f"unsafe installed skill tree: {name}") from None
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(installed)
+            canonical = _portable_relative_path(relative, seen, name)
+            try:
+                mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError:
+                raise ValueError(f"unsafe installed skill tree: {name}") from None
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"unsafe installed skill tree symlink: {name}: {canonical}")
+            if stat.S_ISDIR(mode):
+                visit(path)
+                continue
+            if not stat.S_ISREG(mode):
+                raise ValueError(f"unsafe installed skill tree special file: {name}: {canonical}")
+            size = entry.stat(follow_symlinks=False).st_size
+            if size > MAX_INSTALLED_FILE_BYTES:
+                raise ValueError(f"installed skill file is too large: {name}: {canonical}")
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                descriptor = os.open(path, flags)
+                with os.fdopen(descriptor, "rb") as handle:
+                    data = handle.read(MAX_INSTALLED_FILE_BYTES + 1)
+            except OSError:
+                raise ValueError(f"unsafe installed skill tree: {name}") from None
+            if len(data) != size or len(data) > MAX_INSTALLED_FILE_BYTES:
+                raise ValueError(f"installed skill changed during verification: {name}")
+            total_size += len(data)
+            if total_size > MAX_INSTALLED_TREE_BYTES:
+                raise ValueError(f"installed skill tree is too large: {name}")
+            contents[canonical] = data
+            inventory.append(
+                {
+                    "path": canonical,
+                    "sha256": f"sha256:{hashlib.sha256(data).hexdigest()}",
+                    "size": len(data),
+                }
+            )
+            if len(inventory) > MAX_INSTALLED_FILES:
+                raise ValueError(f"installed skill tree has too many files: {name}")
+
+    visit(installed)
+    inventory.sort(key=lambda item: item["path"])
+    return inventory, contents
+
+
+def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> dict:
     name = skill["name"]
-    if Path(name).name != name or name in {"", ".", ".."}:
-        raise ValueError(f"external skill has unsafe name: {name}")
+    validate_name(name, "external skill")
     matches: list[Path] = []
     for root in installed_roots:
         try:
@@ -786,25 +822,43 @@ def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> str:
     if len(matches) != 1:
         raise ValueError(f"external skill installation is ambiguous: {name}")
     installed = matches[0]
-    skill_path = installed / "SKILL.md"
-    skill_bytes = skill_path.read_bytes()
+    inventory, contents = _installed_tree(installed, name)
+    try:
+        skill_bytes = contents["SKILL.md"]
+        manifest_bytes = contents["capability-manifest.json"]
+    except KeyError:
+        raise ValueError(f"external skill installation is incomplete: {name}") from None
     try:
         skill_text = skill_bytes.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError(
             f"installed skill has invalid UTF-8 content: {name}"
         ) from None
-    frontmatter = _frontmatter_values(skill_text, skill_path.name)
+    frontmatter = parse_frontmatter_text(skill_text, label="SKILL.md")
     if frontmatter.get("name") != name or frontmatter.get("description") != skill["description"]:
         raise ValueError(f"installed skill identity does not match catalog: {name}")
-    manifest = json.loads((installed / "capability-manifest.json").read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError(f"installed skill manifest is invalid: {name}") from None
     if (
         not isinstance(manifest, dict)
+        or set(manifest) != {"schema_version", "skill"}
         or manifest.get("schema_version") != 2
         or manifest.get("skill") != skill
     ):
         raise ValueError(f"installed skill manifest does not match catalog: {name}")
-    return f"sha256:{hashlib.sha256(skill_bytes).hexdigest()}"
+    tree_canonical = json.dumps(
+        inventory,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {
+        "name": name,
+        "tree_sha256": f"sha256:{hashlib.sha256(tree_canonical).hexdigest()}",
+        "files": inventory,
+    }
 
 
 def merge_external_catalogs(
@@ -820,7 +874,7 @@ def merge_external_catalogs(
     merged_skills = list(bundled_catalog["skills"])
     known_names = {item["name"] for item in merged_skills}
     external_names: set[str] = set()
-    installed_skill_digests: dict[str, str] = {}
+    installed_skills: dict[str, dict] = {}
     for external_catalog in external_catalogs:
         for skill in validate_external_catalog(external_catalog):
             name = skill["name"]
@@ -828,7 +882,7 @@ def merge_external_catalogs(
                 raise ValueError(f"unauthorized external skill: {name}")
             if name in known_names:
                 raise ValueError(f"duplicate external skill name: {name}")
-            installed_skill_digests[name] = _verify_installed_skill(
+            installed_skills[name] = _verify_installed_skill(
                 skill, installed_roots
             )
             known_names.add(name)
@@ -840,7 +894,7 @@ def merge_external_catalogs(
         registry,
         merged_skills,
         bundled_catalog["suite_version"],
-        installed_skill_digests,
+        installed_skills,
     )
     return merged
 
@@ -882,12 +936,19 @@ def _string_list(value: object, field: str) -> list[str]:
         not isinstance(item, str) or not item.strip() for item in value
     ):
         raise ValueError(f"{field} must be a list of non-empty strings")
+    if len(value) != len(set(value)):
+        raise ValueError(f"{field} must contain unique values")
     return list(value)
 
 
 def normalize_request(request: dict) -> tuple[dict, ...]:
     if not isinstance(request, dict):
         raise ValueError("request must be an object")
+    if type(request.get("schema_version")) is not int or request["schema_version"] != 2:
+        raise ValueError("request must use schema_version 2")
+    unknown = sorted(set(request) - REQUEST_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown request field: $.{unknown[0]}")
 
     source_locale = normalize_locale(
         _nonblank_string(request.get("source_locale"), "source_locale")
@@ -903,11 +964,18 @@ def normalize_request(request: dict) -> tuple[dict, ...]:
     shared_text = {
         field: _nonblank_string(request.get(field), field) for field in TEXT_FIELDS
     }
+    for field in EXTERNAL_AUTHORIZATION_FIELDS:
+        _string_list(request.get(field, []), field)
     profiles = []
     target_locales = set()
-    for target in targets:
+    for target_index, target in enumerate(targets):
         if not isinstance(target, dict):
             raise ValueError("target must be an object")
+        unknown_target = sorted(set(target) - TARGET_FIELDS)
+        if unknown_target:
+            raise ValueError(
+                f"unknown request field: $.targets[{target_index}].{unknown_target[0]}"
+            )
         target_locale = normalize_locale(
             _nonblank_string(target.get("locale"), "target locale")
         )
@@ -1009,7 +1077,7 @@ def apply_supersedes(
     selected: set[str],
     by_name: dict[str, dict],
     reasons: dict[str, list[str]],
-) -> tuple[set[str], dict[str, list[dict[str, object]]]]:
+) -> tuple[set[str], set[str], dict[str, list[dict[str, object]]]]:
     removed: set[str] = set()
     ownership_overrides: dict[str, list[dict[str, object]]] = {}
     for name in by_name:
@@ -1041,6 +1109,9 @@ def apply_supersedes(
                 for capability, phases in target_ownership.items()
             ):
                 removed.add(target)
+                ownership_overrides.setdefault(name, []).append(
+                    {"skill": target, "ownership": shared_ownership}
+                )
                 reasons[name].append(f"supersedes:{target}")
             else:
                 ownership_overrides.setdefault(name, []).append(
@@ -1053,7 +1124,7 @@ def apply_supersedes(
                         for capability, phases in sorted(shared_ownership.items())
                     )
                 )
-    return selected - removed, ownership_overrides
+    return selected - removed, removed, ownership_overrides
 
 
 def validate_dependency_closure(
@@ -1071,16 +1142,37 @@ def resolve_selection(
     names: list[str],
     by_name: dict[str, dict],
     reasons: dict[str, list[str]],
-) -> tuple[set[str], dict[str, list[dict[str, object]]]]:
+) -> tuple[
+    set[str], set[str], dict[str, list[dict[str, object]]]
+]:
     direct_matches = set(names)
     while True:
         selected = set(direct_matches)
         expand_dependencies(selected, by_name, reasons)
-        retained, ownership_overrides = apply_supersedes(selected, by_name, reasons)
-        validate_dependency_closure(retained, by_name)
-        removed_direct_matches = direct_matches - retained
+        execution_selected, fully_overridden, ownership_overrides = apply_supersedes(
+            selected, by_name, reasons
+        )
+        load_selected = set(execution_selected)
+        expand_dependencies(load_selected, by_name, reasons)
+        load_only = load_selected & fully_overridden
+        ownership_overrides = {
+            owner: [
+                override
+                for override in overrides
+                if override["skill"] in execution_selected or override["skill"] in load_only
+            ]
+            for owner, overrides in ownership_overrides.items()
+            if owner in execution_selected
+        }
+        ownership_overrides = {
+            owner: overrides
+            for owner, overrides in ownership_overrides.items()
+            if overrides
+        }
+        validate_dependency_closure(load_selected, by_name)
+        removed_direct_matches = direct_matches - load_selected
         if not removed_direct_matches:
-            return retained, ownership_overrides
+            return load_selected, load_only, ownership_overrides
         direct_matches.difference_update(removed_direct_matches)
 
 
@@ -1158,7 +1250,7 @@ def route_profile(profile: dict, catalog: dict) -> dict:
     profile = _normalized_profile(profile)
     names, reasons = matching_skill_names(profile, catalog)
     by_name = {item["name"]: item for item in catalog["skills"]}
-    selected, ownership_overrides = resolve_selection(names, by_name, reasons)
+    selected, load_only, ownership_overrides = resolve_selection(names, by_name, reasons)
     validate_conflicts(selected, by_name)
     for name in by_name:
         if name not in selected:
@@ -1166,14 +1258,17 @@ def route_profile(profile: dict, catalog: dict) -> dict:
         for field in by_name[name]["required_context"]:
             if not profile.get(field):
                 raise ValueError(f"{name} requires context: {field}")
+    execution_selected = selected - load_only
     phase_plan = {
-        phase: ordered_for_phase(phase, selected, catalog) for phase in PHASES
+        phase: ordered_for_phase(phase, execution_selected, catalog)
+        for phase in PHASES
     }
     selected_in_load_order = ordered_for_load(selected, catalog)
     return {
         "target_locale": profile["target_locale"],
         "language": profile["language"],
         "selected": selected_in_load_order,
+        "load_only": [name for name in selected_in_load_order if name in load_only],
         "phases": phase_plan,
         "reasons": {
             name: sorted(set(reasons[name])) for name in selected_in_load_order

@@ -5,6 +5,11 @@ import json
 from pathlib import Path
 import sys
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.repo_model import Manifest, SkillRecord, load_manifest
+
 
 CATEGORIES = (
     "orchestrator",
@@ -80,30 +85,42 @@ def split_readme_inventory(text: str) -> tuple[str, str, str]:
     return before, inventory, after
 
 
-def _catalog_from_manifest(manifest: dict) -> dict:
-    def routing_record(item: dict) -> dict:
-        record = {}
-        for field in ROUTING_FIELDS:
-            if field == "selectors" and field not in item:
-                continue
-            record[field] = (
-                item.get(
-                    "ownership",
-                    {
-                        capability: item["phases"]
-                        for capability in item["capabilities"]
-                    },
-                )
-                if field == "ownership"
-                else item[field]
-            )
-        return record
+def _skill_dict(item: SkillRecord) -> dict:
+    record = {
+        "name": item.name,
+        "version": item.version,
+        "category": item.category,
+        "description": item.description,
+        "capabilities": list(item.capabilities),
+        "depends_on": list(item.depends_on),
+    }
+    if item.selectors:
+        record["selectors"] = [
+            {axis: list(values) for axis, values in selector.criteria}
+            for selector in item.selectors
+        ]
+    record.update(
+        {
+            "phases": list(item.phases),
+            "specificity": item.specificity,
+            "required_context": list(item.required_context),
+            "conflicts": list(item.conflicts),
+            "supersedes": list(item.supersedes),
+            "ownership": {
+                capability: list(phases) for capability, phases in item.ownership
+            },
+        }
+    )
+    return record
+
+
+def _catalog_from_manifest(manifest: Manifest) -> dict:
 
     return {
         "schema_version": 2,
-        "suite_version": manifest["suite_version"],
+        "suite_version": manifest.suite_version,
         "disclosure": AI_DISCLOSURE,
-        "skills": [routing_record(item) for item in manifest["skills"]],
+        "skills": [_skill_dict(item) for item in manifest.skills],
     }
 
 
@@ -191,7 +208,7 @@ def render_catalog(
     check: bool = False,
 ) -> bool:
     """Return True when outputs already match or were written successfully."""
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = load_manifest(manifest_path)
     catalog = _catalog_from_manifest(manifest)
     expected_json = json.dumps(catalog, indent=2, ensure_ascii=False) + "\n"
     expected_markdown = _render_markdown(catalog)
@@ -211,17 +228,17 @@ def render_catalog(
     return True
 
 
-def _render_readme_inventory(manifest: dict) -> str:
+def _render_readme_inventory(manifest: Manifest) -> str:
     lines = [
         INVENTORY_START,
         "| Skill | Category | When to use |",
         "| --- | --- | --- |",
     ]
-    for item in manifest["skills"]:
-        description = item["description"].replace("|", "\\|")
+    for item in manifest.skills:
+        description = item.description.replace("|", "\\|")
         lines.append(
-            f"| [`{item['name']}`](skills/{item['name']}/) "
-            f"| `{item['category']}` | {description} |"
+            f"| [`{item.name}`](skills/{item.name}/) "
+            f"| `{item.category}` | {description} |"
         )
     lines.append(INVENTORY_END)
     return "\n".join(lines)
@@ -237,7 +254,7 @@ def render_readme_inventory(
         raise InventoryMarkerError("README.md is missing")
     text = readme_path.read_text(encoding="utf-8")
     before, _, after = split_readme_inventory(text)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = load_manifest(manifest_path)
     expected = before + _render_readme_inventory(manifest) + after
     if check:
         return text == expected
@@ -260,8 +277,8 @@ def render_release_checklist_version(
     end = text.index(SUITE_VERSION_END)
     if start > end:
         raise InventoryMarkerError("release checklist suite-version markers are reversed")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    expected = text[:start] + manifest["suite_version"] + text[end:]
+    manifest = load_manifest(manifest_path)
+    expected = text[:start] + manifest.suite_version + text[end:]
     if check:
         return text == expected
     checklist_path.write_text(expected, encoding="utf-8")
