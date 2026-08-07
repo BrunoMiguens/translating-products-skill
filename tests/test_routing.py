@@ -381,6 +381,104 @@ class RoutingTests(unittest.TestCase):
             result["reasons"]["foundation"], ["dependency-of:intermediate"]
         )
 
+    def test_selected_load_order_respects_cross_phase_dependency_edges(self):
+        router = load_module("route_capabilities_cross_phase_order", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "translate-consumer",
+                selectors=({"domains": ["cross-phase-demo"]},),
+                depends_on=("review-foundation",),
+                phases=("translate",),
+            ),
+            synthetic_skill("review-foundation", phases=("review",)),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["cross-phase-demo"]), catalog
+        )
+
+        self.assertEqual(
+            result["selected"], ["review-foundation", "translate-consumer"]
+        )
+        self.assertEqual(result["phases"]["translate"], ["translate-consumer"])
+        self.assertEqual(result["phases"]["review"], ["review-foundation"])
+
+    def test_selected_load_order_uses_phase_then_catalog_tiebreakers(self):
+        router = load_module("route_capabilities_load_tiebreakers", ROUTER)
+        selector = ({"domains": ["load-tiebreak-demo"]},)
+        catalog = synthetic_catalog(
+            synthetic_skill("review-first-in-catalog", selectors=selector, phases=("review",)),
+            synthetic_skill("translate-first", selectors=selector, phases=("translate",)),
+            synthetic_skill("inspect-ready", selectors=selector, phases=("inspect",)),
+            synthetic_skill("translate-second", selectors=selector, phases=("translate",)),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["load-tiebreak-demo"]), catalog
+        )
+
+        self.assertEqual(
+            result["selected"],
+            [
+                "translate-first",
+                "translate-second",
+                "inspect-ready",
+                "review-first-in-catalog",
+            ],
+        )
+
+    def test_selected_load_order_respects_transitive_cross_phase_dependencies(self):
+        router = load_module("route_capabilities_transitive_cross_phase", ROUTER)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "translate-consumer",
+                selectors=({"domains": ["transitive-cross-phase-demo"]},),
+                depends_on=("inspect-intermediate",),
+                phases=("translate",),
+            ),
+            synthetic_skill(
+                "inspect-intermediate",
+                depends_on=("review-foundation",),
+                phases=("inspect",),
+            ),
+            synthetic_skill("review-foundation", phases=("review",)),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["transitive-cross-phase-demo"]), catalog
+        )
+
+        self.assertEqual(
+            result["selected"],
+            ["review-foundation", "inspect-intermediate", "translate-consumer"],
+        )
+
+    def test_selected_load_order_preserves_phase_intent_without_cross_phase_edges(self):
+        router = load_module("route_capabilities_phase_load_order", ROUTER)
+        selector = ({"domains": ["phase-load-demo"]},)
+        catalog = synthetic_catalog(
+            synthetic_skill("review-ready", selectors=selector, phases=("review",)),
+            synthetic_skill("integrate-ready", selectors=selector, phases=("integrate",)),
+            synthetic_skill("refine-ready", selectors=selector, phases=("refine",)),
+            synthetic_skill("inspect-ready", selectors=selector, phases=("inspect",)),
+            synthetic_skill("translate-ready", selectors=selector, phases=("translate",)),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["phase-load-demo"]), catalog
+        )
+
+        self.assertEqual(
+            result["selected"],
+            [
+                "translate-ready",
+                "inspect-ready",
+                "refine-ready",
+                "integrate-ready",
+                "review-ready",
+            ],
+        )
+
     def test_cycles_in_a_phase_fail_deterministically(self):
         router = load_module("route_capabilities_cycle", ROUTER)
         catalog = synthetic_catalog(
@@ -494,10 +592,10 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(
             result["selected"],
             [
+                "reviewing-translations",
                 "translating-core",
                 "translating-web",
                 "translating-portuguese",
-                "reviewing-translations",
             ],
         )
         self.assertEqual(result["phases"]["inspect"], ["translating-web"])

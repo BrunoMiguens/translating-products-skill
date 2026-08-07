@@ -41,6 +41,11 @@ capabilities, phases, and dependencies remain active.
 Relationship validation runs on the complete bundled-plus-external graph
 before selector evaluation. Dependencies may cross execution phases because
 they declare load and contract requirements, not an execution-phase edge.
+The returned `selected` list is one global topological load order: every
+dependency precedes its dependent even when their execution phases differ.
+Among currently ready skills, the router uses `translate`, `inspect`, `refine`,
+`integrate`, then `review` as the load-phase preference, followed by catalog
+order and name. Per-phase plans remain independently ordered for execution.
 Unknown and self targets, dependency cycles, supersedes cycles, mixed cycles,
 and a target appearing in both `depends_on` and `supersedes` are invalid. A
 superseding record must also share a category and owned capability-phase slice
@@ -73,6 +78,11 @@ corresponding installed root contains `<skill-name>/SKILL.md` with matching
 portable `name` and `description` frontmatter plus a matching
 `capability-manifest.json` identity record; the router rejects symlinked,
 missing, ambiguous, or mismatched installations.
+
+For reviewed admission, the router decodes `SKILL.md` as UTF-8 and binds its
+complete, exact byte sequence into the evidence attestation. Newline bytes are
+not normalized. Installation paths are deliberately excluded, so relocating
+unchanged installed content does not change its identity.
 
 The
 request authorizes names with `authorized_external_skills` for an explicit user
@@ -112,19 +122,30 @@ applicability. This binds language, locale, script, surface, platform, format,
 domain, and requested-capability scope without granting authority through a
 broader review claim.
 
-`reviewer` is a stable, referenceable HTTPS identity URI with a non-root path;
-queries, fragments, embedded credentials, whitespace, and anonymous labels are
-invalid. `review_date` is a canonical `YYYY-MM-DD` calendar date that cannot be
-in the future. Both are immutable review claims because the evidence digest
+`reviewer` is a stable, referenceable ASCII HTTPS identity URI. It uses a
+valid DNS hostname with at least two labels, an optional valid port from 1 to
+65535, and a non-root path composed of RFC URI path characters and valid
+percent escapes. Percent-decoded path bytes must be valid UTF-8 and may not
+contain whitespace, control characters, or dot segments. Queries, fragments,
+embedded credentials, malformed escapes, invalid ports, raw non-ASCII text,
+and anonymous labels are invalid. Before attestation, the router lowercases
+the scheme and hostname, removes port 443, renders other ports in decimal,
+decodes percent-encoded unreserved bytes, and uppercases remaining percent
+escapes. `review_date` is a canonical `YYYY-MM-DD` calendar date that cannot
+be in the future. Both are immutable review claims because the evidence digest
 below binds them.
 
 `evaluation_evidence` contains exactly one lowercase `sha256:` digest. Compute
 it from canonical UTF-8 JSON with sorted object keys, no ASCII escaping, and
 `,`/`:` separators. The hashed object has `admitted_skill` set to the exact
-installed record and `registry_claims` set to the complete reviewed entry with
-`evaluation_evidence` omitted. The router recomputes this attestation, so an
-arbitrary label, placeholder digest, changed record, reviewer, or date cannot
-reuse an earlier review.
+installed record, `installed_skill` set to an object containing the skill
+`name` and `skill_md_sha256`, and `registry_claims` set to the complete reviewed
+entry with `evaluation_evidence` omitted and `reviewer` canonicalized as above.
+`skill_md_sha256` is the lowercase `sha256:` digest of the exact installed
+`SKILL.md` bytes, including their original newline bytes. The router recomputes
+this path-neutral attestation, so an arbitrary label, placeholder digest,
+changed record, changed `SKILL.md`, reviewer, or date cannot reuse an earlier
+review.
 
 Reviewers verify metadata validity, installation identity, dependency and
 conflict behavior, authority boundaries, representative evaluation output,

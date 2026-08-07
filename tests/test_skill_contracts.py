@@ -77,15 +77,23 @@ def relationship_skill(
     return skill
 
 
-def write_installed_skill(root: Path, skill: dict) -> None:
-    skill_root = root / skill["name"]
-    skill_root.mkdir(parents=True)
-    skill_root.joinpath("SKILL.md").write_text(
+def installed_skill_text(skill: dict) -> str:
+    return (
         "---\n"
         f"name: {skill['name']}\n"
         f"description: {skill['description']}\n"
         "---\n\n"
-        "# Installed specialist\n",
+        "# Installed specialist\n"
+    )
+
+
+def write_installed_skill(
+    root: Path, skill: dict, *, skill_text: str | None = None
+) -> None:
+    skill_root = root / skill["name"]
+    skill_root.mkdir(parents=True)
+    skill_root.joinpath("SKILL.md").write_text(
+        skill_text if skill_text is not None else installed_skill_text(skill),
         encoding="utf-8",
     )
     skill_root.joinpath("capability-manifest.json").write_text(
@@ -99,6 +107,7 @@ def run_public_cli(
     authorized: tuple[str, ...] = (),
     registry: dict | None = None,
     singular: bool = False,
+    skill_texts: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -115,7 +124,11 @@ def run_public_cli(
         )
         catalog_path.write_text(json.dumps(payload), encoding="utf-8")
         for skill in skills:
-            write_installed_skill(installed_root, skill)
+            write_installed_skill(
+                installed_root,
+                skill,
+                skill_text=(skill_texts or {}).get(skill["name"]),
+            )
         command = [
             sys.executable,
             str(ROUTER),
@@ -137,7 +150,13 @@ def run_public_cli(
         )
 
 
-def reviewed_registry_entry(skill: dict) -> dict:
+def reviewed_registry_entry(
+    skill: dict,
+    *,
+    skill_text: str | None = None,
+    reviewer: str = "https://github.com/translation-reviewer",
+    attested_reviewer: str | None = None,
+) -> dict:
     ownership = skill.get("ownership") or {
         capability: list(skill["phases"])
         for capability in skill["capabilities"]
@@ -155,11 +174,28 @@ def reviewed_registry_entry(skill: dict) -> dict:
         "dependencies": list(skill["depends_on"]),
         "conflicts": list(skill["conflicts"]),
         "supersedes": list(skill["supersedes"]),
-        "reviewer": "https://github.com/translation-reviewer",
+        "reviewer": reviewer,
         "review_date": date.today().isoformat(),
     }
+    attested_claims = copy.deepcopy(claims)
+    if attested_reviewer is not None:
+        attested_claims["reviewer"] = attested_reviewer
     canonical = json.dumps(
-        {"admitted_skill": skill, "registry_claims": claims},
+        {
+            "admitted_skill": skill,
+            "installed_skill": {
+                "name": skill["name"],
+                "skill_md_sha256": "sha256:"
+                + hashlib.sha256(
+                    (
+                        skill_text
+                        if skill_text is not None
+                        else installed_skill_text(skill)
+                    ).encode("utf-8")
+                ).hexdigest(),
+            },
+            "registry_claims": attested_claims,
+        },
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -171,6 +207,118 @@ def reviewed_registry_entry(skill: dict) -> dict:
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_public_cli_attestation_rejects_installed_skill_content_substitution(self):
+        candidate = external_skill("external-content-bound")
+        original = installed_skill_text(candidate)
+        reviewed = reviewed_registry_entry(candidate, skill_text=original)
+        registry = {"schema_version": 2, "skills": [reviewed]}
+        changed_body = original + "\nUnreviewed replacement instructions.\n"
+        changed_frontmatter = original.replace(
+            "---\n\n# Installed specialist",
+            "review-status: substituted\n---\n\n# Installed specialist",
+        )
+
+        first_location = run_public_cli(
+            [candidate], registry=registry, skill_texts={candidate["name"]: original}
+        )
+        second_location = run_public_cli(
+            [candidate], registry=registry, skill_texts={candidate["name"]: original}
+        )
+
+        self.assertEqual(first_location.returncode, 0, first_location.stderr)
+        self.assertEqual(second_location.returncode, 0, second_location.stderr)
+        for label, substituted in (
+            ("body", changed_body),
+            ("frontmatter", changed_frontmatter),
+            ("newline-bytes", original.replace("\n", "\r\n")),
+        ):
+            with self.subTest(label=label):
+                result = run_public_cli(
+                    [candidate],
+                    registry=registry,
+                    skill_texts={candidate["name"]: substituted},
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertIn(
+                    "compatibility registry evidence mismatch: external-content-bound",
+                    result.stderr,
+                )
+
+        regenerated = run_public_cli(
+            [candidate],
+            registry={
+                "schema_version": 2,
+                "skills": [
+                    reviewed_registry_entry(candidate, skill_text=changed_body)
+                ],
+            },
+            skill_texts={candidate["name"]: changed_body},
+        )
+        self.assertEqual(regenerated.returncode, 0, regenerated.stderr)
+
+    def test_public_cli_reviewer_identity_is_strict_and_canonical(self):
+        candidate = external_skill("external-reviewer-identity")
+        invalid_reviewers = (
+            "http://example.com/reviewers/alice",
+            "https://example.com",
+            "https://example.com/",
+            "https:///reviewers/alice",
+            "https://alice@example.com/reviewers/alice",
+            "https://example.com/reviewers/alice?source=registry",
+            "https://example.com/reviewers/alice?",
+            "https://example.com/reviewers/alice#profile",
+            "https://example.com/reviewers/alice#",
+            "https://localhost/reviewers/alice",
+            "https://bad_host.example/reviewers/alice",
+            "https://example.com./reviewers/alice",
+            "https://example.com:99999/reviewers/alice",
+            "https://example.com:not-a-port/reviewers/alice",
+            "https://example.com/reviewers/%ZZ",
+            "https://example.com/reviewers/alice\u0000",
+            "https://example.com/reviewers/%00alice",
+        )
+        for reviewer in invalid_reviewers:
+            with self.subTest(reviewer=repr(reviewer)):
+                entry = reviewed_registry_entry(candidate, reviewer=reviewer)
+                result = run_public_cli(
+                    [candidate],
+                    registry={"schema_version": 2, "skills": [entry]},
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("invalid reviewer", result.stderr)
+
+        valid_reviewers = (
+            (
+                "https://github.com/translation-reviewer",
+                "https://github.com/translation-reviewer",
+            ),
+            (
+                "HTTPS://EXAMPLE.COM:443/reviewers/%7ealice",
+                "https://example.com/reviewers/~alice",
+            ),
+            (
+                "https://review.example:8443/people/alice%2fprofile",
+                "https://review.example:8443/people/alice%2Fprofile",
+            ),
+        )
+        for reviewer, canonical_reviewer in valid_reviewers:
+            with self.subTest(reviewer=reviewer):
+                entry = reviewed_registry_entry(
+                    candidate,
+                    reviewer=reviewer,
+                    attested_reviewer=canonical_reviewer,
+                )
+                result = run_public_cli(
+                    [candidate],
+                    registry={"schema_version": 2, "skills": [entry]},
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_public_cli_binds_every_reviewed_registry_claim(self):
         candidate = external_skill("external-reviewed")
         reviewed = reviewed_registry_entry(candidate)
@@ -409,6 +557,14 @@ class SkillContractTests(unittest.TestCase):
         route = json.loads(result.stdout)["routes"][0]
         self.assertIn(candidate["name"], route["phases"]["inspect"])
         self.assertIn(candidate["name"], route["phases"]["integrate"])
+        self.assertLess(
+            route["selected"].index("reviewing-translations"),
+            route["selected"].index("translating-core"),
+        )
+        self.assertLess(
+            route["selected"].index("translating-core"),
+            route["selected"].index(candidate["name"]),
+        )
 
     def test_public_cli_rejects_actionless_external_scopes(self):
         cases = (

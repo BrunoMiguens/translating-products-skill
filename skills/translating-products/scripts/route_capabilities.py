@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 import re
 import sys
-from urllib.parse import urlsplit
+import unicodedata
+from urllib.parse import unquote_to_bytes, urlsplit
 
 
 ROUTING_AXES = (
@@ -97,6 +98,17 @@ VERSION_CONSTRAINT = re.compile(
 )
 REVIEW_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 SHA256_EVIDENCE = re.compile(r"^sha256:[0-9a-f]{64}$")
+DNS_LABEL = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+)
+URL_HEXDIGITS = frozenset("0123456789abcdefABCDEF")
+URL_UNRESERVED_BYTES = frozenset(
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+)
+URL_PATH_CHARACTERS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    "-._~!$&'()*+,;=:@/"
+)
 
 
 def normalize_locale(value: str) -> str:
@@ -363,23 +375,101 @@ def _validate_authority_scope(scope: object, name: str) -> dict:
     return scope
 
 
-def _validate_reviewer(value: object, name: str) -> str:
-    if not isinstance(value, str) or not value.strip() or any(
-        character.isspace() for character in value
+def _invalid_reviewer(name: str) -> ValueError:
+    return ValueError(f"compatibility registry skill {name} has invalid reviewer")
+
+
+def _canonical_reviewer_path(path: str, name: str) -> str:
+    if path in {"", "/"} or not path.startswith("/"):
+        raise _invalid_reviewer(name)
+    canonical: list[str] = []
+    index = 0
+    while index < len(path):
+        character = path[index]
+        if character == "%":
+            if (
+                index + 2 >= len(path)
+                or path[index + 1] not in URL_HEXDIGITS
+                or path[index + 2] not in URL_HEXDIGITS
+            ):
+                raise _invalid_reviewer(name)
+            encoded = path[index + 1 : index + 3]
+            octet = int(encoded, 16)
+            if octet in URL_UNRESERVED_BYTES:
+                canonical.append(chr(octet))
+            else:
+                canonical.append("%" + encoded.upper())
+            index += 3
+            continue
+        if character not in URL_PATH_CHARACTERS:
+            raise _invalid_reviewer(name)
+        canonical.append(character)
+        index += 1
+
+    try:
+        decoded = unquote_to_bytes(path).decode("utf-8")
+    except UnicodeDecodeError:
+        raise _invalid_reviewer(name) from None
+    if any(
+        character.isspace()
+        or unicodedata.category(character).startswith("C")
+        for character in decoded
     ):
-        raise ValueError(f"compatibility registry skill {name} has invalid reviewer")
-    parsed = urlsplit(value)
+        raise _invalid_reviewer(name)
+    if any(segment in {".", ".."} for segment in decoded.split("/")):
+        raise _invalid_reviewer(name)
+    return "".join(canonical)
+
+
+def _validate_reviewer(value: object, name: str) -> str:
     if (
-        parsed.scheme != "https"
-        or not parsed.hostname
+        not isinstance(value, str)
+        or not value
+        or any(ord(character) < 0x21 or ord(character) > 0x7E for character in value)
+    ):
+        raise _invalid_reviewer(name)
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise _invalid_reviewer(name) from None
+    if (
+        parsed.scheme.casefold() != "https"
+        or not hostname
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.path in {"", "/"}
+        or "@" in parsed.netloc
+        or "?" in value
+        or "#" in value
         or parsed.query
         or parsed.fragment
+        or port == 0
     ):
-        raise ValueError(f"compatibility registry skill {name} has invalid reviewer")
-    return value
+        raise _invalid_reviewer(name)
+
+    authority = parsed.netloc
+    if authority.count(":") > 1:
+        raise _invalid_reviewer(name)
+    if ":" in authority:
+        authority_host, port_text = authority.rsplit(":", 1)
+        if not port_text.isdigit() or not port_text:
+            raise _invalid_reviewer(name)
+    else:
+        authority_host = authority
+    canonical_host = hostname.casefold()
+    if (
+        authority_host.casefold() != canonical_host
+        or len(canonical_host) > 253
+        or canonical_host.endswith(".")
+        or "." not in canonical_host
+        or any(DNS_LABEL.fullmatch(label) is None for label in canonical_host.split("."))
+    ):
+        raise _invalid_reviewer(name)
+
+    canonical_path = _canonical_reviewer_path(parsed.path, name)
+    canonical_port = "" if port in {None, 443} else f":{port}"
+    return f"https://{canonical_host}{canonical_port}{canonical_path}"
 
 
 def _validate_review_date(value: object, name: str) -> date:
@@ -580,14 +670,24 @@ def _authority_matches(scope: dict, skill: dict) -> bool:
     )
 
 
-def _review_attestation_digest(skill: dict, entry: dict) -> str:
+def _review_attestation_digest(
+    skill: dict, entry: dict, installed_skill_digest: str
+) -> str:
     claims = {
         field: value
         for field, value in entry.items()
         if field != "evaluation_evidence"
     }
+    claims["reviewer"] = _validate_reviewer(entry["reviewer"], skill["name"])
     canonical = json.dumps(
-        {"admitted_skill": skill, "registry_claims": claims},
+        {
+            "admitted_skill": skill,
+            "installed_skill": {
+                "name": skill["name"],
+                "skill_md_sha256": installed_skill_digest,
+            },
+            "registry_claims": claims,
+        },
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -596,7 +696,10 @@ def _review_attestation_digest(skill: dict, entry: dict) -> str:
 
 
 def _validate_registry_bindings(
-    registry: object, skills: list[dict], suite_version: str
+    registry: object,
+    skills: list[dict],
+    suite_version: str,
+    installed_skill_digests: dict[str, str],
 ) -> None:
     if registry is None:
         return
@@ -632,27 +735,34 @@ def _validate_registry_bindings(
         if not _authority_matches(entry["authority_scope"], skill):
             raise ValueError(f"compatibility registry authority mismatch: {name}")
         _validate_review_date(entry["review_date"], name)
-        expected_evidence = _review_attestation_digest(skill, entry)
+        installed_skill_digest = installed_skill_digests.get(name)
+        if installed_skill_digest is None:
+            raise ValueError(
+                f"compatibility registry skill is not an installed external skill: {name}"
+            )
+        expected_evidence = _review_attestation_digest(
+            skill, entry, installed_skill_digest
+        )
         if entry["evaluation_evidence"] != [expected_evidence]:
             raise ValueError(f"compatibility registry evidence mismatch: {name}")
 
 
-def _frontmatter_values(path: Path) -> dict[str, str]:
-    lines = path.read_text(encoding="utf-8").splitlines()
+def _frontmatter_values(content: str, label: str) -> dict[str, str]:
+    lines = content.splitlines()
     if not lines or lines[0] != "---":
-        raise ValueError(f"installed skill has invalid frontmatter: {path.name}")
+        raise ValueError(f"installed skill has invalid frontmatter: {label}")
     values: dict[str, str] = {}
     for line in lines[1:]:
         if line == "---":
             return values
         if ":" not in line:
-            raise ValueError(f"installed skill has invalid frontmatter: {path.name}")
+            raise ValueError(f"installed skill has invalid frontmatter: {label}")
         key, value = line.split(":", 1)
         values[key.strip()] = value.strip()
-    raise ValueError(f"installed skill has invalid frontmatter: {path.name}")
+    raise ValueError(f"installed skill has invalid frontmatter: {label}")
 
 
-def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> None:
+def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> str:
     name = skill["name"]
     if Path(name).name != name or name in {"", ".", ".."}:
         raise ValueError(f"external skill has unsafe name: {name}")
@@ -676,7 +786,15 @@ def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> None:
     if len(matches) != 1:
         raise ValueError(f"external skill installation is ambiguous: {name}")
     installed = matches[0]
-    frontmatter = _frontmatter_values(installed / "SKILL.md")
+    skill_path = installed / "SKILL.md"
+    skill_bytes = skill_path.read_bytes()
+    try:
+        skill_text = skill_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(
+            f"installed skill has invalid UTF-8 content: {name}"
+        ) from None
+    frontmatter = _frontmatter_values(skill_text, skill_path.name)
     if frontmatter.get("name") != name or frontmatter.get("description") != skill["description"]:
         raise ValueError(f"installed skill identity does not match catalog: {name}")
     manifest = json.loads((installed / "capability-manifest.json").read_text(encoding="utf-8"))
@@ -686,6 +804,7 @@ def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> None:
         or manifest.get("skill") != skill
     ):
         raise ValueError(f"installed skill manifest does not match catalog: {name}")
+    return f"sha256:{hashlib.sha256(skill_bytes).hexdigest()}"
 
 
 def merge_external_catalogs(
@@ -701,6 +820,7 @@ def merge_external_catalogs(
     merged_skills = list(bundled_catalog["skills"])
     known_names = {item["name"] for item in merged_skills}
     external_names: set[str] = set()
+    installed_skill_digests: dict[str, str] = {}
     for external_catalog in external_catalogs:
         for skill in validate_external_catalog(external_catalog):
             name = skill["name"]
@@ -708,13 +828,20 @@ def merge_external_catalogs(
                 raise ValueError(f"unauthorized external skill: {name}")
             if name in known_names:
                 raise ValueError(f"duplicate external skill name: {name}")
-            _verify_installed_skill(skill, installed_roots)
+            installed_skill_digests[name] = _verify_installed_skill(
+                skill, installed_roots
+            )
             known_names.add(name)
             external_names.add(name)
             merged_skills.append(skill)
     merged["skills"] = merged_skills
     _validate_merged_relationships(merged_skills, external_names)
-    _validate_registry_bindings(registry, merged_skills, bundled_catalog["suite_version"])
+    _validate_registry_bindings(
+        registry,
+        merged_skills,
+        bundled_catalog["suite_version"],
+        installed_skill_digests,
+    )
     return merged
 
 
@@ -994,6 +1121,39 @@ def ordered_for_phase(phase: str, selected: set[str], catalog: dict) -> list[str
     return ordered
 
 
+def ordered_for_load(selected: set[str], catalog: dict) -> list[str]:
+    by_name = {item["name"]: item for item in catalog["skills"]}
+    manifest_index = {
+        item["name"]: index for index, item in enumerate(catalog["skills"])
+    }
+    phase_index = {phase: index for index, phase in enumerate(LOAD_PHASES)}
+    load_phase = {
+        name: min(phase_index[phase] for phase in by_name[name]["phases"])
+        for name in selected
+    }
+    pending = set(selected)
+    ordered: list[str] = []
+    while pending:
+        ready = [
+            name
+            for name in pending
+            if not set(by_name[name]["depends_on"]).intersection(pending)
+        ]
+        if not ready:
+            raise ValueError("dependency cycle in selected load order")
+        ready.sort(
+            key=lambda name: (
+                load_phase[name],
+                manifest_index[name],
+                name,
+            )
+        )
+        chosen = ready[0]
+        ordered.append(chosen)
+        pending.remove(chosen)
+    return ordered
+
+
 def route_profile(profile: dict, catalog: dict) -> dict:
     profile = _normalized_profile(profile)
     names, reasons = matching_skill_names(profile, catalog)
@@ -1009,11 +1169,7 @@ def route_profile(profile: dict, catalog: dict) -> dict:
     phase_plan = {
         phase: ordered_for_phase(phase, selected, catalog) for phase in PHASES
     }
-    selected_in_load_order = []
-    for phase in LOAD_PHASES:
-        for name in phase_plan[phase]:
-            if name not in selected_in_load_order:
-                selected_in_load_order.append(name)
+    selected_in_load_order = ordered_for_load(selected, catalog)
     return {
         "target_locale": profile["target_locale"],
         "language": profile["language"],

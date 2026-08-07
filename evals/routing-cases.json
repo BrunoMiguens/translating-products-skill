@@ -2,212 +2,212 @@
   {
     "id": "ar-web-marketing",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ar-SA", "scripts": ["rtl"]}], "surfaces": ["web", "marketing"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ar-SA", "selected": ["translating-core", "translating-web", "translating-marketing", "translating-rtl", "translating-arabic", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ar-SA", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-marketing", "translating-rtl", "translating-arabic"]}]
   },
   {
     "id": "ar-android",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ar-SA", "scripts": ["rtl"]}], "surfaces": [], "platforms": ["android"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ar-SA", "selected": ["translating-core", "translating-mobile", "translating-android", "translating-rtl", "translating-arabic", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ar-SA", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-android", "translating-rtl", "translating-arabic"]}]
   },
   {
     "id": "he-web",
     "request": {"source_locale": "en-US", "targets": [{"locale": "he-IL", "scripts": ["rtl"]}], "surfaces": ["web"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "he-IL", "selected": ["translating-core", "translating-web", "translating-rtl", "translating-hebrew", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "he-IL", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-rtl", "translating-hebrew"]}]
   },
   {
     "id": "he-ios",
     "request": {"source_locale": "en-US", "targets": [{"locale": "he-IL", "scripts": ["rtl"]}], "surfaces": [], "platforms": ["ios"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "he-IL", "selected": ["translating-core", "translating-mobile", "translating-ios", "translating-rtl", "translating-hebrew", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "he-IL", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-ios", "translating-rtl", "translating-hebrew"]}]
   },
   {
     "id": "ja-ios",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ja-JP"}], "surfaces": [], "platforms": ["ios"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ja-JP", "selected": ["translating-core", "translating-mobile", "translating-ios", "translating-japanese", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ja-JP", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-ios", "translating-japanese"]}]
   },
   {
     "id": "ja-docs",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ja-JP"}], "surfaces": ["documentation"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ja-JP", "selected": ["translating-core", "translating-documentation", "translating-japanese", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ja-JP", "selected": ["reviewing-translations", "translating-core", "translating-documentation", "translating-japanese"]}]
   },
   {
     "id": "zh-android",
     "request": {"source_locale": "en-US", "targets": [{"locale": "zh-Hans-CN"}], "surfaces": [], "platforms": ["android"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "zh-Hans-CN", "selected": ["translating-core", "translating-mobile", "translating-android", "translating-chinese", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "zh-Hans-CN", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-android", "translating-chinese"]}]
   },
   {
     "id": "zh-marketing",
     "request": {"source_locale": "en-US", "targets": [{"locale": "zh-Hant-TW"}], "surfaces": ["marketing"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "zh-Hant-TW", "selected": ["translating-core", "translating-marketing", "translating-chinese", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "zh-Hant-TW", "selected": ["reviewing-translations", "translating-core", "translating-marketing", "translating-chinese"]}]
   },
   {
     "id": "ko-flutter",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ko-KR"}], "surfaces": [], "platforms": ["flutter"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ko-KR", "selected": ["translating-core", "translating-mobile", "translating-flutter", "translating-korean", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ko-KR", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-flutter", "translating-korean"]}]
   },
   {
     "id": "ko-stores",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ko-KR"}], "surfaces": ["app-store"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ko-KR", "selected": ["translating-core", "translating-app-stores", "translating-korean", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ko-KR", "selected": ["reviewing-translations", "translating-core", "translating-app-stores", "translating-korean"]}]
   },
   {
     "id": "pt-app-store",
     "request": {"source_locale": "en-US", "targets": [{"locale": "pt-BR"}], "surfaces": ["app-store"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "pt-BR", "selected": ["translating-core", "translating-app-stores", "translating-portuguese", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "pt-BR", "selected": ["reviewing-translations", "translating-core", "translating-app-stores", "translating-portuguese"]}]
   },
   {
     "id": "pt-docs",
     "request": {"source_locale": "en-US", "targets": [{"locale": "pt-PT"}], "surfaces": ["documentation"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "pt-PT", "selected": ["translating-core", "translating-documentation", "translating-portuguese", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "pt-PT", "selected": ["reviewing-translations", "translating-core", "translating-documentation", "translating-portuguese"]}]
   },
   {
     "id": "es-play-store",
     "request": {"source_locale": "en-US", "targets": [{"locale": "es-419"}], "surfaces": ["play-store"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "es-419", "selected": ["translating-core", "translating-app-stores", "translating-spanish", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "es-419", "selected": ["reviewing-translations", "translating-core", "translating-app-stores", "translating-spanish"]}]
   },
   {
     "id": "es-web",
     "request": {"source_locale": "en-US", "targets": [{"locale": "es-ES"}], "surfaces": ["web"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "es-ES", "selected": ["translating-core", "translating-web", "translating-spanish", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "es-ES", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-spanish"]}]
   },
   {
     "id": "fr-web-marketing",
     "request": {"source_locale": "en-US", "targets": [{"locale": "fr-FR"}], "surfaces": ["web", "marketing"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "fr-FR", "selected": ["translating-core", "translating-web", "translating-marketing", "translating-french", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "fr-FR", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-marketing", "translating-french"]}]
   },
   {
     "id": "fr-docs",
     "request": {"source_locale": "en-US", "targets": [{"locale": "fr-CA"}], "surfaces": ["documentation"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "fr-CA", "selected": ["translating-core", "translating-documentation", "translating-french", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "fr-CA", "selected": ["reviewing-translations", "translating-core", "translating-documentation", "translating-french"]}]
   },
   {
     "id": "de-software",
     "request": {"source_locale": "en-US", "targets": [{"locale": "de-DE"}], "surfaces": ["software"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "de-DE", "selected": ["translating-core", "localizing-software", "translating-german", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "de-DE", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-german"]}]
   },
   {
     "id": "de-web",
     "request": {"source_locale": "en-US", "targets": [{"locale": "de-AT"}], "surfaces": ["web"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "de-AT", "selected": ["translating-core", "translating-web", "translating-german", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "de-AT", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-german"]}]
   },
   {
     "id": "mobile-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": ["mobile"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-mobile", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-mobile"]}]
   },
   {
     "id": "ios-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": [], "platforms": ["ios"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-mobile", "translating-ios", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-ios"]}]
   },
   {
     "id": "android-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": [], "platforms": ["android"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-mobile", "translating-android", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-android"]}]
   },
   {
     "id": "flutter-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": [], "platforms": ["flutter"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-mobile", "translating-flutter", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-flutter"]}]
   },
   {
     "id": "web-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": ["web"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-web", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-web"]}]
   },
   {
     "id": "software-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": ["software"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "localizing-software", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "localizing-software"]}]
   },
   {
     "id": "app-store-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": ["app-store"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-app-stores", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-app-stores"]}]
   },
   {
     "id": "play-store-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": ["play-store"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-app-stores", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-app-stores"]}]
   },
   {
     "id": "marketing-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": ["marketing"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-marketing", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-marketing"]}]
   },
   {
     "id": "docs-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": ["documentation"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-documentation", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-documentation"]}]
   },
   {
     "id": "rtl-script-only",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB", "scripts": ["rtl"]}], "surfaces": [], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "translating-rtl", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-rtl"]}]
   },
   {
     "id": "ar-flutter-store",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ar-SA", "scripts": ["rtl"]}], "surfaces": ["play-store"], "platforms": ["flutter"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ar-SA", "selected": ["translating-core", "translating-mobile", "translating-app-stores", "translating-flutter", "translating-rtl", "translating-arabic", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ar-SA", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-flutter", "translating-app-stores", "translating-rtl", "translating-arabic"]}]
   },
   {
     "id": "he-android-software",
     "request": {"source_locale": "en-US", "targets": [{"locale": "he-IL", "scripts": ["rtl"]}], "surfaces": ["software"], "platforms": ["android"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "he-IL", "selected": ["translating-core", "translating-mobile", "localizing-software", "translating-android", "translating-rtl", "translating-hebrew", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "he-IL", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-mobile", "translating-android", "translating-rtl", "translating-hebrew"]}]
   },
   {
     "id": "ja-web-marketing",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ja-JP"}], "surfaces": ["web", "marketing"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ja-JP", "selected": ["translating-core", "translating-web", "translating-marketing", "translating-japanese", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ja-JP", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-marketing", "translating-japanese"]}]
   },
   {
     "id": "zh-ios-docs",
     "request": {"source_locale": "en-US", "targets": [{"locale": "zh-Hans-CN"}], "surfaces": ["documentation"], "platforms": ["ios"], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "zh-Hans-CN", "selected": ["translating-core", "translating-mobile", "translating-documentation", "translating-ios", "translating-chinese", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "zh-Hans-CN", "selected": ["reviewing-translations", "translating-core", "translating-mobile", "translating-ios", "translating-documentation", "translating-chinese"]}]
   },
   {
     "id": "ko-web-software",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ko-KR"}], "surfaces": ["web", "software"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "ko-KR", "selected": ["translating-core", "translating-web", "localizing-software", "translating-korean", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "ko-KR", "selected": ["reviewing-translations", "translating-core", "translating-web", "localizing-software", "translating-korean"]}]
   },
   {
     "id": "multi-romance",
     "request": {"source_locale": "en-US", "targets": [{"locale": "pt-BR"}, {"locale": "es-419"}, {"locale": "fr-CA"}], "surfaces": ["web", "mobile"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
     "expected_routes": [
-      {"target_locale": "pt-BR", "selected": ["translating-core", "translating-web", "translating-mobile", "translating-portuguese", "reviewing-translations"]},
-      {"target_locale": "es-419", "selected": ["translating-core", "translating-web", "translating-mobile", "translating-spanish", "reviewing-translations"]},
-      {"target_locale": "fr-CA", "selected": ["translating-core", "translating-web", "translating-mobile", "translating-french", "reviewing-translations"]}
+      {"target_locale": "pt-BR", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-mobile", "translating-portuguese"]},
+      {"target_locale": "es-419", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-mobile", "translating-spanish"]},
+      {"target_locale": "fr-CA", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-mobile", "translating-french"]}
     ]
   },
   {
     "id": "multi-cjk",
     "request": {"source_locale": "en-US", "targets": [{"locale": "ja-JP"}, {"locale": "zh-Hant-TW"}, {"locale": "ko-KR"}], "surfaces": ["documentation"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
     "expected_routes": [
-      {"target_locale": "ja-JP", "selected": ["translating-core", "translating-documentation", "translating-japanese", "reviewing-translations"]},
-      {"target_locale": "zh-Hant-TW", "selected": ["translating-core", "translating-documentation", "translating-chinese", "reviewing-translations"]},
-      {"target_locale": "ko-KR", "selected": ["translating-core", "translating-documentation", "translating-korean", "reviewing-translations"]}
+      {"target_locale": "ja-JP", "selected": ["reviewing-translations", "translating-core", "translating-documentation", "translating-japanese"]},
+      {"target_locale": "zh-Hant-TW", "selected": ["reviewing-translations", "translating-core", "translating-documentation", "translating-chinese"]},
+      {"target_locale": "ko-KR", "selected": ["reviewing-translations", "translating-core", "translating-documentation", "translating-korean"]}
     ]
   },
   {
     "id": "unsupported-icelandic",
     "request": {"source_locale": "en-US", "targets": [{"locale": "is-IS"}], "surfaces": ["documentation"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "is-IS", "selected": ["translating-core", "translating-documentation", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "is-IS", "selected": ["reviewing-translations", "translating-core", "translating-documentation"]}]
   },
   {
     "id": "unsupported-swahili",
     "request": {"source_locale": "en-US", "targets": [{"locale": "sw-KE"}], "surfaces": ["marketing"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "sw-KE", "selected": ["translating-core", "translating-marketing", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "sw-KE", "selected": ["reviewing-translations", "translating-core", "translating-marketing"]}]
   },
   {
     "id": "unsupported-mixed",
     "request": {"source_locale": "en-US", "targets": [{"locale": "is-IS"}, {"locale": "ja-JP"}], "surfaces": ["web"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
     "expected_routes": [
-      {"target_locale": "is-IS", "selected": ["translating-core", "translating-web", "reviewing-translations"]},
-      {"target_locale": "ja-JP", "selected": ["translating-core", "translating-web", "translating-japanese", "reviewing-translations"]}
+      {"target_locale": "is-IS", "selected": ["reviewing-translations", "translating-core", "translating-web"]},
+      {"target_locale": "ja-JP", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-japanese"]}
     ]
   },
   {
     "id": "empty-classification",
     "request": {"source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": [], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
-    "expected_routes": [{"target_locale": "en-GB", "selected": ["translating-core", "reviewing-translations"]}]
+    "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core"]}]
   }
 ]
