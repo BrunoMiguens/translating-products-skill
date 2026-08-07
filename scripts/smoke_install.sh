@@ -95,6 +95,20 @@ host_roots = {
 }
 skill_root = target / host_roots[agent]
 
+target_resolved = target.resolve(strict=True)
+cursor = target
+if target.is_symlink():
+    print(f"{agent}: symlinked disposable target", file=sys.stderr)
+    raise SystemExit(1)
+for part in Path(host_roots[agent]).parts:
+    cursor = cursor / part
+    if cursor.is_symlink():
+        print(f"{agent}: symlinked host skills root: {cursor}", file=sys.stderr)
+        raise SystemExit(1)
+    if cursor.exists() and not cursor.resolve(strict=True).is_relative_to(target_resolved):
+        print(f"{agent}: host skills root escapes disposable target: {cursor}", file=sys.stderr)
+        raise SystemExit(1)
+
 def inventory(root: Path) -> dict[str, str]:
     result = {}
     for path in sorted(root.rglob("*")):
@@ -124,6 +138,13 @@ misplaced = sorted(
 )
 actual = direct
 errors = []
+for name in actual:
+    installed_path = skill_root / name
+    if (
+        installed_path.is_symlink()
+        or not installed_path.resolve(strict=True).is_relative_to(target_resolved)
+    ):
+        errors.append(f"{agent}: installed skill escapes disposable target: {name}")
 scope_count = int(expected_count_text) if scope == "suite" else 1
 if len(skill_files) != scope_count:
     errors.append(f"{agent}: expected {scope_count} installed skills, found {len(actual)}")

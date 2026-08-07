@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import shutil
 from pathlib import Path
 
 
@@ -156,6 +157,8 @@ def run_public_cli(
             str(catalog_path),
             "--installed-root",
             str(installed_root),
+            "--snapshot-root",
+            str(root / "snapshots"),
         ]
         if registry is not None:
             registry_path = root / "registry.json"
@@ -244,6 +247,83 @@ def reviewed_registry_entry(
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_admission_routes_external_loads_through_a_private_verified_snapshot(self):
+        spec = importlib.util.spec_from_file_location("router_snapshot", ROUTER)
+        router = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(router)
+        candidate = external_skill("external-snapshot-bound")
+        reviewed_bytes = b"reviewed rules\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            installed_root = root / "installed"
+            write_installed_skill(
+                installed_root,
+                candidate,
+                extra_files={"references/rules.md": reviewed_bytes},
+            )
+            payload = request(authorized=(candidate["name"],))
+            bundled = json.loads(
+                (ROOT / "skills/translating-products/references/capability-catalog.json")
+                .read_text(encoding="utf-8")
+            )
+
+            admitted = router.merge_external_catalogs(
+                bundled,
+                [{"schema_version": 2, "skills": [candidate]}],
+                payload,
+                None,
+                [installed_root],
+            )
+            (installed_root / candidate["name"] / "references/rules.md").write_bytes(
+                b"substituted after admission\n"
+            )
+            result = router.route(payload, admitted)
+
+            external_load = result["routes"][0]["external_loads"][0]
+            snapshot = Path(external_load["load_path"])
+            self.assertEqual(external_load["name"], candidate["name"])
+            self.assertRegex(external_load["tree_sha256"], r"^sha256:[0-9a-f]{64}$")
+            self.assertEqual(
+                (snapshot / "references/rules.md").read_bytes(), reviewed_bytes
+            )
+            self.assertEqual(snapshot.stat().st_mode & 0o222, 0)
+            self.assertEqual(
+                (snapshot / "references/rules.md").stat().st_mode & 0o222, 0
+            )
+            snapshot_parent = snapshot.parent
+            snapshot_parent.chmod(0o700)
+            snapshot.chmod(0o700)
+            for directory in sorted(
+                (path for path in snapshot.rglob("*") if path.is_dir()), reverse=True
+            ):
+                directory.chmod(0o700)
+            shutil.rmtree(snapshot_parent)
+
+    def test_frontmatter_rejects_yaml_implicit_and_comment_plain_scalars(self):
+        spec = importlib.util.spec_from_file_location("router_yaml", ROUTER)
+        router = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(router)
+
+        for scalar in (
+            "# host sees a comment",
+            "Use when translating # host strips this comment",
+            "null",
+            "true",
+            "123",
+            "2026-08-07",
+        ):
+            with self.subTest(scalar=scalar):
+                content = (
+                    "---\nname: translating-demo\n"
+                    f"description: {scalar}\n---\n"
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "unsupported frontmatter scalar"
+                ):
+                    router.parse_frontmatter_text(content)
+
     def test_external_metadata_uses_the_portable_bundled_contract(self):
         spec = importlib.util.spec_from_file_location("router_metadata", ROUTER)
         router = importlib.util.module_from_spec(spec)
@@ -847,6 +927,8 @@ class SkillContractTests(unittest.TestCase):
                     str(second_path),
                     "--installed-root",
                     str(installed_root),
+                    "--snapshot-root",
+                    str(root / "snapshots"),
                 ],
                 capture_output=True,
                 text=True,

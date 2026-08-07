@@ -57,6 +57,12 @@ FAKE_NPX = textwrap.dedent(
         "cursor": ".agents/skills",
         "universal": ".agents/skills",
     }}
+    if mode == "symlink-root":
+        host_root = cwd / roots[agent]
+        escaped = Path(os.environ["SMOKE_ESCAPE"]) / agent / cwd.name
+        escaped.mkdir(parents=True, exist_ok=True)
+        host_root.parent.mkdir(parents=True, exist_ok=True)
+        host_root.symlink_to(escaped, target_is_directory=True)
     installed = []
     for source_file in discovered:
         name = source_file.parent.name
@@ -127,6 +133,7 @@ class SmokeInstallTests(unittest.TestCase):
                     "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
                     "SMOKE_FAKE_MODE": mode,
                     "SMOKE_LOG": str(log),
+                    "SMOKE_ESCAPE": str(root / "escaped-installs"),
                     "SMOKE_MANIFEST": str(suite_manifest),
                 }
             )
@@ -368,6 +375,12 @@ class SmokeInstallTests(unittest.TestCase):
 
         self.assertNotEqual(run["result"].returncode, 0)
         self.assertIn("installed inventory mismatch", run["result"].stderr)
+
+    def test_rejects_a_symlinked_host_skills_root_escape(self):
+        run = self.run_smoke("symlink-root")
+
+        self.assertNotEqual(run["result"].returncode, 0)
+        self.assertIn("symlinked host skills root", run["result"].stderr)
 
     def test_cleans_scratch_when_the_installer_fails(self):
         run = self.run_smoke("fail-codex")

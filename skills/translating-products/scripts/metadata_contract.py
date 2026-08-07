@@ -243,7 +243,18 @@ def _parse_scalar(value: str) -> str:
         if not isinstance(parsed, str):
             raise ValueError("unsupported frontmatter scalar")
         return parsed
-    if value[0] in "|>[]{}&*!`" or value.endswith(("'", '"')):
+    implicit = value.casefold()
+    if (
+        value[0] in "|>[]{}&*!`#%@"
+        or value.endswith(("'", '"'))
+        or re.search(r"(^|[ \t])#", value)
+        or ": " in value
+        or implicit in {
+            "null", "~", "true", "false", "yes", "no", "on", "off",
+        }
+        or re.fullmatch(r"[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", value)
+        or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value)
+    ):
         raise ValueError("unsupported frontmatter scalar")
     return value
 

@@ -73,6 +73,7 @@ schema-`2` catalog or manifest through the portable public CLI:
 python3 route_capabilities.py REQUEST_JSON \
   --external-catalog INSTALLED_CATALOG_OR_MANIFEST.json \
   --installed-root PORTABLE_INSTALLED_SKILLS_ROOT \
+  --snapshot-root PRIVATE_SNAPSHOT_PARENT \
   --compatibility-registry compatibility-registry.json
 ```
 
@@ -89,6 +90,16 @@ case-colliding relative paths, and excessive file/tree sizes. Canonical
 relative paths, exact byte digests, and lengths form a deterministic tree
 digest. Installation paths are excluded, so relocation preserves identity
 while adding, removing, renaming, or changing any file invalidates admission.
+
+Admission also copies the exact bytes read during verification into a private,
+read-only snapshot. Each route returns selected external skills in
+`external_loads`, in global load order, with exactly the skill `name`, snapshot
+`load_path`, and reviewed `tree_sha256`. A host must load external skill content
+only from that returned path and may use the digest as the stable identity; it
+must not reopen the mutable installation path after admission. The optional
+`--snapshot-root` chooses a caller-owned private parent for these snapshots.
+Without it, the router creates a private operating-system temporary parent.
+The caller owns snapshot retention and cleanup after all routed work finishes.
 
 The
 request authorizes names with `authorized_external_skills` for an explicit user

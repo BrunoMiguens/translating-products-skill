@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+import tempfile
 import unicodedata
 from urllib.parse import unquote_to_bytes, urlsplit
 
@@ -799,7 +800,9 @@ def _installed_tree(installed: Path, name: str) -> tuple[list[dict], dict[str, b
     return inventory, contents
 
 
-def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> dict:
+def _verify_installed_skill(
+    skill: dict, installed_roots: list[Path]
+) -> tuple[dict, dict[str, bytes]]:
     name = skill["name"]
     validate_name(name, "external skill")
     matches: list[Path] = []
@@ -858,6 +861,71 @@ def _verify_installed_skill(skill: dict, installed_roots: list[Path]) -> dict:
         "name": name,
         "tree_sha256": f"sha256:{hashlib.sha256(tree_canonical).hexdigest()}",
         "files": inventory,
+    }, contents
+
+
+def _snapshot_installed_skill(
+    name: str,
+    attestation: dict,
+    contents: dict[str, bytes],
+    snapshot_root: Path | None,
+) -> dict:
+    if snapshot_root is not None:
+        snapshot_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if snapshot_root.is_symlink() or not snapshot_root.is_dir():
+            raise ValueError(f"external snapshot root is unsafe: {snapshot_root}")
+        container = Path(
+            tempfile.mkdtemp(prefix="translation-admitted-", dir=snapshot_root)
+        )
+    else:
+        container = Path(tempfile.mkdtemp(prefix="translation-admitted-"))
+    os.chmod(container, 0o700)
+    snapshot = container / name
+    snapshot.mkdir(mode=0o700)
+    try:
+        directories = {snapshot}
+        for item in attestation["files"]:
+            relative = Path(item["path"])
+            destination = snapshot / relative
+            pending = destination.parent
+            missing = []
+            while pending != snapshot and not pending.exists():
+                missing.append(pending)
+                pending = pending.parent
+            for directory in reversed(missing):
+                directory.mkdir(mode=0o700)
+                directories.add(directory)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(destination, flags, 0o400)
+            try:
+                with os.fdopen(descriptor, "wb", closefd=False) as handle:
+                    handle.write(contents[item["path"]])
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.fchmod(descriptor, 0o400)
+            finally:
+                os.close(descriptor)
+        for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+            os.chmod(directory, 0o500)
+        verified_inventory, _ = _installed_tree(snapshot, name)
+        if verified_inventory != attestation["files"]:
+            raise ValueError(f"external skill snapshot verification failed: {name}")
+        os.chmod(container, 0o500)
+    except Exception:
+        for path in sorted(snapshot.rglob("*"), reverse=True):
+            if path.is_dir():
+                path.chmod(0o700)
+            else:
+                path.chmod(0o600)
+        snapshot.chmod(0o700)
+        import shutil
+
+        shutil.rmtree(container, ignore_errors=True)
+        raise
+    return {
+        "name": name,
+        "load_path": str(snapshot),
+        "tree_sha256": attestation["tree_sha256"],
     }
 
 
@@ -867,6 +935,7 @@ def merge_external_catalogs(
     request: dict,
     registry: object,
     installed_roots: list[Path],
+    snapshot_root: Path | None = None,
 ) -> dict:
     """Merge authorized installed external records without changing bundled precedence."""
     authorized = _authorization_names(request, registry)
@@ -875,6 +944,7 @@ def merge_external_catalogs(
     known_names = {item["name"] for item in merged_skills}
     external_names: set[str] = set()
     installed_skills: dict[str, dict] = {}
+    installed_contents: dict[str, dict[str, bytes]] = {}
     for external_catalog in external_catalogs:
         for skill in validate_external_catalog(external_catalog):
             name = skill["name"]
@@ -882,9 +952,9 @@ def merge_external_catalogs(
                 raise ValueError(f"unauthorized external skill: {name}")
             if name in known_names:
                 raise ValueError(f"duplicate external skill name: {name}")
-            installed_skills[name] = _verify_installed_skill(
-                skill, installed_roots
-            )
+            attestation, contents = _verify_installed_skill(skill, installed_roots)
+            installed_skills[name] = attestation
+            installed_contents[name] = contents
             known_names.add(name)
             external_names.add(name)
             merged_skills.append(skill)
@@ -896,6 +966,15 @@ def merge_external_catalogs(
         bundled_catalog["suite_version"],
         installed_skills,
     )
+    merged["external_skill_snapshots"] = {
+        name: _snapshot_installed_skill(
+            name,
+            installed_skills[name],
+            installed_contents[name],
+            snapshot_root,
+        )
+        for name in installed_skills
+    }
     return merged
 
 
@@ -1264,11 +1343,17 @@ def route_profile(profile: dict, catalog: dict) -> dict:
         for phase in PHASES
     }
     selected_in_load_order = ordered_for_load(selected, catalog)
+    external_snapshots = catalog.get("external_skill_snapshots", {})
     return {
         "target_locale": profile["target_locale"],
         "language": profile["language"],
         "selected": selected_in_load_order,
         "load_only": [name for name in selected_in_load_order if name in load_only],
+        "external_loads": [
+            external_snapshots[name]
+            for name in selected_in_load_order
+            if name in external_snapshots
+        ],
         "phases": phase_plan,
         "reasons": {
             name: sorted(set(reasons[name])) for name in selected_in_load_order
@@ -1316,6 +1401,11 @@ def main() -> int:
         metavar="PATH",
         help="root containing installed <skill-name>/SKILL.md and capability-manifest.json",
     )
+    parser.add_argument(
+        "--snapshot-root",
+        metavar="PATH",
+        help="private parent for immutable admitted external-skill snapshots",
+    )
     arguments = parser.parse_args()
 
     try:
@@ -1341,6 +1431,7 @@ def main() -> int:
             request,
             registry,
             [Path(path) for path in arguments.installed_root],
+            Path(arguments.snapshot_root) if arguments.snapshot_root else None,
         )
         result = route(request, admitted_catalog)
     except (OSError, ValueError, TypeError, KeyError) as error:
