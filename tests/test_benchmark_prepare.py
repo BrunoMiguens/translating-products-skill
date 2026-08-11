@@ -243,6 +243,8 @@ class PreparationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         dataset = self.temp_dir / "pt-pt-v1"
         shutil.copytree(root / "benchmarks/pt-pt-v1", dataset)
+        (dataset / "reference-signoff.json").unlink()
+        (dataset / "dataset-manifest.json").unlink()
         packet_path = self.temp_dir / "curation.json"
         atomic_write_json(packet_path, build_curation_packet(dataset))
         target = dataset / "reference-signoff.json"
@@ -274,7 +276,10 @@ class PreparationTests(unittest.TestCase):
     def test_real_dataset_manifest_refuses_without_valid_human_signoff(self):
         """Break: dataset mode could freeze AI-drafted references before fluent review."""
         root = Path(__file__).resolve().parents[1]
-        dataset = root / "benchmarks/pt-pt-v1"
+        dataset = self.temp_dir / "unsigned-pt-pt-v1"
+        shutil.copytree(root / "benchmarks/pt-pt-v1", dataset)
+        (dataset / "reference-signoff.json").unlink()
+        (dataset / "dataset-manifest.json").unlink()
         with self.assertRaisesRegex(BenchmarkError, "PT-PT reviewer sign-off"):
             build_dataset_manifest(dataset, suite_commit="abc123", suite_dirty=False)
 
@@ -641,19 +646,38 @@ class PreparationTests(unittest.TestCase):
 
     def test_dirty_dataset_cli_requires_and_records_snapshot_provenance(self):
         """Break: a dirty tree could freeze a dataset with no reproducible snapshot."""
+        root = Path(__file__).resolve().parents[1]
         dataset = write_synthetic_dataset(self.temp_dir)
         write_reviewer_signoff(
             dataset,
             reviewer="pt-PT-reviewer",
             approved_at="2026-08-03T12:00:00Z",
         )
+        dirty_repo = self.temp_dir / "dirty-repo"
+        dirty_repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=dirty_repo, check=True)
+        marker = dirty_repo / "snapshot.txt"
+        marker.write_text("clean\n", encoding="utf-8")
+        subprocess.run(["git", "add", "snapshot.txt"], cwd=dirty_repo, check=True)
+        subprocess.run(
+            [
+                "git", "-c", "user.name=Benchmark Test", "-c",
+                "user.email=benchmark@example.invalid", "commit", "-q", "-m", "fixture",
+            ],
+            cwd=dirty_repo,
+            check=True,
+        )
+        marker.write_text("dirty\n", encoding="utf-8")
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(root)
         manifest_path = dataset / "dataset-manifest.json"
         without_provenance = subprocess.run(
             [
                 sys.executable, "-m", "scripts.benchmark.prepare", "dataset",
                 "--dataset", str(dataset), "--write-manifest", str(manifest_path),
             ],
-            cwd=Path(__file__).resolve().parents[1],
+            cwd=dirty_repo,
+            env=environment,
             text=True,
             capture_output=True,
             check=False,
@@ -670,7 +694,8 @@ class PreparationTests(unittest.TestCase):
                 "--dataset", str(dataset), "--write-manifest", str(manifest_path),
                 "--snapshot-id", "dataset-test-snapshot", "--diff-artifact", str(diff_path),
             ],
-            cwd=Path(__file__).resolve().parents[1],
+            cwd=dirty_repo,
+            env=environment,
             text=True,
             capture_output=True,
             check=False,
