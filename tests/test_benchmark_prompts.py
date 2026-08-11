@@ -177,6 +177,23 @@ class PromptTests(unittest.TestCase):
         with self.assertRaisesRegex(BenchmarkError, "hidden case field"):
             render_prompt(case, "normal", templates(), compact_context={})
 
+    def test_empty_hidden_collections_do_not_collide_with_visible_empty_collections(self):
+        """Break: an empty private check list could be mistaken for a leaked visible empty list."""
+        case = one_translation_case(
+            automatic_checks=[],
+            glossary=[],
+            invariants=[],
+            protected_terms=[],
+        )
+
+        try:
+            prompt = render_prompt(case, "normal", templates(), compact_context={})
+        except BenchmarkError as error:
+            self.fail(str(error))
+
+        self.assertIn(case["source"], prompt)
+        self.assertNotIn(case["reference"], prompt)
+
     def test_visible_case_excludes_data_blocks_and_hidden_evaluation_fields(self):
         """Including source, candidate, or evaluation fields in task context breaks prompt separation."""
         case = one_review_case()

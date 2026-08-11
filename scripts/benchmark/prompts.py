@@ -42,6 +42,8 @@ def assert_no_hidden_fields(text: str, case: dict) -> None:
         if field not in case:
             continue
         value = case[field]
+        if value is None or value == "" or value == [] or value == {}:
+            continue
         rendered = canonical_display(value)
         if rendered and rendered in text:
             raise BenchmarkError(f"prompt contains hidden case field: {field}")
