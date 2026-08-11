@@ -1,0 +1,13 @@
+source_term,target_term,locale,context,status,notes
+workspace,espaço de trabalho,pt-PT,UI and documentation,approved,Use consistently in UI and documentation
+sign in,iniciar sessão,pt-PT,Account access,approved,Do not translate as registration
+sign out,terminar sessão,pt-PT,Account access,approved,Use for account-session action
+settings,definições,pt-PT,Product UI,approved,PT-PT product UI
+save,guardar,pt-PT,UI actions,approved,Avoid PT-BR salvar
+delete,eliminar,pt-PT,UI actions,approved,Avoid PT-BR deletar
+file,ficheiro,pt-PT,All surfaces,approved,Avoid PT-BR arquivo
+subscription,subscrição,pt-PT,Paid access,approved,Use for recurring paid access
+free trial,período experimental gratuito,pt-PT,Subscription offers,approved,Do not imply payment is absent after trial
+billing,faturação,pt-PT,Subscription context,approved,Use in subscription context
+mobile data,dados móveis,pt-PT,Mobile settings,approved,Use in mobile settings
+support,equipa de apoio,pt-PT,People,approved,Use equipa de apoio for people and apoio for the function

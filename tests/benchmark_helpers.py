@@ -50,7 +50,7 @@ def synthetic_balanced_cases() -> tuple[list[dict], dict]:
                         case["candidate"] = f"Candidato {case_id}"
                         seeded_errors[case_id] = [{
                             "id": f"{case_id}-e1",
-                            "dimension": "locale",
+                            "dimension": "locale-audience",
                             "severity": "major",
                             "candidate_span": "Candidato",
                             "accepted_corrections": ["Correção"],
@@ -62,7 +62,7 @@ def synthetic_balanced_cases() -> tuple[list[dict], dict]:
 
 
 def write_synthetic_dataset(directory: Path) -> Path:
-    from scripts.benchmark.common import append_jsonl_fsync, atomic_write_json
+    from scripts.benchmark.common import append_jsonl_fsync, atomic_write_json, sha256_file
 
     dataset = directory / "pt-pt-v1"
     dataset.mkdir()
@@ -71,16 +71,46 @@ def write_synthetic_dataset(directory: Path) -> Path:
         append_jsonl_fsync(dataset / "cases.jsonl", case)
     atomic_write_json(dataset / "seeded-errors.json", seeded_errors)
     (dataset / "rubric.md").write_text("Rubric\n", encoding="utf-8")
+    context = dataset / "project-context"
+    context.mkdir()
+    required = {
+        "project-brief.md": "Status: approved\n- Name: Synthetic fixture\n",
+        "locales.yaml": "source_locale: en-GB\ntarget_locales: [pt-PT]\n",
+        "glossary.csv": "source_term,target_term,locale,context,status,notes\nfile,ficheiro,pt-PT,test,approved,fixture\n",
+        "style-guide.md": "Status: approved\n- Voice: Fixture\n",
+        "protected-terms.txt": "Lume\n",
+    }
+    for name, content in required.items():
+        (context / name).write_text(content, encoding="utf-8")
+    atomic_write_json(context / "setup-approval.json", {
+        "status": "approved",
+        "approved_by": "synthetic-fixture",
+        "approved_at": "2026-08-03T10:00:00Z",
+        "context_sha256": {name: sha256_file(context / name) for name in required},
+        "approved_empty": [],
+    })
+    (context / "decisions.md").write_text("Synthetic decisions.\n", encoding="utf-8")
+    (context / "translation-memory.csv").write_text(
+        "source_hash,source_text,target_text,source_locale,target_locale,context,status,provenance\n",
+        encoding="utf-8",
+    )
+    (context / "research-sources.md").write_text("No research.\n", encoding="utf-8")
     return dataset
 
 
 def write_reviewer_signoff(dataset: Path, *, reviewer: str, approved_at: str) -> None:
-    from scripts.benchmark.common import atomic_write_json
+    from scripts.benchmark.common import atomic_write_json, canonical_bytes, sha256_bytes
+    from scripts.benchmark.prepare import build_curation_packet
 
-    cases, _ = synthetic_balanced_cases()
+    packet = build_curation_packet(dataset)
     atomic_write_json(dataset / "reference-signoff.json", {
-        "reviewer": reviewer,
+        "schema_version": 1,
+        "dataset_version": "pt-pt-v1",
+        "reviewer_id": reviewer,
         "approved_at": approved_at,
         "human_reference_authored": True,
-        "approved_case_ids": [case["id"] for case in cases],
+        "approved_case_ids": packet["case_ids"],
+        "dataset_sha256": packet["dataset_sha256"],
+        "context_sha256": packet["context_sha256"],
+        "curation_packet_sha256": sha256_bytes(canonical_bytes(packet)),
     })

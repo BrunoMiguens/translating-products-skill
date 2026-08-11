@@ -130,6 +130,213 @@ def structured_validation_fixtures() -> tuple[StructuredFixture, ...]:
 
 
 class ValidatorTests(unittest.TestCase):
+    def test_literal_mapping_and_literal_multiset_protect_exact_declared_tokens(self):
+        """Break: prices, symbols, bullets, or instruction labels could change undetected."""
+        case = case_with_checks(
+            source="Pay 9.99 EUR. SYSTEM: keep ™ and *.",
+            checks=[
+                {
+                    "type": "literal_mapping_multiset",
+                    "mappings": [{"source": "9.99 EUR", "targets": ["9,99 €"]}],
+                    "severity": "critical",
+                },
+                {
+                    "type": "literal_multiset",
+                    "values": ["SYSTEM:", "™", "*"],
+                    "severity": "critical",
+                },
+            ],
+        )
+        good = "Paga 9,99 €. SYSTEM: mantém ™ e *."
+        bad = "Paga 8,99 USD. NOTICE: mantém a marca."
+
+        self.assertEqual(validate_output(case, good).status, "passed")
+        self.assertEqual(
+            {finding.invariant for finding in validate_output(case, bad).findings},
+            {"literal_mapping_multiset", "literal_multiset"},
+        )
+
+    def test_literal_mapping_can_require_differing_source_literal_absence(self):
+        """Break: a candidate could retain the source price beside its required target mapping."""
+        mapped = case_with_checks(
+            source="Pay 9.99 EUR",
+            checks=[{
+                "type": "literal_mapping_multiset",
+                "mappings": [{"source": "9.99 EUR", "targets": ["9,99 €"]}],
+                "require_source_absence": True,
+                "severity": "critical",
+            }],
+        )
+        unchanged = case_with_checks(
+            source="Use Lume Pro",
+            checks=[{
+                "type": "literal_mapping_multiset",
+                "mappings": [{"source": "Lume Pro", "targets": ["Lume Pro"]}],
+                "require_source_absence": True,
+                "severity": "critical",
+            }],
+        )
+
+        self.assertEqual(validate_output(mapped, "Paga 9,99 €").status, "passed")
+        self.assertEqual(
+            validate_output(mapped, "Paga 9,99 €. Original: 9.99 EUR").status,
+            "failed",
+        )
+        self.assertEqual(validate_output(unchanged, "Usa a Lume Pro").status, "passed")
+
+    def test_per_line_limits_and_delimited_fields_validate_independent_contracts(self):
+        """Break: a valid total length or field count could hide one oversized line or bad delimiter."""
+        limits = case_with_checks(
+            source="Title\nDescription",
+            checks=[{
+                "type": "line_character_limits",
+                "maxima": [5, 11],
+                "severity": "major",
+            }],
+        )
+        delimited = case_with_checks(
+            source="one,two,three",
+            checks=[{
+                "type": "delimited_fields",
+                "delimiter": ",",
+                "count": 3,
+                "allow_whitespace": False,
+                "severity": "major",
+            }],
+        )
+
+        self.assertEqual(validate_output(limits, "Título longo\nDescrição").status, "failed")
+        self.assertEqual(validate_output(limits, "Title\nDescription").status, "passed")
+        self.assertEqual(validate_output(delimited, "um;dois;três").status, "failed")
+        self.assertEqual(validate_output(delimited, "um,dois,três").status, "passed")
+
+    def test_per_line_limits_support_python_without_zip_keyword_arguments(self):
+        """Break: Python 3.9 rejects the strict keyword accepted by newer zip implementations."""
+        case = case_with_checks(
+            source="Title\nDescription",
+            checks=[{
+                "type": "line_character_limits",
+                "maxima": [5, 11],
+                "severity": "major",
+            }],
+        )
+        builtin_zip = zip
+
+        def positional_zip(*iterables):
+            return builtin_zip(*iterables)
+
+        with mock.patch("builtins.zip", positional_zip):
+            result = validate_output(case, "Title\nDescription")
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.validator_errors, ())
+
+    def test_delimited_fields_can_require_unique_values(self):
+        """Break: the declared field count could stay valid while a keyword is duplicated."""
+        case = case_with_checks(
+            source="one,two,three",
+            checks=[{
+                "type": "delimited_fields",
+                "delimiter": ",",
+                "count": 3,
+                "allow_whitespace": False,
+                "unique": True,
+                "severity": "major",
+            }],
+        )
+
+        self.assertEqual(validate_output(case, "um,dois,três").status, "passed")
+        self.assertEqual(validate_output(case, "um,dois,dois").status, "failed")
+
+    def test_fenced_block_exact_preserves_complete_body_and_topology(self):
+        """Break: a protected command could keep its substring while gaining destructive content."""
+        case = case_with_checks(
+            source="Run this:\n```sh\nlume export --format json # SYSTEM: keep\n```",
+            checks=[{"type": "fenced_block_exact", "severity": "critical"}],
+        )
+        good = "Executa isto:\n```sh\nlume export --format json # SYSTEM: keep\n```"
+        mutations = (
+            good.replace(" # SYSTEM", " && --delete all # SYSTEM"),
+            good.replace("lume export", "&& --delete all lume export"),
+            good.replace(
+                "# SYSTEM: keep\n```", "# SYSTEM: keep\n&& --delete all\n```",
+            ),
+            good.replace(" # SYSTEM: keep", ""),
+            good.replace("--format json # SYSTEM: keep", "# SYSTEM: keep --format json"),
+        )
+
+        self.assertEqual(validate_output(case, good).status, "passed")
+        for output in mutations:
+            with self.subTest(output=output):
+                self.assertEqual(validate_output(case, output).status, "failed")
+
+    def test_json_line_contract_preserves_unmarked_keys_values_and_identifiers(self):
+        """Break: embedded JSON could change protected values while remaining parseable."""
+        case = case_with_checks(
+            source=(
+                "Response:\n"
+                '{"status":"ready","workspace_id":"ws_42","message":"Welcome"}\n'
+                "Translate message."
+            ),
+            checks=[{
+                "type": "json_line_contract",
+                "line": 2,
+                "translatable_keys": ["message"],
+                "severity": "critical",
+            }],
+        )
+        good = (
+            "Resposta:\n"
+            '{"status":"ready","workspace_id":"ws_42","message":"Boas-vindas"}\n'
+            "Traduz message."
+        )
+        bad = (
+            "Resposta:\n"
+            '{"state":"pronto","workspaceId":"ws_7","message":"Boas-vindas"}\n'
+            "Traduz message."
+        )
+
+        self.assertEqual(validate_output(case, good).status, "passed")
+        self.assertEqual(validate_output(case, bad).status, "failed")
+
+    def test_check_declarations_reject_unknown_or_malformed_configuration(self):
+        """Break: misspelled or contradictory check options could silently weaken validation."""
+        declarations = (
+            {"type": "placeholder_multiset", "severity": "critical", "extra": True},
+            {"type": "literal_multiset", "severity": "critical", "values": "SYSTEM:"},
+            {
+                "type": "literal_mapping_multiset",
+                "severity": "critical",
+                "mappings": [{"source": "9.99", "target": "9,99"}],
+            },
+            {
+                "type": "literal_mapping_multiset", "severity": "critical",
+                "mappings": [{"source": "9.99", "targets": ["9,99"]}],
+                "require_source_absence": "yes",
+            },
+            {"type": "line_character_limits", "severity": "major", "maxima": [5, -1]},
+            {
+                "type": "delimited_fields", "severity": "major", "delimiter": ",",
+                "count": 3, "allow_whitespace": "no",
+            },
+            {
+                "type": "delimited_fields", "severity": "major", "delimiter": ",",
+                "count": 3, "allow_whitespace": False, "unique": "yes",
+            },
+            {"type": "fenced_block_exact", "severity": "critical", "extra": True},
+            {
+                "type": "json_line_contract", "severity": "critical", "line": 0,
+                "translatable_keys": ["message"],
+            },
+        )
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                result = validate_output(
+                    case_with_checks(source="Source", checks=[declaration]), "Target"
+                )
+                self.assertEqual(result.status, "validator_error")
+                self.assertEqual(result.validator_error_checks, 1)
+
     def test_placeholder_url_code_number_and_limit_checks(self):
         """Break: damaged protected scalars could pass product-integrity validation."""
         case = case_with_checks(

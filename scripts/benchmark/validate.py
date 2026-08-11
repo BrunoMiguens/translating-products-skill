@@ -173,6 +173,151 @@ def _literal_occurrences(text: str, values: Sequence[str]) -> list[str]:
     return [value for _, value in sorted(matches)]
 
 
+def _exact_literal_occurrences(text: str, values: Sequence[str]) -> list[str]:
+    matches: list[tuple[int, str]] = []
+    for value in values:
+        prefix = rf"(?<![\w{re.escape(value[0])}])" if value[0].isalnum() else rf"(?<!{re.escape(value[0])})"
+        suffix = rf"(?![\w{re.escape(value[-1])}])" if value[-1].isalnum() else rf"(?!{re.escape(value[-1])})"
+        pattern = re.compile(prefix + re.escape(value) + suffix)
+        matches.extend((match.start(), value) for match in pattern.finditer(text))
+    return [value for _, value in sorted(matches)]
+
+
+_CHECK_FIELDS: dict[str, frozenset[str]] = {
+    name: frozenset({"type", "severity"})
+    for name in (
+        "placeholder_multiset", "format_specifier_multiset", "url_multiset",
+        "email_multiset", "code_span_multiset", "number_multiset",
+        "json_structure", "xml_structure", "html_structure",
+        "markdown_structure", "fenced_block_exact", "icu_topology",
+    )
+}
+_CHECK_FIELDS.update({
+    "command_multiset": frozenset({"type", "severity", "values", "commands"}),
+    "identifier_multiset": frozenset({"type", "severity", "values", "identifiers"}),
+    "protected_term_multiset": frozenset({"type", "severity", "values", "terms"}),
+    "character_limit": frozenset({"type", "severity", "max"}),
+    "line_count": frozenset({"type", "severity", "count", "lines"}),
+    "csv_shape": frozenset({"type", "severity", "delimiter"}),
+    "forbidden_locale_form": frozenset({
+        "type", "severity", "forms", "forbidden", "case_sensitive",
+    }),
+    "literal_multiset": frozenset({"type", "severity", "values"}),
+    "literal_mapping_multiset": frozenset({
+        "type", "severity", "mappings", "require_source_absence",
+    }),
+    "line_character_limits": frozenset({"type", "severity", "maxima"}),
+    "delimited_fields": frozenset({
+        "type", "severity", "delimiter", "count", "allow_whitespace", "unique",
+    }),
+    "json_line_contract": frozenset({
+        "type", "severity", "line", "translatable_keys",
+    }),
+})
+
+
+def _string_list(value: object, label: str, *, allow_empty: bool = False) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise ValueError(f"{label} must be a list of non-empty strings")
+    result = tuple(value)
+    if (not allow_empty and not result) or not all(
+        isinstance(item, str) and item for item in result
+    ):
+        raise ValueError(f"{label} must be a list of non-empty strings")
+    if len(result) != len(set(result)):
+        raise ValueError(f"{label} must not contain duplicates")
+    return result
+
+
+def _validate_check_declaration(check: Mapping[str, object]) -> None:
+    check_type = check.get("type")
+    if not isinstance(check_type, str) or check_type not in _CHECK_FIELDS:
+        raise ValueError(f"unknown automatic check: {check_type!r}")
+    unknown = sorted(set(check) - _CHECK_FIELDS[check_type])
+    if unknown:
+        raise ValueError(f"{check_type} has unknown fields: {', '.join(unknown)}")
+    _severity(check)
+
+    alias_pairs = {
+        "command_multiset": ("values", "commands"),
+        "identifier_multiset": ("values", "identifiers"),
+        "protected_term_multiset": ("values", "terms"),
+        "line_count": ("count", "lines"),
+        "forbidden_locale_form": ("forms", "forbidden"),
+    }
+    aliases = alias_pairs.get(check_type)
+    if aliases and all(alias in check for alias in aliases):
+        raise ValueError(f"{check_type} cannot declare both {aliases[0]} and {aliases[1]}")
+
+    if check_type in {"command_multiset", "identifier_multiset", "protected_term_multiset"}:
+        values = _configured_values(
+            check,
+            keys={
+                "command_multiset": ("values", "commands"),
+                "identifier_multiset": ("values", "identifiers"),
+                "protected_term_multiset": ("values", "terms"),
+            }[check_type],
+        )
+        if values is not None and len(values) != len(set(values)):
+            raise ValueError(f"{check_type} values must not contain duplicates")
+    elif check_type == "character_limit" and "max" in check:
+        if type(check["max"]) is not int or check["max"] < 0:
+            raise ValueError("character_limit requires a non-negative integer max")
+    elif check_type == "line_count":
+        value = check.get("count", check.get("lines"))
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError("line_count requires a non-negative integer count")
+    elif check_type == "csv_shape" and "delimiter" in check:
+        _csv_dialect("", check["delimiter"])
+    elif check_type == "forbidden_locale_form":
+        configured = check.get("forms", check.get("forbidden"))
+        _string_list(configured, "forbidden locale forms")
+        if "case_sensitive" in check and type(check["case_sensitive"]) is not bool:
+            raise ValueError("forbidden_locale_form case_sensitive must be boolean")
+    elif check_type == "literal_multiset":
+        _string_list(check.get("values"), "literal_multiset values")
+    elif check_type == "literal_mapping_multiset":
+        if (
+            "require_source_absence" in check
+            and type(check["require_source_absence"]) is not bool
+        ):
+            raise ValueError("literal_mapping_multiset require_source_absence must be boolean")
+        mappings = check.get("mappings")
+        if isinstance(mappings, (str, bytes)) or not isinstance(mappings, Sequence) or not mappings:
+            raise ValueError("literal_mapping_multiset mappings must be a non-empty list")
+        sources: list[str] = []
+        for mapping in mappings:
+            if not isinstance(mapping, Mapping) or set(mapping) != {"source", "targets"}:
+                raise ValueError("each literal mapping must contain exactly source and targets")
+            source = mapping["source"]
+            if not isinstance(source, str) or not source:
+                raise ValueError("literal mapping source must be non-empty text")
+            _string_list(mapping["targets"], "literal mapping targets")
+            sources.append(source)
+        if len(sources) != len(set(sources)):
+            raise ValueError("literal mapping sources must not contain duplicates")
+    elif check_type == "line_character_limits":
+        maxima = check.get("maxima")
+        if isinstance(maxima, (str, bytes)) or not isinstance(maxima, Sequence) or not maxima:
+            raise ValueError("line_character_limits maxima must be a non-empty list")
+        if not all(type(maximum) is int and maximum >= 0 for maximum in maxima):
+            raise ValueError("line_character_limits maxima must be non-negative integers")
+    elif check_type == "delimited_fields":
+        delimiter = check.get("delimiter")
+        if not isinstance(delimiter, str) or not delimiter:
+            raise ValueError("delimited_fields delimiter must be non-empty text")
+        if type(check.get("count")) is not int or check["count"] <= 0:
+            raise ValueError("delimited_fields count must be a positive integer")
+        if type(check.get("allow_whitespace")) is not bool:
+            raise ValueError("delimited_fields allow_whitespace must be boolean")
+        if "unique" in check and type(check["unique"]) is not bool:
+            raise ValueError("delimited_fields unique must be boolean")
+    elif check_type == "json_line_contract":
+        if type(check.get("line")) is not int or check["line"] <= 0:
+            raise ValueError("json_line_contract line must be a positive integer")
+        _string_list(check.get("translatable_keys"), "json_line_contract translatable_keys")
+
+
 def check_placeholders(case: Mapping[str, object], output: str, check: Mapping[str, object]) -> tuple[Finding, ...]:
     return _multiset_finding(
         "placeholder_multiset", _severity(check),
@@ -377,6 +522,133 @@ def check_line_count(case: Mapping[str, object], output: str, check: Mapping[str
     return (Finding(
         "line_count", _severity(check), expected, observed, None,
         f"expected {expected} lines but observed {observed}",
+    ),)
+
+
+def check_literal_multiset(
+    case: Mapping[str, object], output: str, check: Mapping[str, object],
+) -> tuple[Finding, ...]:
+    values = _string_list(check.get("values"), "literal_multiset values")
+    return _multiset_finding(
+        "literal_multiset", _severity(check),
+        _exact_literal_occurrences(_source(case), values),
+        _exact_literal_occurrences(output, values), output,
+    )
+
+
+def check_literal_mapping_multiset(
+    case: Mapping[str, object], output: str, check: Mapping[str, object],
+) -> tuple[Finding, ...]:
+    source = _source(case)
+    expected: dict[str, int] = {}
+    observed: dict[str, int] = {}
+    for mapping in check["mappings"]:
+        source_literal = mapping["source"]
+        targets = tuple(mapping["targets"])
+        label = f"{source_literal} -> {' | '.join(targets)}"
+        expected[label] = len(_exact_literal_occurrences(source, (source_literal,)))
+        observed[label] = len(_exact_literal_occurrences(output, targets))
+        if check.get("require_source_absence", False) and source_literal not in targets:
+            absence_label = f"source absent: {source_literal}"
+            expected[absence_label] = 0
+            observed[absence_label] = len(
+                _exact_literal_occurrences(output, (source_literal,))
+            )
+    if expected == observed:
+        return ()
+    return (Finding(
+        "literal_mapping_multiset", _severity(check), expected, observed, None,
+        "candidate changes a declared source-to-target literal mapping",
+    ),)
+
+
+def check_line_character_limits(
+    case: Mapping[str, object], output: str, check: Mapping[str, object],
+) -> tuple[Finding, ...]:
+    maxima = tuple(check["maxima"])
+    lines = output.splitlines()
+    lengths = tuple(len(line) for line in lines)
+    if len(lines) == len(maxima) and all(
+        length <= maximum for length, maximum in zip(lengths, maxima)
+    ):
+        return ()
+    return (Finding(
+        "line_character_limits", _severity(check), {"maxima": maxima},
+        {"line_lengths": lengths}, None,
+        "candidate changes the declared line count or exceeds a per-line character limit",
+    ),)
+
+
+def check_delimited_fields(
+    case: Mapping[str, object], output: str, check: Mapping[str, object],
+) -> tuple[Finding, ...]:
+    delimiter = check["delimiter"]
+    expected_count = check["count"]
+    allow_whitespace = check["allow_whitespace"]
+    fields = output.split(delimiter)
+    valid = "\n" not in output and len(fields) == expected_count and all(fields)
+    if valid and not allow_whitespace:
+        valid = all(field == field.strip() for field in fields)
+    if valid and check.get("unique", False):
+        valid = len(fields) == len(set(fields))
+    if valid:
+        return ()
+    return (Finding(
+        "delimited_fields", _severity(check),
+        {
+            "delimiter": delimiter, "count": expected_count,
+            "allow_whitespace": allow_whitespace,
+            "unique": check.get("unique", False),
+        },
+        {"count": len(fields), "fields": fields}, None,
+        "candidate violates the declared delimited-field grammar",
+    ),)
+
+
+def _json_line_value(text: str, line: int) -> object:
+    lines = text.splitlines()
+    if line > len(lines):
+        raise _CandidateStructureError(f"JSON line {line} is missing")
+    try:
+        return json.loads(lines[line - 1])
+    except json.JSONDecodeError as error:
+        raise _CandidateStructureError(str(error)) from error
+
+
+def check_json_line_contract(
+    case: Mapping[str, object], output: str, check: Mapping[str, object],
+) -> tuple[Finding, ...]:
+    line = check["line"]
+    translatable = set(check["translatable_keys"])
+    try:
+        expected = _json_line_value(_source(case), line)
+    except _CandidateStructureError as error:
+        raise ValueError(f"invalid source json_line_contract: {error}") from error
+    if not isinstance(expected, dict):
+        raise ValueError("source json_line_contract line must contain a JSON object")
+    missing = sorted(translatable - set(expected))
+    if missing:
+        raise ValueError(f"json_line_contract translatable keys are absent: {', '.join(missing)}")
+    try:
+        observed = _json_line_value(output, line)
+    except _CandidateStructureError as error:
+        return (Finding(
+            "json_line_contract", _severity(check), expected,
+            {"parse_error": str(error)}, None,
+            "candidate does not contain the declared embedded JSON object",
+        ),)
+    valid = isinstance(observed, dict) and set(observed) == set(expected)
+    if valid:
+        valid = all(
+            _json_topology(observed[key]) == _json_topology(expected[key])
+            if key in translatable else observed[key] == expected[key]
+            for key in expected
+        )
+    if valid:
+        return ()
+    return (Finding(
+        "json_line_contract", _severity(check), expected, observed, None,
+        "candidate changes protected keys, values, identifiers, or JSON topology",
     ),)
 
 
@@ -709,6 +981,53 @@ def _markdown_fence_content(
             return None
         content = content[position:]
     return content
+
+
+def _split_line_ending(line: str) -> tuple[str, str]:
+    content = line.rstrip("\r\n")
+    return content, line[len(content):]
+
+
+def _parse_fenced_blocks_exact(text: str) -> object:
+    blocks: list[object] = []
+    active: dict[str, object] | None = None
+    for raw_line in text.splitlines(keepends=True):
+        line, ending = _split_line_ending(raw_line)
+        if active is not None:
+            body_line = _markdown_fence_content(line, active["containers"])
+            fence = None if body_line is None else _MARKDOWN_FENCE.match(body_line)
+            if fence:
+                marker = fence.group(1)
+                remainder = fence.group(2)
+                if (
+                    marker[0] == active["marker"]
+                    and len(marker) >= active["width"]
+                    and not remainder.strip(" \t")
+                ):
+                    blocks.append((
+                        active["marker"], active["width"], active["info"],
+                        active["containers"], len(marker), "".join(active["body"]),
+                    ))
+                    active = None
+                    continue
+            active["body"].append((line if body_line is None else body_line) + ending)
+            continue
+
+        fence_line, containers = _markdown_container_content(line)
+        fence = _MARKDOWN_FENCE.match(fence_line)
+        if fence:
+            marker = fence.group(1)
+            info = fence.group(2)
+            if marker[0] != "`" or "`" not in info:
+                active = {
+                    "marker": marker[0], "width": len(marker), "info": info,
+                    "containers": containers, "body": [],
+                }
+    if active is not None:
+        raise _CandidateStructureError("unclosed Markdown code fence")
+    if not blocks:
+        raise _CandidateStructureError("no Markdown fenced blocks")
+    return tuple(blocks)
 
 
 def _markdown_reference_definitions(
@@ -1132,6 +1451,14 @@ def check_markdown_structure(case: Mapping[str, object], output: str, check: Map
     return _structured_check("markdown_structure", case, output, check, _parse_markdown_topology)
 
 
+def check_fenced_block_exact(
+    case: Mapping[str, object], output: str, check: Mapping[str, object],
+) -> tuple[Finding, ...]:
+    return _structured_check(
+        "fenced_block_exact", case, output, check, _parse_fenced_blocks_exact,
+    )
+
+
 def check_csv_shape(case: Mapping[str, object], output: str, check: Mapping[str, object]) -> tuple[Finding, ...]:
     delimiter = _csv_dialect(_source(case), check.get("delimiter"))
     parser = lambda text: _parse_csv_topology(text, delimiter)
@@ -1180,10 +1507,16 @@ CHECKS: dict[str, Check] = {
     "number_multiset": check_numbers,
     "character_limit": check_character_limit,
     "line_count": check_line_count,
+    "literal_multiset": check_literal_multiset,
+    "literal_mapping_multiset": check_literal_mapping_multiset,
+    "line_character_limits": check_line_character_limits,
+    "delimited_fields": check_delimited_fields,
+    "json_line_contract": check_json_line_contract,
     "json_structure": check_json_structure,
     "xml_structure": check_xml_structure,
     "html_structure": check_html_structure,
     "markdown_structure": check_markdown_structure,
+    "fenced_block_exact": check_fenced_block_exact,
     "csv_shape": check_csv_shape,
     "icu_topology": check_icu_topology,
     "forbidden_locale_form": check_forbidden_locale_form,
@@ -1211,8 +1544,7 @@ def validate_output(case: Mapping[str, object], output: str) -> ValidationResult
             continue
         check_type = check.get("type")
         try:
-            if not isinstance(check_type, str) or check_type not in CHECKS:
-                raise ValueError(f"unknown automatic check: {check_type!r}")
+            _validate_check_declaration(check)
             check_findings = CHECKS[check_type](case, output, check)
             if not isinstance(check_findings, tuple) or not all(
                 isinstance(finding, Finding) for finding in check_findings

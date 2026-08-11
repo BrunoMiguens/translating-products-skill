@@ -1,0 +1,4 @@
+source_locale: en-GB
+target_locales: [pt-PT]
+fallback_locale: en-GB
+neutral_variants_allowed: false

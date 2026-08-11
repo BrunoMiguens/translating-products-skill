@@ -31,6 +31,10 @@ _SEEDED_ERROR_REQUIRED = {
     "correction_required", "notes",
 }
 _SEEDED_SEVERITIES = {"critical", "major", "minor", "neutral"}
+_SEEDED_DIMENSIONS = {
+    "accuracy", "terminology", "linguistic-quality", "style-register",
+    "locale-audience", "product-integrity",
+}
 
 
 def _require_equal(actual: object, expected: object, description: str) -> None:
@@ -38,8 +42,11 @@ def _require_equal(actual: object, expected: object, description: str) -> None:
         raise BenchmarkError(f"invalid {description}: expected {expected!r}, got {actual!r}")
 
 
-def _validate_seeded_errors(seeded_errors: Mapping[str, object], review_ids: set[str]) -> None:
-    _require_equal(set(seeded_errors), review_ids, "seeded-error case ids")
+def _validate_seeded_errors(
+    seeded_errors: Mapping[str, object],
+    review_candidates: Mapping[str, str],
+) -> None:
+    _require_equal(set(seeded_errors), set(review_candidates), "seeded-error case ids")
     seeded_ids: set[str] = set()
     for case_id, inventory in seeded_errors.items():
         if not isinstance(inventory, list) or not inventory:
@@ -48,9 +55,14 @@ def _validate_seeded_errors(seeded_errors: Mapping[str, object], review_ids: set
             if not isinstance(error, Mapping):
                 raise BenchmarkError(f"seeded error for {case_id} must be an object")
             missing = _SEEDED_ERROR_REQUIRED - set(error)
+            unknown = set(error) - _SEEDED_ERROR_REQUIRED
             if missing:
                 raise BenchmarkError(
                     f"seeded error for {case_id} missing required fields: {sorted(missing)!r}"
+                )
+            if unknown:
+                raise BenchmarkError(
+                    f"seeded error for {case_id} has unknown fields: {sorted(unknown)!r}"
                 )
             error_id = error["id"]
             if not isinstance(error_id, str) or not error_id:
@@ -58,13 +70,20 @@ def _validate_seeded_errors(seeded_errors: Mapping[str, object], review_ids: set
             if error_id in seeded_ids:
                 raise BenchmarkError(f"duplicate seeded error id: {error_id}")
             seeded_ids.add(error_id)
-            if not isinstance(error["dimension"], str) or not error["dimension"]:
+            if (
+                not isinstance(error["dimension"], str)
+                or error["dimension"] not in _SEEDED_DIMENSIONS
+            ):
                 raise BenchmarkError(f"seeded error {error_id} has an invalid dimension")
             severity = error["severity"]
             if not isinstance(severity, str) or severity not in _SEEDED_SEVERITIES:
                 raise BenchmarkError(f"seeded error {error_id} has an invalid severity")
             if not isinstance(error["candidate_span"], str) or not error["candidate_span"]:
                 raise BenchmarkError(f"seeded error {error_id} has an invalid candidate span")
+            if review_candidates[case_id].count(error["candidate_span"]) != 1:
+                raise BenchmarkError(
+                    f"seeded error {error_id} candidate span must occur exactly once"
+                )
             corrections = error["accepted_corrections"]
             if (
                 not isinstance(corrections, list)
@@ -74,6 +93,15 @@ def _validate_seeded_errors(seeded_errors: Mapping[str, object], review_ids: set
                 raise BenchmarkError(f"seeded error {error_id} has invalid accepted corrections")
             if type(error["correction_required"]) is not bool:
                 raise BenchmarkError(f"seeded error {error_id} must state correction_required")
+            if (severity == "neutral") != (not error["correction_required"]):
+                raise BenchmarkError(
+                    f"seeded error {error_id} must be neutral iff correction_required is false"
+                )
+            if not error["correction_required"]:
+                if error["candidate_span"] not in corrections:
+                    raise BenchmarkError(
+                        f"seeded error {error_id} false-positive decision must preserve its span"
+                    )
             if not isinstance(error["notes"], str) or not error["notes"]:
                 raise BenchmarkError(f"seeded error {error_id} requires reviewer notes")
 
@@ -85,7 +113,7 @@ def validate_cases(cases: Sequence[Mapping[str, object]], seeded_errors: Mapping
         raise BenchmarkError("seeded errors must be an object keyed by review case id")
 
     ids: set[str] = set()
-    review_ids: set[str] = set()
+    review_candidates: dict[str, str] = {}
     for case in cases:
         if not isinstance(case, Mapping):
             raise BenchmarkError("case must be an object")
@@ -111,10 +139,21 @@ def validate_cases(cases: Sequence[Mapping[str, object]], seeded_errors: Mapping
             raise BenchmarkError(f"invalid difficulty: {case['difficulty']!r}")
         if type(case["diagnostic"]) is not bool:
             raise BenchmarkError("diagnostic must be a boolean")
+        for field in (
+            "content_type", "source_locale", "target_locale", "source", "context",
+            "audience", "register", "reference", "reference_notes",
+        ):
+            if not isinstance(case[field], str) or not case[field].strip():
+                raise BenchmarkError(f"case {case_id} requires non-empty {field}")
+        if not isinstance(case["constraints"], Mapping):
+            raise BenchmarkError(f"case {case_id} constraints must be an object")
+        for field in ("glossary", "protected_terms", "invariants", "automatic_checks"):
+            if not isinstance(case[field], list):
+                raise BenchmarkError(f"case {case_id} {field} must be a list")
         if case["task"] == "review":
             if not isinstance(case.get("candidate"), str) or not case["candidate"]:
                 raise BenchmarkError(f"review case {case_id} requires a candidate")
-            review_ids.add(case_id)
+            review_candidates[case_id] = case["candidate"]
         elif "candidate" in case:
             raise BenchmarkError(f"translation case {case_id} must not contain candidate")
 
@@ -123,4 +162,4 @@ def validate_cases(cases: Sequence[Mapping[str, object]], seeded_errors: Mapping
     _require_equal(Counter(case["surface"] for case in cases), EXPECTED_BY_SURFACE, "surface balance")
     _require_equal(Counter(case["difficulty"] for case in cases), EXPECTED_BY_DIFFICULTY, "difficulty balance")
     _require_equal(sum(case["diagnostic"] for case in cases), EXPECTED_DIAGNOSTIC, "diagnostic count")
-    _validate_seeded_errors(seeded_errors, review_ids)
+    _validate_seeded_errors(seeded_errors, review_candidates)
