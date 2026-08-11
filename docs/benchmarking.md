@@ -26,6 +26,28 @@ Prepare the immutable run manifest with schedule seed `20260803`, bootstrap seed
 through each applicable condition. Inspect transport only, record the discarded
 calibration evidence hash, and never merge those outputs into the primary run.
 
+For the prepared Claude/Codex diagnostic pack, validate and run all 26 calls
+without desktop copy/paste:
+
+```bash
+python3 -m scripts.benchmark.cli_calibration status
+python3 -m scripts.benchmark.cli_calibration run --app all --probe
+python3 -m scripts.benchmark.cli_calibration run --app all
+```
+
+The probe makes one ordinary calibration call per selected CLI to verify login
+and transport. After it succeeds, the full command skips those two completed
+tasks and runs the remaining 24. The runner uses the existing CLI logins, starts
+one non-persistent process per prompt, saves final answers in each task's
+`RESPONSE.txt`, and appends ignored diagnostic evidence to
+`benchmark-private/desktop-calibration/evidence.jsonl`.
+It resumes only responses with matching success evidence and stops after the
+first host or infrastructure failure. Pin a provider model with
+`--claude-model MODEL` and `--codex-model MODEL`; use `--force` only when an
+existing calibration response must be deliberately replaced. These convenience
+runs remain diagnostic because they do not provide the sandbox-policy
+attestation required by canonical CLI evidence.
+
 Create a fresh ignored `benchmark-evidence/` directory and execute the exact
 405-run schedule without changing prompts, provider/model/configuration, suite
 snapshot, condition plan, or schedule. Ordinary model failures are outcomes,
