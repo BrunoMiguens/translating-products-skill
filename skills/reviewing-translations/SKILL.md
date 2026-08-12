@@ -80,10 +80,15 @@ For a structured audit, load
 `SKILL_DIRECTORY/references/review-artifact-schema.json` as the canonical
 request/result vocabulary. Record one result per unit with its primary pass,
 optional challenge, adjudication, recommendation and correction QA, source
-issue, and separate `human_review.status` provenance. Classify each unit as
-`no_issue_detected`, `change_recommended`, `blocked_by_source`, or `unresolved`.
-These are review findings, not automated approval or claims of human or native
-quality.
+issue, and separate `human_review.status` provenance.
+
+Machine classifications: `no_issue_detected`, `change_recommended`, `blocked_by_source`, `unresolved`
+
+Human-review statuses: `not_requested`, `pending`, `completed`
+
+The human-review status is separate provenance and is never inferred from a
+machine classification. These are review findings, not automated approval or
+claims of human or native quality.
 
 The primary reviewer applies all six passes and records issues, confidence, and
 whether human review is required. For `selective_challenge`, challenge only the
@@ -92,7 +97,11 @@ units whose primary pass found no issue, plus any additional selected units; for
 context, route capabilities, source, current target, protected terms, and
 automatic checks. Challenge input excludes primary conclusions: omit primary
 findings, confidence, classification, recommendation, and rationale so the
-challenge is independent rather than an edit of the first pass.
+challenge pass receives the same sanitized evidence in every execution mode.
+A fresh-agent context can supply an independently blinded reviewer. A
+sequential challenge pass runs in the same agent context and therefore cannot
+claim equivalent epistemic independence even though its explicit input omits
+the primary conclusions.
 
 Adjudicate primary/challenge disagreement using ownership and authority
 precedence. Accepted defects become `change_recommended`; source defects that

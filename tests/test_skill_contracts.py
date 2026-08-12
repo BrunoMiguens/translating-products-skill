@@ -1,9 +1,11 @@
+import ast
 import base64
 import copy
 from datetime import date, timedelta
 import hashlib
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +16,38 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTER = ROOT / "skills/translating-products/scripts/route_capabilities.py"
+
+
+def markdown_section(text: str, heading: str) -> str:
+    match = re.search(
+        rf"(?ms)^## {re.escape(heading)}\s*$(.*?)(?=^## |\Z)",
+        text,
+    )
+    if match is None:
+        raise AssertionError(f"missing section: {heading}")
+    return match.group(1).strip()
+
+
+def numbered_steps(section: str) -> list[str]:
+    matches = list(re.finditer(r"(?ms)^(\d+)\. (.*?)(?=^\d+\. |\Z)", section))
+    numbers = [int(match.group(1)) for match in matches]
+    if numbers != list(range(1, len(matches) + 1)):
+        raise AssertionError(f"non-contiguous numbered steps: {numbers}")
+    return [" ".join(match.group(2).split()) for match in matches]
+
+
+def markdown_table(section: str) -> list[tuple[str, str]]:
+    rows = []
+    for line in section.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) != 2 or cells[0] in {"Input", "---"}:
+            continue
+        if set(cells[0]) == {"-"}:
+            continue
+        rows.append((cells[0].strip("`"), cells[1]))
+    return rows
 
 
 def request(*, authorized=()):
@@ -252,23 +286,167 @@ def reviewed_registry_entry(
 
 
 class SkillContractTests(unittest.TestCase):
-    def test_portable_skills_define_the_holistic_review_workflow(self):
-        """Break: an installed skill could fall back to one-pass approval semantics."""
-        required_review_terms = {
-            "no_issue_detected",
-            "blocked_by_source",
-            "selective_challenge",
-            "full_challenge",
-            "review-artifact-schema.json",
-            "validate_review_artifact.py",
+    def assert_holistic_workflow(self, text: str) -> None:
+        steps = numbered_steps(markdown_section(text, "Holistic review workflow"))
+        expected = (
+            ("Map ", "`task_kind: audit`", "`task_kind: translation`", "No language name"),
+            ("Combine ", "`verification_requirements`", "review-depth"),
+            ("Select ", "`selective_challenge`", "`full_challenge`", "sanitized challenge input", "excludes primary conclusions"),
+            ("Derive ", "six subagent policy inputs", "Call the installed `should_use_subagents`", "named arguments"),
+            ("Branch only ", "boolean result", "fresh agent context", "same agent context", "`execution_mode: sequential`", "context isolation was unavailable"),
+            ("Adjudicate ", "ownership", "authority precedence"),
+            ("Correct ", "only", "changed unit", "ordinary six-pass QA", "`recommendation_qa`"),
+            ("Construct ", "complete canonical result", "validate_review_artifact.py", "Validation failure blocks completion"),
+            ("Preserve ", "caller-selected output path", "UTC timestamp", "random or content-derived suffix", "Refuse silent overwrite", "explicitly requests replacement"),
+            ("Serialize only ", "caller's requested output"),
+        )
+        self.assertEqual(len(steps), len(expected), steps)
+        for number, (step, contract) in enumerate(zip(steps, expected), 1):
+            self.assertTrue(
+                step.startswith(contract[0]),
+                f"step {number}: {step}",
+            )
+            for phrase in contract[1:]:
+                self.assertIn(phrase, step, f"step {number}: {step}")
+
+        normalized = " ".join(text.split())
+        self.assertIn(
+            "Both execution modes use identical sanitized challenge input, coverage, "
+            "adjudication, changed-unit correction QA, artifact schema, and deterministic validator.",
+            normalized,
+        )
+        self.assertIn(
+            "This is evidence, coverage, and validation equivalence, not equivalent epistemic independence.",
+            normalized,
+        )
+        for false_claim in (
+            "Sequential mode provides equivalent epistemic independence",
+            "Sequential mode provides the same epistemic independence",
+            "Sequential mode is an independently blinded reviewer",
+            "same fresh framing",
+            "independent challenge framing",
+            "Concurrency changes only scheduling",
+            "Record only `execution_mode` differently",
+        ):
+            self.assertNotIn(false_claim, normalized)
+
+    def test_orchestrator_parses_as_the_ordered_holistic_workflow(self):
+        """Break: review phases could be skipped, reordered, negated, or overclaim independence."""
+        text = (ROOT / "skills/translating-products/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_holistic_workflow(text)
+
+    def test_holistic_workflow_contract_rejects_dangerous_mutations(self):
+        """Break: a source-presence test could miss opposite or reordered instructions."""
+        text = (ROOT / "skills/translating-products/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assert_holistic_workflow(text)
+        section = markdown_section(text, "Holistic review workflow")
+        steps = numbered_steps(section)
+        missing_section = "\n".join(
+            f"{number}. {step}"
+            for number, step in enumerate([*steps[:6], *steps[7:]], 1)
+        )
+        missing = text.replace(section, missing_section)
+        negated_steps = [*steps]
+        negated_steps[3] = negated_steps[3].replace(
+            "Call the installed",
+            "Do not call the installed",
+        )
+        negated_section = "\n".join(
+            f"{number}. {step}"
+            for number, step in enumerate(negated_steps, 1)
+        )
+        negated = text.replace(section, negated_section)
+        reordered_steps = [*steps]
+        reordered_steps[5], reordered_steps[6] = reordered_steps[6], reordered_steps[5]
+        reordered_section = "\n".join(
+            f"{number}. {step}"
+            for number, step in enumerate(reordered_steps, 1)
+        )
+        reordered = text.replace(section, reordered_section)
+        false_independence = (
+            text + "\nSequential mode provides equivalent epistemic independence.\n"
+        )
+        for name, mutation in (
+            ("missing", missing),
+            ("negated", negated),
+            ("reordered", reordered),
+            ("false-independence", false_independence),
+        ):
+            with self.subTest(mutation=name), self.assertRaises(AssertionError):
+                self.assert_holistic_workflow(mutation)
+
+    def test_review_statuses_separate_machine_findings_from_human_provenance(self):
+        """Break: an automated classification could imply completed human review."""
+        text = (ROOT / "skills/reviewing-translations/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        section = markdown_section(text, "Canonical review record")
+        machine = re.search(r"Machine classifications:\s*(.*)$", section, re.MULTILINE)
+        human = re.search(r"Human-review statuses:\s*(.*)$", section, re.MULTILINE)
+        self.assertIsNotNone(machine)
+        self.assertIsNotNone(human)
+        assert machine is not None and human is not None
+        self.assertEqual(
+            re.findall(r"`([^`]+)`", machine.group(1)),
+            ["no_issue_detected", "change_recommended", "blocked_by_source", "unresolved"],
+        )
+        self.assertEqual(
+            re.findall(r"`([^`]+)`", human.group(1)),
+            ["not_requested", "pending", "completed"],
+        )
+        self.assertIn("separate provenance", " ".join(section.split()))
+
+    def test_subagent_policy_contract_calls_exactly_six_derived_inputs(self):
+        """Break: the skill could mention policy without making an operational decision."""
+        text = (ROOT / "skills/translating-products/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        section = markdown_section(text, "Subagent policy decision")
+        rows = markdown_table(section)
+        self.assertEqual(
+            [name for name, _ in rows],
+            [
+                "host_supports_subagents",
+                "target_locales",
+                "source_units",
+                "separable_sections",
+                "terminology_pass",
+                "independent_review",
+            ],
+        )
+        derivations = dict(rows)
+        required_derivations = {
+            "host_supports_subagents": ("fresh-agent context", "false"),
+            "target_locales": ("isolated target-locale branches", "count"),
+            "source_units": ("distinct canonical source units", "count"),
+            "separable_sections": ("independently assignable source sections", "minimum `1`"),
+            "terminology_pass": ("standalone terminology task", "ordinary terminology QA"),
+            "independent_review": ("`selective_challenge`", "`full_challenge`", "`single`"),
         }
-        for skill_name in ("reviewing-translations", "translating-products"):
-            with self.subTest(skill=skill_name):
-                text = (ROOT / f"skills/{skill_name}/SKILL.md").read_text(
-                    encoding="utf-8"
-                )
-                for term in required_review_terms:
-                    self.assertIn(term, text)
+        for name, phrases in required_derivations.items():
+            with self.subTest(input=name):
+                for phrase in phrases:
+                    self.assertIn(phrase, derivations[name])
+
+        code = re.search(r"(?ms)```python\s+(.*?)```", section)
+        self.assertIsNotNone(code)
+        assert code is not None
+        tree = ast.parse(code.group(1))
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        self.assertEqual(len(calls), 1)
+        call = calls[0]
+        self.assertIsInstance(call.func, ast.Name)
+        self.assertEqual(call.func.id, "should_use_subagents")
+        self.assertEqual(call.args, [])
+        expected_names = [name for name, _ in rows]
+        self.assertEqual([keyword.arg for keyword in call.keywords], expected_names)
+        for keyword, name in zip(call.keywords, expected_names):
+            self.assertIsInstance(keyword.value, ast.Name)
+            self.assertEqual(keyword.value.id, name)
 
     def test_review_skill_covers_universal_reasoning_and_blind_challenge(self):
         """Break: review could remain literal, decontextualized, or anchored to its first pass."""
@@ -291,23 +469,19 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("primary conclusions", text)
         self.assertIn("excludes primary conclusions", text)
 
-    def test_portable_review_outputs_are_collision_resistant(self):
-        """Break: concurrent or repeated runs could replace a caller's review artifact."""
-        required_path_contract = (
-            "caller-selected output path",
-            "utc timestamp",
-            "random or content-derived suffix",
-            "explicitly requests replacement",
-            "refuse silent overwrite",
+    def test_review_artifact_path_recipe_preserves_callers_and_refuses_overwrite(self):
+        """Break: repeated review runs could collide or replace caller-selected paths."""
+        text = (ROOT / "skills/reviewing-translations/SKILL.md").read_text(
+            encoding="utf-8"
         )
-        for skill_name in ("reviewing-translations", "translating-products"):
-            with self.subTest(skill=skill_name):
-                text = (ROOT / f"skills/{skill_name}/SKILL.md").read_text(
-                    encoding="utf-8"
-                ).lower()
-                text = " ".join(text.split())
-                for contract in required_path_contract:
-                    self.assertIn(contract, text)
+        section = " ".join(markdown_section(text, "Review artifact paths").split())
+        recipe = re.compile(
+            r"^Preserve .*caller-selected output path.*\. Otherwise .*UTC timestamp "
+            r"plus a random or content-derived suffix.*\. Refuse silent overwrite\. "
+            r"An existing review output may be reused only when the caller explicitly "
+            r"requests replacement\.$"
+        )
+        self.assertRegex(section, recipe)
 
     def test_production_skills_do_not_embed_evaluation_answers(self):
         """Break: portable instructions could memorize repository evaluation cases."""

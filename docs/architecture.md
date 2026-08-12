@@ -127,15 +127,22 @@ single-locale work stays in one agent.
 Every sub-agent receives the same brief, glossary, protected terms, style
 guide, and structural constraints. The orchestrator composes and reviews the
 result. Hosts without sub-agent support execute the same specialist stages
-sequentially, so concurrency never changes the public behavior.
+sequentially with the same explicit evidence and deterministic gates.
 
-This equivalence also applies to independent review. The same canonical unit
-inputs, review-depth selection, blinded challenge, adjudication rules,
-correction QA, validation gate, and result record are used in either mode;
-only `execution_mode` differs. Caller-selected output paths are preserved.
-Otherwise each run uses a collision-resistant identifier containing a UTC
-timestamp and a random or content-derived suffix, and an existing review
-artifact is never silently overwritten.
+For review, a sub-agent runs the challenge in a fresh agent context and can be
+an independently blinded reviewer. Sequential mode runs a challenge pass in
+the same agent context: its explicit input still excludes every primary
+conclusion, but prior context cannot be erased, so it does not provide
+equivalent epistemic independence. `execution_mode: sequential` records that
+context isolation was unavailable.
+
+Both modes use identical sanitized challenge input, coverage, adjudication,
+changed-unit correction QA, canonical artifact schema, and deterministic
+validator. This is evidence, coverage, and validation equivalence rather than
+equivalent independence. Caller-selected output paths are preserved. Otherwise
+each run uses a collision-resistant identifier containing a UTC timestamp and
+a random or content-derived suffix, and an existing review artifact is never
+silently overwritten.
 
 ## External adapter trust
 
@@ -196,9 +203,11 @@ higher-precedence full-review condition applies; ordinary translation QA is a
 Challenge input contains the approved context, route capabilities, source,
 current target, protected terms, and automatic checks, but no primary finding,
 confidence, classification, recommendation, or rationale. This blinded data
-flow lets the challenge form an independent conclusion. Disagreements resolve
-through ownership and the normal authority order. Accepted defects are
-corrected by their owner, and only changed units repeat ordinary QA.
+flow limits direct anchoring. It is independently blinded only in a fresh-agent
+context; a same-agent sequential challenge retains the limitation recorded by
+its execution mode. Disagreements resolve through ownership and the normal
+authority order. Accepted defects are corrected by their owner, and only
+changed units repeat ordinary QA.
 
 The canonical schema and validator define request/result records. Unit status
 is one of `no_issue_detected`, `change_recommended`, `blocked_by_source`, or

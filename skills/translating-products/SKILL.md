@@ -44,7 +44,7 @@ Follow this order:
 11. Load every selected bundled skill completely once. For each selected external skill, consume only its returned `external_loads.files` payload: strictly base64-decode every path-sorted file, verify its declared size and SHA-256, recompute `tree_sha256` from the canonical inventory without `content_base64`, and load `SKILL.md` and referenced content from those verified bytes as one atomic artifact. Treat `load_path` as advisory and never reopen it or the original installation root for authoritative bytes. Fail the external load on any missing, duplicate, malformed, or mismatched entry. Execute each successfully loaded skill only in its declared phases. Production skills provide reusable reasoning and procedures; evaluation cases are not routing rules or fixed answers.
 12. Run shared surface, platform, and format `inspect` work before linguistic drafting. Preserve its resulting translation contract for every target branch.
 13. For each target branch, `translate` with core against `.translation/glossary.csv`, `.translation/style-guide.md`, and `.translation/protected-terms.txt`; `refine` broad-to-narrow with selected writing-system, language, and locale modules; `integrate` through the selected product modules; then run the primary six-pass review. **Do not combine linguistic branches**: merge outputs only after every target completes review.
-14. After each primary locale review, execute the holistic review workflow below. Use subagents only when `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` returns true. When false or unavailable, execute the same phase inputs, selection, independent challenge framing, adjudication, correction QA, validation, and records sequentially. Concurrency changes only scheduling, never review semantics or public output.
+14. After each primary locale review, execute the holistic review workflow below. Derive and call `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` exactly as specified below, then branch only on its boolean result. A true result uses a fresh-agent context; a false result uses a sequential challenge pass and records that context isolation was unavailable.
 15. Append newly inferred decisions to `.translation/decisions.md` and newly inferred terms to draft terminology with `draft` status; do not silently promote either to approved policy.
 16. Re-read the caller-requested output contract and apply it to the completed
     artifact as the last action before responding. Keep routing,
@@ -71,31 +71,72 @@ After each primary locale review:
    result inputs required by policy. Its result chooses `single`,
    `selective_challenge`, or `full_challenge`; higher-precedence safety and
    independence requirements cannot be weakened by a caller request.
-3. For `selective_challenge`, challenge each unit whose primary pass reports no
-   issue, plus any additional selected units; for `full_challenge`, challenge
-   every unit. Construct canonical challenge input from approved context, the
-   routed selected and missing capabilities, source, current target, protected
-   terms, and automatic checks. Exclude primary conclusions: do not include the
-   primary's issues, confidence, classification, recommendation, or rationale.
-4. Run the challenge concurrently only when `should_use_subagents` is true;
-   otherwise give the same inputs to the reviewing skill sequentially with the
-   same fresh framing. Record only `execution_mode` differently.
-5. Adjudicate disagreements through the ownership rules and authority
-   precedence below. Correct accepted defects through their owner, changing
-   only the affected target unit, then rerun ordinary six-pass QA only on each
-   changed unit and record `recommendation_qa`.
-6. Construct the complete canonical result and run
+3. Select challenge coverage: for `selective_challenge`, challenge each unit
+   whose primary pass reports no issue plus any additional selected units; for
+   `full_challenge`, challenge every unit. Build sanitized challenge input from
+   approved context, routed selected and missing capabilities, source, current
+   target, protected terms, and automatic checks. It excludes primary
+   conclusions: primary issues, confidence, classification, recommendation,
+   and rationale are absent.
+4. Derive the six subagent policy inputs below. Call the installed
+   `should_use_subagents` function with exactly those named arguments.
+5. Branch only on its boolean result. When true, run the challenge in a fresh
+   agent context and set `execution_mode: parallel`. When false, run a challenge
+   pass in the same agent context, set `execution_mode: sequential`, and record
+   that context isolation was unavailable.
+6. Adjudicate disagreements through ownership and the authority precedence
+   below.
+7. Correct accepted defects through their owner, changing only the changed unit,
+   then rerun ordinary six-pass QA only on each changed unit and record
+   `recommendation_qa`.
+8. Construct the complete canonical result and run
    `python3 REVIEW_SKILL_DIRECTORY/scripts/validate_review_artifact.py --request
    REVIEW_REQUEST.json --result REVIEW_RESULT.json`. Add `--draft-terminology
    DRAFT_TERMINOLOGY.csv` when drafts were recorded. Validation failure blocks
    completion.
-7. Preserve any caller-selected output path and all caller-selected output paths
+9. Preserve any caller-selected output path and all caller-selected output paths
    when separate artifacts are requested. Otherwise create a run identifier
    containing a UTC timestamp plus a random or content-derived suffix. Refuse
    silent overwrite. An existing review output may be reused only when the
    caller explicitly requests replacement.
-8. Serialize only the caller's requested output. Review records, routes, and
+10. Serialize only the caller's requested output. Review records, routes, and
    drafts remain internal unless requested.
+
+## Subagent policy decision
+
+Load `should_use_subagents` from the installed
+`SKILL_DIRECTORY/scripts/policy.py` as a Python callable. Derive its inputs from
+the current routed request and review decision:
+
+| Input | Derivation |
+|---|---|
+| `host_supports_subagents` | `true` only when the host can create a fresh-agent context for the challenge; otherwise `false`. |
+| `target_locales` | The count of isolated target-locale branches in the routed request. |
+| `source_units` | The count of distinct canonical source units in the decoded artifact; do not multiply by locale count. |
+| `separable_sections` | The count of independently assignable source sections; use a minimum `1` when no natural partition exists. |
+| `terminology_pass` | `true` only when the plan includes a standalone terminology task beyond ordinary terminology QA; otherwise `false`. |
+| `independent_review` | `true` when review-depth returned `selective_challenge` or `full_challenge`; `false` for `single`. |
+
+Call it with the six names unchanged:
+
+```python
+use_subagents = should_use_subagents(
+    host_supports_subagents=host_supports_subagents,
+    target_locales=target_locales,
+    source_units=source_units,
+    separable_sections=separable_sections,
+    terminology_pass=terminology_pass,
+    independent_review=independent_review,
+)
+```
+
+Branch only on `use_subagents`. A true result runs the challenge in a fresh
+agent context. A false result runs a challenge pass in the same agent context;
+`execution_mode: sequential` records that context isolation was unavailable.
+Both execution modes use identical sanitized challenge input, coverage,
+adjudication, changed-unit correction QA, artifact schema, and deterministic
+validator. This is evidence, coverage, and validation equivalence, not
+equivalent epistemic independence.
 
 ## Project-context schema
 
