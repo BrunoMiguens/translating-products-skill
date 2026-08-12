@@ -14,7 +14,7 @@
     "required": ["schema_version", "review_id", "source_locale", "targets"],
     "properties": {
       "schema_version": {"const": 1},
-      "review_id": {"type": "string", "minLength": 1},
+      "review_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
       "source_locale": {"$ref": "#/$defs/locale"},
       "targets": {
         "type": "array",
@@ -29,7 +29,7 @@
     "required": ["schema_version", "review_id", "source_locale", "locales", "summary"],
     "properties": {
       "schema_version": {"const": 1},
-      "review_id": {"type": "string", "minLength": 1},
+      "review_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
       "source_locale": {"$ref": "#/$defs/locale"},
       "locales": {
         "type": "array",
@@ -47,7 +47,7 @@
     "string_list": {
       "type": "array",
       "uniqueItems": true,
-      "items": {"type": "string", "minLength": 1}
+      "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
     },
     "review_depth": {
       "enum": ["single", "selective_challenge", "full_challenge"]
@@ -85,7 +85,7 @@
         "automatic_checks"
       ],
       "properties": {
-        "unit_id": {"type": "string", "minLength": 1},
+        "unit_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "source": {"type": "string"},
         "current_target": {"type": "string"},
         "protected_terms": {"$ref": "#/$defs/string_list"},
@@ -124,10 +124,10 @@
       "additionalProperties": false,
       "required": ["dimension", "issue", "owner", "affected_segment"],
       "properties": {
-        "dimension": {"type": "string", "minLength": 1},
-        "issue": {"type": "string", "minLength": 1},
-        "owner": {"type": "string", "minLength": 1},
-        "affected_segment": {"type": "string", "minLength": 1}
+        "dimension": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "issue": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "owner": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "affected_segment": {"type": "string", "minLength": 1, "pattern": "\\S"}
       }
     },
     "review_pass": {
@@ -163,8 +163,8 @@
       "additionalProperties": false,
       "required": ["text", "owner"],
       "properties": {
-        "text": {"type": "string", "minLength": 1},
-        "owner": {"type": "string", "minLength": 1}
+        "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "owner": {"type": "string", "minLength": 1, "pattern": "\\S"}
       }
     },
     "recommendation_qa": {
@@ -175,7 +175,7 @@
         "status": {"enum": ["passed", "unresolved"]},
         "issues": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1}
+          "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
         }
       }
     },
@@ -184,7 +184,7 @@
       "additionalProperties": false,
       "required": ["issue", "blocks_decision"],
       "properties": {
-        "issue": {"type": "string", "minLength": 1},
+        "issue": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "blocks_decision": {"type": "boolean"}
       }
     },
@@ -218,7 +218,7 @@
         "human_review"
       ],
       "properties": {
-        "unit_id": {"type": "string", "minLength": 1},
+        "unit_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "source": {"type": "string"},
         "current_target": {"type": "string"},
         "classification": {

@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 import math
+import re
 import subprocess
 import sys
 import tempfile
@@ -187,6 +188,30 @@ class ReviewArtifactTests(unittest.TestCase):
                 {"type": "null"},
             ],
         })
+
+    def test_schema_nonblank_strings_reject_whitespace_only_values(self):
+        """Break: schema consumers could accept whitespace rejected by the runtime gate."""
+        schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        nonblank_fragments = []
+
+        def collect(value):
+            if isinstance(value, dict):
+                if value.get("minLength") == 1:
+                    nonblank_fragments.append(value)
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect(schema)
+        self.assertGreater(len(nonblank_fragments), 0)
+        for fragment in nonblank_fragments:
+            with self.subTest(fragment=fragment):
+                pattern = fragment.get("pattern")
+                self.assertIsInstance(pattern, str)
+                self.assertIsNone(re.search(pattern, " \t\n"))
+                self.assertIsNotNone(re.search(pattern, "x"))
 
     def test_all_classifications_have_valid_explicit_shapes(self):
         """Break: a canonical status could become impossible to represent."""
@@ -460,6 +485,42 @@ class ReviewArtifactCliTests(unittest.TestCase):
             '"change_recommended":1,"blocked_by_source":0,"unresolved":0}}\n',
         )
         self.assertEqual(completed.stderr, "")
+
+    def test_cli_emits_counts_in_canonical_order_from_reordered_input(self):
+        """Break: caller insertion order could make valid success output nondeterministic."""
+        result = result_fixture()
+        result["summary"]["counts"] = {
+            "unresolved": 0,
+            "blocked_by_source": 0,
+            "change_recommended": 1,
+            "no_issue_detected": 1,
+        }
+        completed = self.run_cli(json.dumps(request_fixture()), json.dumps(result))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout,
+            '{"valid":true,"locales":1,"units":2,"counts":{"no_issue_detected":1,'
+            '"change_recommended":1,"blocked_by_source":0,"unresolved":0}}\n',
+        )
+
+    def test_cli_rejects_abbreviated_option_names(self):
+        """Break: argparse abbreviation could broaden the exact CLI surface."""
+        with tempfile.TemporaryDirectory() as directory:
+            request_path = Path(directory) / "request.json"
+            result_path = Path(directory) / "result.json"
+            request_path.write_text(json.dumps(request_fixture()), encoding="utf-8")
+            result_path.write_text(json.dumps(result_fixture()), encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, str(VALIDATOR), "--req", str(request_path),
+                 "--res", str(result_path)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, "")
+        self.assertNotEqual(completed.stderr, "")
 
     def test_cli_reports_ordered_validation_errors_with_exit_one(self):
         """Break: artifact failures could be conflated with invocation failures."""

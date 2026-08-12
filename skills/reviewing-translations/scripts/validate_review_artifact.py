@@ -739,7 +739,10 @@ def _load_json(path: Path, label: str) -> object:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Validate a structured translation review artifact")
+    parser = argparse.ArgumentParser(
+        description="Validate a structured translation review artifact",
+        allow_abbrev=False,
+    )
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--result", required=True, type=Path)
     return parser
@@ -766,7 +769,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "valid": True,
         "locales": summary["locales"],
         "units": summary["units"],
-        "counts": summary["counts"],
+        "counts": {
+            classification: summary["counts"][classification]
+            for classification in CLASSIFICATIONS
+        },
     }
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     return 0
