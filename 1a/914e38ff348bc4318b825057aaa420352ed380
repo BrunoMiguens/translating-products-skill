@@ -1,0 +1,31 @@
+docs/architecture.md
+  s_51f69c54a42bb0::t_e6ccf21cb1e14b 130-145,206-210
+tests/test_skill_contracts.py
+  s_51f69c54a42bb0::t_e35d374d7b0161 305-310,353-356,358-362
+  s_51f69c54a42bb0::t_bfb41c408a7f53 346-347,363-369
+  s_51f69c54a42bb0::t_3b3c4bf4496c61 1,8,21-50
+  s_51f69c54a42bb0::t_e84356de9776c5 348-352
+  s_51f69c54a42bb0::t_aea27e5a66fefa 289-304,311-345,357,370-428,430-449,472-482,484
+  s_51f69c54a42bb0::t_6fc0fd7194691a 51-52
+skills/translating-products/SKILL.md
+  s_51f69c54a42bb0::t_ab4caf08dff8c5 47,74-92,97,102,105-139
+  s_51f69c54a42bb0::t_73689d63ec3840 140
+skills/reviewing-translations/SKILL.md
+  s_51f69c54a42bb0::t_ab4caf08dff8c5 83-91,100-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1a914e38ff348bc4318b825057aaa420352ed380",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
