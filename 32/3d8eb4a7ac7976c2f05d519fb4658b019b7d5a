@@ -1,0 +1,25 @@
+tests/test_review_artifact.py
+  s_51f69c54a42bb0::t_f1c5c9146569e9 7,192-215,489-522
+  s_51f69c54a42bb0::t_b6d5b6947009c8 523
+  s_51f69c54a42bb0::t_a21ff740845798 524
+skills/reviewing-translations/references/review-artifact-schema.json
+  s_51f69c54a42bb0::t_791e1cfd0eab8e 17,32,50,88,127-130,166-167,178,187,221
+skills/reviewing-translations/scripts/validate_review_artifact.py
+  s_51f69c54a42bb0::t_791e1cfd0eab8e 742-745,772-775
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "323d8eb4a7ac7976c2f05d519fb4658b019b7d5a",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
