@@ -59,6 +59,11 @@ Route each failure to the specialist that supplied the constraint. When a hard e
 
 ## Finding Contract
 
+Under an orchestrator, this is an internal QA handoff. It governs external
+output only when the caller explicitly requests QA findings. Otherwise return
+findings to the orchestrator and let the caller's output contract determine the
+public artifact.
+
 Return one finding per independently correctable segment, grouping multiple defects only when the same owner must correct the same segment. Include:
 
 ```text
@@ -80,6 +85,10 @@ After correction, review the returned segment against the source and constraints
 A changed failure is a new finding only when the target changed and the issue is materially different; do not evade the retry limit by rewording the same diagnosis.
 
 ## Completion Contract
+
+Under an orchestrator, this is also an internal QA handoff. `QA passed` is a
+workflow signal, not text to append to a translated artifact, unless the caller
+explicitly requests QA status.
 
 Return only QA findings, in source order, when defects exist. Return `QA passed` when all six passes produce no findings. A translation is not complete while any finding has `status: retry` or `status: unresolved`.
 

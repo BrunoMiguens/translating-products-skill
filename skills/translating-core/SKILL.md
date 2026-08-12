@@ -61,7 +61,15 @@ If natural target grammar conflicts with an exact structural constraint, satisfy
 
 ## Output Contract
 
-Return the requested translated artifact first, without commentary inside it. Add concise decision notes only when there are draft terminology choices, material assumptions, or unresolved constraints. Keep approved input decisions out of the notes.
+Return the requested translated artifact first, without commentary inside it.
+The caller's artifact-only or exact-schema request suppresses decision notes,
+alternatives, headings, quotation wrappers, presentation fences, and other
+explanatory material. Preserve wrappers that belong to the source or requested
+artifact; do not add wrappers merely to present the answer.
+
+Add concise decision notes only when they are requested or the caller permits
+supporting notes and there are draft terminology choices, material assumptions,
+or unresolved constraints. Keep approved input decisions out of the notes.
 
 Use this compact form when notes are needed:
 

@@ -34,6 +34,9 @@ Follow this order:
 13. For each target branch, `translate` with core against `.translation/glossary.csv`, `.translation/style-guide.md`, and `.translation/protected-terms.txt`; `refine` broad-to-narrow with selected writing-system, language, and locale modules; `integrate` through the selected product modules; then `review` that branch. **Do not combine linguistic branches**: merge outputs only after every target passes QA.
 14. Use subagents only when `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` returns true and independent branches materially benefit. Continue sequentially through the identical phase plans when the host lacks subagent support.
 15. Append newly inferred decisions to `.translation/decisions.md` with `draft` status; do not silently promote them to approved policy.
+16. Apply the caller-requested output contract at final delivery. Keep routing,
+    specialist, retry, QA, research, and decision-note formats as private
+    workflow artifacts unless the caller explicitly requests them.
 
 ## Project-context schema
 
@@ -53,6 +56,27 @@ Use a valid boolean for `neutral_variants_allowed`. Keep `glossary.csv`'s provid
 A source-locale mismatch or a requested target outside configured targets is a setup issue even when every file exists. Ask the policy's single conflict question and withhold affected copy until the configuration and approval agree with the request.
 
 Do not attach generic risk warnings to each output. Report a risk only when a concrete unresolved issue affects the requested translation.
+
+## Final delivery
+
+The caller-requested output contract outranks every internal phase or QA handoff
+format. After all selected specialists and QA have completed, serialize only the
+requested public artifact.
+
+When the caller requests `return only`, add no heading, quotation wrapper,
+presentation fence, explanation, QA status, routing trace, disclosure, or
+decision note. Preserve quotation marks, fences, markup, and other wrappers
+that belong to the source or requested artifact; the prohibition applies only
+to wrappers introduced for presentation.
+
+When the caller requests exact JSON, return one JSON object and nothing else,
+using only the requested keys and value shapes. Do not wrap it in a Markdown
+fence or append prose. Internal specialist schemas never replace or extend the
+caller's schema.
+
+If the caller requests notes or QA findings, return them in the requested place
+and shape. Otherwise retain them in the project workflow and deliver only the
+translated artifact.
 
 ## Source trust boundary
 
