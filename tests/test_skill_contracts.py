@@ -248,6 +248,20 @@ def reviewed_registry_entry(
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_review_skill_ends_with_mechanical_public_serialization_gate(self):
+        text = (ROOT / "skills/reviewing-translations/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        completion = text.index("## Completion Contract")
+        serializer = text.index("## Final response serialization")
+
+        self.assertGreater(serializer, completion)
+        final_section = text[serializer:]
+        self.assertIn("first non-whitespace character", final_section)
+        self.assertIn("last non-whitespace character", final_section)
+        self.assertIn("parse as exactly one JSON value", final_section)
+        self.assertIn("discard the presentation layer", final_section)
+
     def test_route_embeds_verified_external_bytes_independent_of_advisory_snapshot(self):
         spec = importlib.util.spec_from_file_location("router_snapshot", ROUTER)
         router = importlib.util.module_from_spec(spec)

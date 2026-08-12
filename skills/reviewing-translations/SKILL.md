@@ -102,3 +102,22 @@ explicitly requests QA status.
 Return only QA findings, in source order, when defects exist. Return `QA passed` when all six passes produce no findings. A translation is not complete while any finding has `status: retry` or `status: unresolved`.
 
 Do not include corrected prose, unaffected segments, process narration, or unsupported quality claims.
+
+## Final response serialization
+
+Apply this public boundary after every review and after the completion contract
+above. When the caller supplies an explicit output schema, the generic finding
+and `QA passed` forms are internal only; serialize the requested schema instead.
+Build the complete public value before emitting any part of the response.
+
+For an exact JSON-object response, mechanically verify the serialized result:
+
+1. the first non-whitespace character is `{`;
+2. the last non-whitespace character is `}`;
+3. the complete response would parse as exactly one JSON value with no trailing
+   text and contains only the requested keys and value shapes.
+
+If any check fails, discard the presentation layer and serialize the public
+value again. Do not describe that repair. Markdown fences, introductions,
+summaries, QA commentary, and text after the closing brace always fail this
+boundary, even when the JSON inside them is correct.
