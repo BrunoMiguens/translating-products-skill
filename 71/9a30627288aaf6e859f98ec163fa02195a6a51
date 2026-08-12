@@ -1,0 +1,30 @@
+tests/test_bootstrap_policy.py
+  s_51f69c54a42bb0::t_534d82e89aed37 23-25,263-293,299-354
+  s_51f69c54a42bb0::t_42104e8f011045 294-298
+  s_51f69c54a42bb0::t_84c0964657e54c 355
+skills/translating-products/scripts/policy.py
+  s_51f69c54a42bb0::t_246145812b98a7 41-50,317-337
+  s_51f69c54a42bb0::t_f0e77943f26e14 338-339
+skills/translating-products/assets/translation-project/draft-terminology.csv
+  s_51f69c54a42bb0::t_19718a6ef91b50 1
+skills/reviewing-translations/scripts/validate_review_artifact.py
+  s_51f69c54a42bb0::t_246145812b98a7 34-51,766,775-779,783-785,789-791
+tests/test_review_artifact.py
+  s_51f69c54a42bb0::t_534d82e89aed37 588-624
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "719a30627288aaf6e859f98ec163fa02195a6a51",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
