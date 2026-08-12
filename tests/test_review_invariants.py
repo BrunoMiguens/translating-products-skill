@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+import unittest
+from dataclasses import fields
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+INVARIANTS = ROOT / "skills/reviewing-translations/scripts/invariants.py"
+
+
+def load_invariants():
+    spec = importlib.util.spec_from_file_location("review_invariants", INVARIANTS)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load reviewing-translations invariants")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+invariants = load_invariants()
+validate_check_declaration = invariants.validate_check_declaration
+validate_invariants = invariants.validate_invariants
+
+
+class ReviewInvariantTests(unittest.TestCase):
+    def validate(self, *, source: str, candidate: str, checks: tuple[dict, ...], **overrides):
+        return validate_invariants(
+            source=source,
+            candidate=candidate,
+            source_locale=overrides.get("source_locale", "en"),
+            target_locale=overrides.get("target_locale", "fr-FR"),
+            protected_terms=overrides.get("protected_terms", ()),
+            checks=checks,
+        )
+
+    def test_findings_preserve_declared_check_order_and_public_fields(self):
+        """Break: installed validation could reorder checks or lose portable finding data."""
+        findings = self.validate(
+            source="Pay {amount} at [support](https://example.test/help)",
+            candidate="Pague em [suporte](https://example.test/other)",
+            checks=(
+                {"type": "placeholder_multiset", "severity": "critical"},
+                {"type": "url_multiset", "severity": "critical"},
+            ),
+        )
+
+        self.assertEqual(
+            [finding.check for finding in findings],
+            ["placeholder_multiset", "url_multiset"],
+        )
+        self.assertEqual([finding.severity for finding in findings], ["critical", "critical"])
+        self.assertEqual(
+            [finding.message for finding in findings],
+            [
+                "placeholder_multiset differs from the declared source invariant",
+                "url_multiset differs from the declared source invariant",
+            ],
+        )
+        self.assertEqual(findings[0].span, None)
+        self.assertEqual(findings[1].span, (19, 45))
+        self.assertEqual(
+            tuple(field.name for field in fields(invariants.ValidationFinding)),
+            ("check", "severity", "message", "span"),
+        )
+
+    def test_scalar_and_limit_declarations_run_through_installed_engine(self):
+        """Break: extracting scalar or limit checks could leave a declared family undispatched."""
+        fixtures = (
+            ("placeholder_multiset", "Keep {name}", "Keep {other}", {}),
+            ("format_specifier_multiset", "Keep %1$s", "Keep %s", {}),
+            ("url_multiset", "See https://example.test/a", "See https://example.test/b", {}),
+            ("email_multiset", "Mail team@example.test", "Mail help@example.test", {}),
+            ("code_span_multiset", "Run `tool sync`", "Run `tool push`", {}),
+            (
+                "command_multiset", "Run tool sync", "Run tool push",
+                {"values": ["tool sync"]},
+            ),
+            (
+                "identifier_multiset", "Open AccountID", "Ouvrez accountId",
+                {"values": ["AccountID"]},
+            ),
+            ("protected_term_multiset", "Use API", "Use Api", {}),
+            ("number_multiset", "Value 1,234.50", "Value 1 235,50", {}),
+            ("character_limit", "Short", "123456789", {"max": 8}),
+            ("line_count", "One line", "One\nTwo", {"count": 1}),
+        )
+        for check_type, source, candidate, options in fixtures:
+            with self.subTest(check=check_type):
+                findings = self.validate(
+                    source=source,
+                    candidate=candidate,
+                    protected_terms=("API",),
+                    target_locale="pt-PT" if check_type == "number_multiset" else "fr-FR",
+                    checks=({"type": check_type, "severity": "major", **options},),
+                )
+                self.assertEqual([finding.check for finding in findings], [check_type])
+
+    def test_declared_literal_line_and_embedded_contracts_run(self):
+        """Break: extracting configured contracts could drop their declared options or dispatch."""
+        fixtures = (
+            (
+                "literal_multiset", "PREFIX: keep", "Keep",
+                {"values": ["PREFIX:"]},
+            ),
+            (
+                "literal_mapping_multiset", "Use source-token", "Use source-token",
+                {
+                    "mappings": [{"source": "source-token", "targets": ["target-token"]}],
+                    "require_source_absence": True,
+                },
+            ),
+            (
+                "line_character_limits", "12345\n12345678901", "123456\n123456789012",
+                {"maxima": [5, 11]},
+            ),
+            (
+                "delimited_fields", "one,two,three", "one,two,two",
+                {"delimiter": ",", "count": 3, "allow_whitespace": False, "unique": True},
+            ),
+            (
+                "json_line_contract",
+                'Response:\n{"status":"ready","message":"Welcome"}',
+                'Response:\n{"state":"ready","message":"Target"}',
+                {"line": 2, "translatable_keys": ["message"]},
+            ),
+        )
+        for check_type, source, candidate, options in fixtures:
+            with self.subTest(check=check_type):
+                findings = self.validate(
+                    source=source,
+                    candidate=candidate,
+                    checks=({"type": check_type, "severity": "critical", **options},),
+                )
+                self.assertEqual([finding.check for finding in findings], [check_type])
+
+    def test_structured_and_locale_declarations_run_through_installed_engine(self):
+        """Break: extracting parsers could stop structural or declared locale-form checks."""
+        fixtures = (
+            ("json_structure", '{"items":[{"id":1}]}', '{"items":{"id":1}}', {}),
+            ("xml_structure", "<screen><title>Source</title></screen>", "<screen>Target</screen>", {}),
+            ("html_structure", "<section><strong>Source</strong></section>", "<section>Target</section>", {}),
+            ("markdown_structure", "# Heading\n\n- Item\n", "## Heading\n\nItem\n", {}),
+            (
+                "fenced_block_exact", "Run:\n```sh\ntool sync\n```",
+                "Run:\n```sh\ntool push\n```", {},
+            ),
+            ("csv_shape", "name,status\nAda,Active\n", "nom,état\nAda,Active,extra\n", {}),
+            (
+                "icu_topology", "{count, plural, one {item} other {items}}",
+                "{count, plural, other {items}}", {},
+            ),
+            (
+                "forbidden_locale_form", "Use allowed-form", "Use blocked-form",
+                {"forms": ["blocked-form"]},
+            ),
+        )
+        for check_type, source, candidate, options in fixtures:
+            with self.subTest(check=check_type):
+                findings = self.validate(
+                    source=source,
+                    candidate=candidate,
+                    checks=({"type": check_type, "severity": "critical", **options},),
+                )
+                self.assertEqual([finding.check for finding in findings], [check_type])
+
+    def test_declaration_errors_remain_public_and_exact(self):
+        """Break: callers could silently accept unknown checks after the validator moved."""
+        with self.assertRaisesRegex(ValueError, "unknown automatic check: 'placeholders'"):
+            validate_check_declaration({"type": "placeholders", "severity": "critical"})
+
+
+if __name__ == "__main__":
+    unittest.main()

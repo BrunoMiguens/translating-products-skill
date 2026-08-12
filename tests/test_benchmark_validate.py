@@ -156,6 +156,26 @@ def structured_validation_fixtures() -> tuple[StructuredFixture, ...]:
 
 
 class ValidatorTests(unittest.TestCase):
+    def test_serialized_findings_preserve_expected_and_observed_evidence(self):
+        """Break: the installed-engine adapter could discard benchmark evidence payloads."""
+        result = validate_output(
+            case_with_checks(
+                source="Pay {amount}",
+                checks=[{"type": "placeholder_multiset", "severity": "critical"}],
+            ),
+            "Payez {total}",
+        )
+
+        serialized = json.loads(json.dumps(result.to_record()))["findings"]
+        self.assertEqual(serialized, [{
+            "invariant": "placeholder_multiset",
+            "severity": "critical",
+            "expected": {"{amount}": 1},
+            "observed": {"{total}": 1},
+            "affected_span": [6, 13],
+            "message": "placeholder_multiset differs from the declared source invariant",
+        }])
+
     def test_output_contract_rejects_wrappers_but_preserves_source_syntax(self):
         plain = case_with_checks(source="Save changes", checks=[])
         quoted = case_with_checks(source='"Save changes"', checks=[])
