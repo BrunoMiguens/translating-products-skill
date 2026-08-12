@@ -8,13 +8,17 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from scripts.benchmark.calibration_inspect import inspect_pack
 from scripts.benchmark.cli_calibration import (
     CalibrationRunError,
     RunOptions,
+    TaskFilter,
     load_pack,
     main,
     run_tasks,
+    select_tasks,
     task_states,
 )
 from scripts.benchmark.common import BenchmarkError, append_jsonl_fsync, sha256_bytes
@@ -113,6 +117,52 @@ class CalibrationRunnerTests(unittest.TestCase):
             json.dumps({"schema_version": 1, "tasks": tasks}), encoding="utf-8"
         )
         return root
+
+    def make_mixed_pack(self) -> Path:
+        sources = [
+            self.make_pack(app=app, condition=condition)
+            for app in ("claude", "codex")
+            for condition in ("normal", "context_only", "suite")
+        ]
+        root = self.temp_dir / "pack-mixed"
+        root.mkdir()
+        tasks = []
+        next_number = {"claude": 0, "codex": 0}
+        for source in sources:
+            manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+            for task in manifest["tasks"]:
+                next_number[task["app"]] += 1
+                task["number"] = next_number[task["app"]]
+                tasks.append(task)
+            for directory in ("tasks", "projects"):
+                for path in (source / directory).rglob("*"):
+                    destination = root / directory / path.relative_to(source / directory)
+                    if path.is_dir():
+                        destination.mkdir(parents=True, exist_ok=True)
+                    else:
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        destination.write_bytes(path.read_bytes())
+        (root / "manifest.json").write_text(
+            json.dumps({"schema_version": 1, "tasks": tasks}), encoding="utf-8"
+        )
+        return root
+
+    def make_dataset(self, *, case_id: str = "case-1") -> Path:
+        dataset = self.temp_dir / f"dataset-{case_id}"
+        dataset.mkdir()
+        case = {
+            "id": case_id,
+            "task": "translation",
+            "source": "Save changes",
+            "source_locale": "en-GB",
+            "target_locale": "pt-PT",
+            "protected_terms": [],
+            "automatic_checks": [],
+        }
+        (dataset / "cases.jsonl").write_text(
+            json.dumps(case, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        return dataset
 
     def add_second_task_per_app(self, root: Path) -> None:
         manifest_path = root / "manifest.json"
@@ -233,12 +283,18 @@ else:
     def test_task_state_requires_matching_success_evidence(self):
         root = self.make_pack()
         pack = load_pack(root)
-        self.assertEqual(task_states(pack, {"claude"})[0].status, "pending")
+        self.assertEqual(
+            task_states(pack, TaskFilter(frozenset({"claude"})))[0].status,
+            "pending",
+        )
 
         response = root / "tasks/claude/01-normal-case-1/RESPONSE.txt"
         response.write_text("manual answer\n", encoding="utf-8")
         pack = load_pack(root)
-        self.assertEqual(task_states(pack, {"claude"})[0].status, "invalid")
+        self.assertEqual(
+            task_states(pack, TaskFilter(frozenset({"claude"})))[0].status,
+            "invalid",
+        )
 
         append_jsonl_fsync(
             root / "evidence.jsonl",
@@ -252,7 +308,10 @@ else:
             },
         )
         pack = load_pack(root)
-        self.assertEqual(task_states(pack, {"claude"})[0].status, "completed")
+        self.assertEqual(
+            task_states(pack, TaskFilter(frozenset({"claude"})))[0].status,
+            "completed",
+        )
 
     def test_claude_run_stages_only_suite_files_and_captures_response(self):
         root = self.make_pack(app="claude", condition="suite")
@@ -362,7 +421,8 @@ else:
         run_tasks(load_pack(root, suite_source=suite_source), options)
         self.assertEqual(
             task_states(
-                load_pack(root, suite_source=suite_source), {"claude"},
+                load_pack(root, suite_source=suite_source),
+                TaskFilter(frozenset({"claude"})),
             )[0].status,
             "completed",
         )
@@ -374,7 +434,8 @@ else:
         (suite_source / "ignored.pyo").write_bytes(b"changed")
         self.assertEqual(
             task_states(
-                load_pack(root, suite_source=suite_source), {"claude"},
+                load_pack(root, suite_source=suite_source),
+                TaskFilter(frozenset({"claude"})),
             )[0].status,
             "completed",
         )
@@ -383,7 +444,8 @@ else:
             "changed canonical suite\n", encoding="utf-8",
         )
         state = task_states(
-            load_pack(root, suite_source=suite_source), {"claude"},
+            load_pack(root, suite_source=suite_source),
+            TaskFilter(frozenset({"claude"})),
         )[0]
         self.assertEqual(state.status, "invalid")
         self.assertIn("suite tree hash", state.reason)
@@ -538,6 +600,173 @@ else:
                 ),
                 "",
             )
+
+    def test_filters_select_and_run_only_the_requested_tasks(self):
+        root = self.make_mixed_pack()
+        suite_source = self.make_suite_source()
+        pack = load_pack(root, suite_source=suite_source)
+        selection = TaskFilter(
+            apps=frozenset({"claude", "codex"}),
+            conditions=frozenset({"suite"}),
+            case_ids=frozenset({"case-1"}),
+        )
+        selected = select_tasks(pack, selection)
+        self.assertEqual(len(selected), 2)
+        self.assertTrue(all(task.condition == "suite" for task in selected))
+
+        claude = self.make_fake_cli("claude")
+        codex = self.make_fake_cli("codex")
+        summary = run_tasks(
+            pack,
+            RunOptions(
+                apps={"claude", "codex"},
+                conditions={"suite"},
+                case_ids={"case-1"},
+                force=True,
+                claude_executable=str(claude),
+                codex_executable=str(codex),
+                timeout_seconds=5,
+            ),
+        )
+        self.assertEqual(summary.succeeded, 2)
+        for task in pack.tasks:
+            has_response = bool(task.response_path.read_bytes())
+            self.assertEqual(has_response, task.condition == "suite")
+
+    def test_filters_fail_before_invocation_and_probe_after_selection(self):
+        root = self.make_mixed_pack()
+        suite_source = self.make_suite_source()
+        pack = load_pack(root, suite_source=suite_source)
+        claude = self.make_fake_cli("claude")
+        codex = self.make_fake_cli("codex")
+
+        with self.assertRaisesRegex(BenchmarkError, "unknown case"):
+            run_tasks(
+                pack,
+                RunOptions(
+                    apps={"claude"}, conditions={"suite"}, case_ids={"missing"},
+                    claude_executable=str(claude), timeout_seconds=5,
+                ),
+            )
+        with self.assertRaisesRegex(BenchmarkError, "selects no tasks"):
+            select_tasks(
+                load_pack(self.temp_dir / "pack-claude-normal"),
+                TaskFilter(
+                    frozenset({"claude"}),
+                    frozenset({"suite"}),
+                    frozenset(),
+                ),
+            )
+        self.assertFalse(claude.with_suffix(".log").exists())
+
+        summary = run_tasks(
+            pack,
+            RunOptions(
+                apps={"claude", "codex"},
+                conditions={"suite"},
+                probe=True,
+                claude_executable=str(claude),
+                codex_executable=str(codex),
+                timeout_seconds=5,
+            ),
+        )
+        self.assertEqual(summary.succeeded, 2)
+
+    def test_inspect_is_read_only_and_distinguishes_output_from_evidence_failures(self):
+        root = self.make_pack(app="claude")
+        dataset = self.make_dataset()
+        fake = self.make_fake_cli("claude")
+        run_tasks(
+            load_pack(root),
+            RunOptions(
+                apps={"claude"}, claude_executable=str(fake), timeout_seconds=5,
+            ),
+        )
+        task_filter = TaskFilter(
+            frozenset({"claude"}), frozenset({"normal"}), frozenset(),
+        )
+        pack = load_pack(root)
+        response = pack.tasks[0].response_path
+        evidence = pack.evidence_path
+        before = (response.read_bytes(), evidence.read_bytes())
+
+        result = inspect_pack(pack, dataset, task_filter)
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertTrue(any(
+            line.startswith("claude/normal: passed=1 failed=0")
+            for line in result.lines
+        ))
+        self.assertEqual((response.read_bytes(), evidence.read_bytes()), before)
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            cli_code = main([
+                "inspect", "--root", str(root), "--dataset", str(dataset),
+                "--app", "claude", "--condition", "normal",
+                "--case-id", "case-1",
+            ])
+        self.assertEqual(cli_code, 0)
+        self.assertIn("claude/normal: passed=1 failed=0", stdout.getvalue())
+
+        response.write_text('"Guardar alterações"\n', encoding="utf-8")
+        append_jsonl_fsync(evidence, {
+            "schema_version": 1,
+            "evidence_kind": "diagnostic_cli_calibration",
+            "run_id": pack.tasks[0].run_id,
+            "status": "success",
+            "prompt_sha256": pack.tasks[0].prompt_sha256,
+            "output_sha256": sha256_bytes(response.read_bytes()),
+        })
+        failed = inspect_pack(load_pack(root), dataset, task_filter)
+        self.assertEqual(failed.exit_code, 1)
+        self.assertIn(
+            "claude-normal-case-1 output_contract",
+            "\n".join(failed.lines),
+        )
+
+        response.write_text("stale", encoding="utf-8")
+        stale = inspect_pack(load_pack(root), dataset, task_filter)
+        self.assertEqual(stale.exit_code, 2)
+
+    def test_inspect_reports_pending_unknown_case_and_validator_error_as_two(self):
+        task_filter = TaskFilter(
+            frozenset({"claude"}), frozenset({"normal"}), frozenset(),
+        )
+        pending_root = self.make_pack(app="claude")
+        dataset = self.make_dataset()
+        self.assertEqual(
+            inspect_pack(load_pack(pending_root), dataset, task_filter).exit_code,
+            2,
+        )
+
+        fake = self.make_fake_cli("claude")
+        run_tasks(
+            load_pack(pending_root),
+            RunOptions(
+                apps={"claude"}, claude_executable=str(fake), timeout_seconds=5,
+            ),
+        )
+        missing_dataset = self.make_dataset(case_id="different-case")
+        self.assertEqual(
+            inspect_pack(
+                load_pack(pending_root), missing_dataset, task_filter,
+            ).exit_code,
+            2,
+        )
+
+        validator_error = mock.Mock(
+            status="validator_error", findings=(),
+            validator_errors=("fixture validator error",),
+        )
+        with mock.patch(
+            "scripts.benchmark.calibration_inspect.validate_output",
+            return_value=validator_error,
+        ):
+            result = inspect_pack(
+                load_pack(pending_root), dataset, task_filter,
+            )
+        self.assertEqual(result.exit_code, 2)
 
 
 if __name__ == "__main__":

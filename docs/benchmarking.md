@@ -48,6 +48,25 @@ existing calibration response must be deliberately replaced. These convenience
 runs remain diagnostic because they do not provide the sandbox-policy
 attestation required by canonical CLI evidence.
 
+Before a primary run, refresh only the ten suite-condition calibration tasks and
+apply the deterministic output gate:
+
+```bash
+python3 -m scripts.benchmark.cli_calibration run \
+  --app all --condition suite --force
+python3 -m scripts.benchmark.cli_calibration inspect \
+  --app all --condition suite
+python3 -m scripts.benchmark.cli_calibration inspect --app all
+```
+
+The runner stages the repository's current `skills/` tree and binds its hash to
+each suite response. The suite-only inspection must exit `0` before preparing
+the primary run. The all-condition inspection is diagnostic: failures in normal
+or context-only outputs are expected comparison outcomes and do not block the
+primary run. `--condition` and `--case-id` are repeatable on `status`, `run`, and
+`inspect`; a filter that names an unknown case or selects no task fails before a
+CLI is invoked. Inspection never edits a response or evidence record.
+
 Create a fresh ignored `benchmark-evidence/` directory and execute the exact
 405-run schedule without changing prompts, provider/model/configuration, suite
 snapshot, condition plan, or schedule. Ordinary model failures are outcomes,

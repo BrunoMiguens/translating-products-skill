@@ -74,8 +74,31 @@ class TaskState:
 
 
 @dataclass(frozen=True)
+class TaskFilter:
+    apps: frozenset[str]
+    conditions: frozenset[str] = frozenset(_CONDITIONS)
+    case_ids: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        apps = frozenset(self.apps)
+        conditions = frozenset(self.conditions)
+        case_ids = frozenset(self.case_ids)
+        if not apps or not apps <= set(_APPS):
+            raise BenchmarkError(f"apps must be one or more of: {', '.join(_APPS)}")
+        if not conditions or not conditions <= _CONDITIONS:
+            raise BenchmarkError("conditions must contain known calibration conditions")
+        if any(not isinstance(case_id, str) or not case_id for case_id in case_ids):
+            raise BenchmarkError("case_ids must contain non-empty text")
+        object.__setattr__(self, "apps", apps)
+        object.__setattr__(self, "conditions", conditions)
+        object.__setattr__(self, "case_ids", case_ids)
+
+
+@dataclass(frozen=True)
 class RunOptions:
     apps: set[str] | frozenset[str]
+    conditions: set[str] | frozenset[str] = frozenset(_CONDITIONS)
+    case_ids: set[str] | frozenset[str] = frozenset()
     force: bool = False
     probe: bool = False
     timeout_seconds: float = 300
@@ -101,7 +124,18 @@ class RunOptions:
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise BenchmarkError(f"{name} must be non-empty text when provided")
         object.__setattr__(self, "apps", apps)
+        task_filter = TaskFilter(
+            apps,
+            frozenset(self.conditions),
+            frozenset(self.case_ids),
+        )
+        object.__setattr__(self, "conditions", task_filter.conditions)
+        object.__setattr__(self, "case_ids", task_filter.case_ids)
         object.__setattr__(self, "source_home", Path(self.source_home).expanduser().resolve())
+
+    @property
+    def task_filter(self) -> TaskFilter:
+        return TaskFilter(self.apps, self.conditions, self.case_ids)
 
 
 @dataclass(frozen=True)
@@ -315,14 +349,28 @@ def _successful_evidence(pack: CalibrationPack, run_id: str) -> Mapping[str, obj
     return successful[-1] if successful else None
 
 
-def task_states(pack: CalibrationPack, apps: set[str] | frozenset[str]) -> list[TaskState]:
-    selected = frozenset(apps)
-    if not selected or not selected <= set(_APPS):
-        raise BenchmarkError(f"apps must be one or more of: {', '.join(_APPS)}")
+def select_tasks(
+    pack: CalibrationPack, task_filter: TaskFilter,
+) -> tuple[CalibrationTask, ...]:
+    known_case_ids = {task.case_id for task in pack.tasks}
+    unknown = sorted(task_filter.case_ids - known_case_ids)
+    if unknown:
+        raise BenchmarkError(f"unknown case ids: {unknown!r}")
+    selected = tuple(
+        task
+        for task in pack.tasks
+        if task.app in task_filter.apps
+        and task.condition in task_filter.conditions
+        and (not task_filter.case_ids or task.case_id in task_filter.case_ids)
+    )
+    if not selected:
+        raise BenchmarkError("task filter selects no tasks")
+    return selected
+
+
+def task_states(pack: CalibrationPack, task_filter: TaskFilter) -> list[TaskState]:
     states: list[TaskState] = []
-    for task in pack.tasks:
-        if task.app not in selected:
-            continue
+    for task in select_tasks(pack, task_filter):
         try:
             response_bytes = task.response_path.read_bytes()
         except OSError as error:
@@ -785,7 +833,7 @@ def run_tasks(
     *,
     progress: Progress | None = None,
 ) -> RunSummary:
-    states = task_states(pack, options.apps)
+    states = task_states(pack, options.task_filter)
     invalid = [state for state in states if state.status == "invalid"]
     if invalid and not options.force:
         names = ", ".join(state.task.run_id for state in invalid)
@@ -873,6 +921,22 @@ def _apps_argument(value: str) -> frozenset[str]:
     return frozenset((value,))
 
 
+def _task_filter(arguments: argparse.Namespace) -> TaskFilter:
+    return TaskFilter(
+        _apps_argument(arguments.app),
+        frozenset(arguments.condition or _CONDITIONS),
+        frozenset(arguments.case_id),
+    )
+
+
+def _add_filter_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--app", choices=("all",) + _APPS, default="all")
+    parser.add_argument(
+        "--condition", action="append", choices=sorted(_CONDITIONS),
+    )
+    parser.add_argument("--case-id", action="append", default=[])
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the diagnostic Claude/Codex PT-PT calibration pack without copy/paste."
@@ -880,11 +944,11 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     status = subparsers.add_parser("status", help="validate the pack and show response state")
     status.add_argument("--root", type=Path, default=_DEFAULT_ROOT)
-    status.add_argument("--app", choices=("all",) + _APPS, default="all")
+    _add_filter_arguments(status)
 
     run = subparsers.add_parser("run", help="execute pending calibration tasks")
     run.add_argument("--root", type=Path, default=_DEFAULT_ROOT)
-    run.add_argument("--app", choices=("all",) + _APPS, default="all")
+    _add_filter_arguments(run)
     run.add_argument("--force", action="store_true")
     run.add_argument(
         "--probe",
@@ -896,13 +960,22 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--codex-executable", default="codex")
     run.add_argument("--claude-model")
     run.add_argument("--codex-model")
+    inspect = subparsers.add_parser(
+        "inspect", help="validate evidence-bound calibration responses",
+    )
+    inspect.add_argument("--root", type=Path, default=_DEFAULT_ROOT)
+    inspect.add_argument(
+        "--dataset", type=Path,
+        default=_REPOSITORY_ROOT / "benchmarks" / "pt-pt-v1",
+    )
+    _add_filter_arguments(inspect)
     return parser
 
 
-def _print_status(pack: CalibrationPack, apps: frozenset[str]) -> int:
-    states = task_states(pack, apps)
+def _print_status(pack: CalibrationPack, task_filter: TaskFilter) -> int:
+    states = task_states(pack, task_filter)
     for app in _APPS:
-        if app not in apps:
+        if app not in task_filter.apps:
             continue
         app_states = [state for state in states if state.task.app == app]
         counts = {
@@ -931,11 +1004,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.root,
             suite_source=_REPOSITORY_ROOT / "skills",
         )
-        apps = _apps_argument(arguments.app)
+        task_filter = _task_filter(arguments)
         if arguments.command == "status":
-            return _print_status(pack, apps)
+            return _print_status(pack, task_filter)
+        if arguments.command == "inspect":
+            from .calibration_inspect import inspect_pack
+
+            result = inspect_pack(pack, arguments.dataset, task_filter)
+            for line in result.lines:
+                print(line)
+            return result.exit_code
         options = RunOptions(
-            apps=apps,
+            apps=task_filter.apps,
+            conditions=task_filter.conditions,
+            case_ids=task_filter.case_ids,
             force=arguments.force,
             probe=arguments.probe,
             timeout_seconds=arguments.timeout_seconds,
