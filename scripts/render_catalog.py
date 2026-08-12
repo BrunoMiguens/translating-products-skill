@@ -52,6 +52,7 @@ ROUTING_FIELDS = (
     "conflicts",
     "supersedes",
     "ownership",
+    "verification",
 )
 
 
@@ -109,6 +110,7 @@ def _skill_dict(item: SkillRecord) -> dict:
             "ownership": {
                 capability: list(phases) for capability, phases in item.ownership
             },
+            "verification": dict(item.verification),
         }
     )
     return record

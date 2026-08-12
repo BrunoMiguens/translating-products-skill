@@ -84,6 +84,7 @@ def synthetic_skill(
     conflicts=(),
     supersedes=(),
     ownership=None,
+    independent_review_required=False,
     category="language",
 ):
     skill = {
@@ -99,6 +100,9 @@ def synthetic_skill(
         "required_context": list(required_context),
         "conflicts": list(conflicts),
         "supersedes": list(supersedes),
+        "verification": {
+            "independent_review_required": independent_review_required,
+        },
     }
     if ownership is not None:
         skill["ownership"] = {
@@ -447,6 +451,41 @@ class RoutingTests(unittest.TestCase):
                 "inspect-ready",
                 "review-first-in-catalog",
             ],
+        )
+
+    def test_route_aggregates_independent_review_requirements_in_selected_load_order(self):
+        router = load_module("route_capabilities_verification_requirements", ROUTER)
+        selector = ({"domains": ["verification-demo"]},)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "review-last",
+                selectors=selector,
+                phases=("review",),
+                independent_review_required=True,
+            ),
+            synthetic_skill(
+                "translate-first",
+                selectors=selector,
+                phases=("translate",),
+                independent_review_required=True,
+            ),
+            synthetic_skill(
+                "refine-middle",
+                selectors=selector,
+                phases=("refine",),
+            ),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["verification-demo"]), catalog
+        )
+
+        self.assertEqual(
+            result["verification_requirements"],
+            {
+                "independent_review_required": True,
+                "required_by": ["translate-first", "review-last"],
+            },
         )
 
     def test_selected_load_order_respects_transitive_cross_phase_dependencies(self):

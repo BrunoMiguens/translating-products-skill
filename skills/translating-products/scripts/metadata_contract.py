@@ -37,7 +37,8 @@ SKILL_REQUIRED_FIELDS = frozenset(
         "conflicts", "supersedes",
     )
 )
-SKILL_OPTIONAL_FIELDS = frozenset(("selectors", "ownership"))
+SKILL_OPTIONAL_FIELDS = frozenset(("selectors", "ownership", "verification"))
+VERIFICATION_FIELDS = frozenset(("independent_review_required",))
 MANIFEST_FIELDS = frozenset(
     (
         "schema_version", "suite_version", "orchestrator",
@@ -136,6 +137,17 @@ def _validate_locale(value: str, label: str) -> None:
         raise ValueError(f"{label} has invalid selector locale: {value}")
 
 
+def validate_verification(value: object, label: str) -> dict[str, bool]:
+    if value is None:
+        return {"independent_review_required": False}
+    if not isinstance(value, dict) or set(value) != VERIFICATION_FIELDS:
+        raise ValueError(f"{label} has invalid verification")
+    required = value["independent_review_required"]
+    if type(required) is not bool:
+        raise ValueError(f"{label} verification must use a boolean")
+    return {"independent_review_required": required}
+
+
 def validate_skill_record(item: object, *, label_prefix: str = "skill") -> dict:
     if not isinstance(item, dict):
         raise ValueError(f"{label_prefix} must be an object")
@@ -197,6 +209,7 @@ def validate_skill_record(item: object, *, label_prefix: str = "skill") -> dict:
             parsed = _string_list(owned_phases, "ownership phases", label, allow_empty=False)
             if not set(parsed).issubset(phases):
                 raise ValueError(f"{label} ownership phases must be declared phases")
+    item["verification"] = validate_verification(item.get("verification"), label)
     return item
 
 

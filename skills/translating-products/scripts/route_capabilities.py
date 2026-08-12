@@ -849,8 +849,15 @@ def _verify_installed_skill(
         not isinstance(manifest, dict)
         or set(manifest) != {"schema_version", "skill"}
         or manifest.get("schema_version") != 2
-        or manifest.get("skill") != skill
     ):
+        raise ValueError(f"installed skill manifest does not match catalog: {name}")
+    try:
+        installed_skill = validate_skill_record(
+            manifest["skill"], label_prefix="external skill"
+        )
+    except ValueError:
+        raise ValueError(f"installed skill manifest does not match catalog: {name}") from None
+    if installed_skill != skill:
         raise ValueError(f"installed skill manifest does not match catalog: {name}")
     tree_canonical = json.dumps(
         inventory,
@@ -1353,6 +1360,14 @@ def route_profile(profile: dict, catalog: dict) -> dict:
         for phase in PHASES
     }
     selected_in_load_order = ordered_for_load(selected, catalog)
+    required_by = [
+        name for name in selected_in_load_order
+        if by_name[name]["verification"]["independent_review_required"]
+    ]
+    verification_requirements = {
+        "independent_review_required": bool(required_by),
+        "required_by": required_by,
+    }
     external_snapshots = catalog.get("external_skill_snapshots", {})
     return {
         "target_locale": profile["target_locale"],
@@ -1369,6 +1384,7 @@ def route_profile(profile: dict, catalog: dict) -> dict:
             name: sorted(set(reasons[name])) for name in selected_in_load_order
         },
         "ownership_overrides": ownership_overrides,
+        "verification_requirements": verification_requirements,
     }
 
 

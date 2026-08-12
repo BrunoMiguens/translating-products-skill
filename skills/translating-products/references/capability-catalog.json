@@ -45,6 +45,9 @@
         "subagent-routing": [
           "inspect"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -91,6 +94,9 @@
         "structural-fidelity": [
           "translate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -131,6 +137,9 @@
         "structural-qa": [
           "review"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -193,6 +202,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -256,6 +268,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -307,6 +322,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -363,6 +381,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -419,6 +440,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -475,6 +499,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -527,6 +554,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -580,6 +610,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -626,6 +659,9 @@
           "inspect",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -682,6 +718,9 @@
           "refine",
           "integrate"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -722,6 +761,9 @@
         "locale:ar": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -762,6 +804,9 @@
         "locale:he": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -801,6 +846,9 @@
         "locale:ja": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -844,6 +892,9 @@
         "locale:zh-Hant": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -883,6 +934,9 @@
         "locale:ko": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -926,6 +980,9 @@
         "locale:pt-PT": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -969,6 +1026,9 @@
         "locale:es-419": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -1012,6 +1072,9 @@
         "locale:fr-CA": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     },
     {
@@ -1059,6 +1122,9 @@
         "locale:de-CH": [
           "refine"
         ]
+      },
+      "verification": {
+        "independent_review_required": false
       }
     }
   ]

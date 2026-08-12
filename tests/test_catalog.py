@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -13,9 +14,65 @@ from scripts.render_catalog import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CONTRACT = ROOT / "skills/translating-products/scripts/metadata_contract.py"
+
+
+def load_contract():
+    spec = importlib.util.spec_from_file_location("metadata_contract", CONTRACT)
+    contract = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(contract)
+    return contract
 
 
 class CatalogTests(unittest.TestCase):
+    def test_skill_verification_defaults_to_no_independent_review(self):
+        contract = load_contract()
+        skill = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )["skills"][0]
+
+        validated = contract.validate_skill_record(skill)
+
+        self.assertEqual(
+            validated["verification"],
+            {"independent_review_required": False},
+        )
+
+    def test_skill_verification_accepts_independent_review_requirement(self):
+        contract = load_contract()
+        skill = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )["skills"][0]
+        skill["verification"] = {"independent_review_required": True}
+
+        validated = contract.validate_skill_record(skill)
+
+        self.assertEqual(
+            validated["verification"],
+            {"independent_review_required": True},
+        )
+
+    def test_skill_verification_rejects_unknown_fields(self):
+        contract = load_contract()
+        skill = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )["skills"][0]
+        skill["verification"] = {"unexpected": True}
+
+        with self.assertRaisesRegex(ValueError, "invalid verification"):
+            contract.validate_skill_record(skill)
+
+    def test_skill_verification_rejects_non_boolean_requirement(self):
+        contract = load_contract()
+        skill = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )["skills"][0]
+        skill["verification"] = {"independent_review_required": 1}
+
+        with self.assertRaisesRegex(ValueError, "verification must use a boolean"):
+            contract.validate_skill_record(skill)
+
     def test_readme_inventory_is_rendered_from_manifest_order(self):
         manifest = json.loads(
             (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
@@ -150,7 +207,12 @@ class CatalogTests(unittest.TestCase):
                 "conflicts",
                 "supersedes",
                 "ownership",
+                "verification",
             },
+        )
+        self.assertEqual(
+            catalog["skills"][0]["verification"],
+            {"independent_review_required": False},
         )
 
     def test_catalog_preserves_absent_selectors_as_universal_scope(self):

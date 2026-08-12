@@ -67,6 +67,9 @@ class SkillRecord:
     conflicts: tuple[str, ...]
     supersedes: tuple[str, ...]
     ownership: tuple[tuple[str, tuple[str, ...]], ...]
+    verification: tuple[tuple[str, bool], ...] = (
+        ("independent_review_required", False),
+    )
 
 
 @dataclass(frozen=True)
@@ -202,6 +205,7 @@ def load_manifest(path: Path) -> Manifest:
                     capabilities,
                     phases,
                 ),
+                verification=tuple(item["verification"].items()),
             )
         )
     sources = tuple(

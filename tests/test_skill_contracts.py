@@ -181,6 +181,10 @@ def reviewed_registry_entry(
     attested_reviewer: str | None = None,
     extra_files: dict[str, bytes] | None = None,
 ) -> dict:
+    admitted_skill = copy.deepcopy(skill)
+    admitted_skill.setdefault(
+        "verification", {"independent_review_required": False}
+    )
     ownership = skill.get("ownership") or {
         capability: list(skill["phases"])
         for capability in skill["capabilities"]
@@ -229,7 +233,7 @@ def reviewed_registry_entry(
     ).encode("utf-8")
     canonical = json.dumps(
         {
-            "admitted_skill": skill,
+            "admitted_skill": admitted_skill,
             "installed_skill": {
                 "name": skill["name"],
                 "tree_sha256": "sha256:" + hashlib.sha256(tree_canonical).hexdigest(),
@@ -404,6 +408,23 @@ class SkillContractTests(unittest.TestCase):
                 mutate(candidate)
                 with self.assertRaisesRegex(ValueError, expected):
                     router.validate_external_catalog({"schema_version": 2, "skills": [candidate]})
+
+    def test_external_metadata_preserves_normalized_verification_requirement(self):
+        spec = importlib.util.spec_from_file_location("router_verification", ROUTER)
+        router = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(router)
+        candidate = external_skill("external-verification")
+        candidate["verification"] = {"independent_review_required": True}
+
+        validated = router.validate_external_catalog(
+            {"schema_version": 2, "skills": [candidate]}
+        )
+
+        self.assertEqual(
+            validated[0]["verification"],
+            {"independent_review_required": True},
+        )
 
     def test_installed_frontmatter_accepts_quoted_scalars_but_rejects_ambiguity(self):
         candidate = external_skill("external-quoted-frontmatter")
