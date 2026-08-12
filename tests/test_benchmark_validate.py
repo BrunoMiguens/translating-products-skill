@@ -17,6 +17,7 @@ from scripts.benchmark.validate import CHECKS, validate_output, validate_runs
 def case_with_checks(*, source: str, checks: list[dict], **overrides: object) -> dict:
     case = {
         "id": "case-1",
+        "task": "translation",
         "source": source,
         "automatic_checks": checks,
         "protected_terms": [],
@@ -25,6 +26,31 @@ def case_with_checks(*, source: str, checks: list[dict], **overrides: object) ->
     }
     case.update(overrides)
     return case
+
+
+def review_case() -> dict:
+    return case_with_checks(
+        id="review-1",
+        task="review",
+        source="Run `lume fetch` with Lume.",
+        checks=[
+            {"type": "code_span_multiset", "severity": "critical"},
+            {"type": "protected_term_multiset", "severity": "critical"},
+        ],
+        protected_terms=["Lume"],
+    )
+
+
+def review_output(corrected: str) -> str:
+    return json.dumps({
+        "corrected_translation": corrected,
+        "issues": [{
+            "category": "accuracy",
+            "source_span": "`lume fetch` and Lume",
+            "candidate_span": "`lume send` and Lume",
+            "explanation": "Restore `lume fetch`; keep Lume exactly.",
+        }],
+    }, ensure_ascii=False)
 
 
 def complete_run_record(
@@ -130,6 +156,56 @@ def structured_validation_fixtures() -> tuple[StructuredFixture, ...]:
 
 
 class ValidatorTests(unittest.TestCase):
+    def test_output_contract_rejects_wrappers_but_preserves_source_syntax(self):
+        plain = case_with_checks(source="Save changes", checks=[])
+        quoted = case_with_checks(source='"Save changes"', checks=[])
+        fenced = case_with_checks(source="```text\nSave changes\n```", checks=[])
+
+        for output in ('"Guardar alterações"', "```text\nGuardar alterações\n```"):
+            with self.subTest(output=output):
+                result = validate_output(plain, output)
+                self.assertEqual(result.status, "failed")
+                self.assertEqual(
+                    [item.invariant for item in result.findings],
+                    ["output_contract"],
+                )
+        self.assertEqual(validate_output(plain, "Guardar alterações").status, "passed")
+        self.assertEqual(validate_output(quoted, '"Guardar alterações"').status, "passed")
+        self.assertEqual(
+            validate_output(fenced, "```text\nGuardar alterações\n```").status,
+            "passed",
+        )
+
+    def test_review_contract_validates_only_corrected_translation(self):
+        raw = review_output("Executa `lume fetch` com a Lume.")
+
+        result = validate_output(review_case(), raw)
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.output, raw)
+        self.assertEqual((result.applicable_checks, result.passed_checks), (3, 3))
+
+    def test_invalid_review_contract_skips_declared_checks(self):
+        exact = review_output("Executa `lume fetch` com a Lume.")
+        invalid = (
+            f"```json\n{exact}\n```",
+            exact + "\nExplanation",
+            json.dumps({"corrected_translation": "ok", "issues": [], "extra": True}),
+            json.dumps({"corrected_translation": "ok", "issues": ["wrong"]}),
+            '{"corrected_translation":"one","corrected_translation":"two","issues":[]}',
+            '{"corrected_translation":"ok","issues":[],"score":NaN}',
+        )
+        for raw in invalid:
+            with self.subTest(raw=raw):
+                result = validate_output(review_case(), raw)
+                self.assertEqual(result.status, "failed")
+                self.assertEqual((result.failed_checks, result.skipped_checks), (1, 2))
+                self.assertEqual(
+                    result.skipped_invariants,
+                    ("code_span_multiset", "protected_term_multiset"),
+                )
+                self.assertEqual(result.validator_error_checks, 0)
+
     def test_literal_mapping_and_literal_multiset_protect_exact_declared_tokens(self):
         """Break: prices, symbols, bullets, or instruction labels could change undetected."""
         case = case_with_checks(
@@ -361,9 +437,9 @@ class ValidatorTests(unittest.TestCase):
         )
         self.assertTrue(all(finding.expected is not None for finding in result.findings))
         self.assertEqual(result.status, "failed")
-        self.assertEqual(result.applicable_checks, 5)
+        self.assertEqual(result.applicable_checks, 6)
         self.assertEqual(result.failed_checks, 4)
-        self.assertEqual(result.passed_checks, 1)
+        self.assertEqual(result.passed_checks, 2)
 
     def test_declared_scalar_check_families_compare_semantic_multisets(self):
         """Break: declared protected tokens could be dropped, duplicated, or replaced silently."""
@@ -411,7 +487,7 @@ class ValidatorTests(unittest.TestCase):
         result = validate_output(case, "Mantenha {name} e remova o endereço")
 
         self.assertEqual(result.findings, ())
-        self.assertEqual(result.applicable_checks, 1)
+        self.assertEqual(result.applicable_checks, 2)
 
     def test_numbers_are_compared_by_normalized_locale_value(self):
         """Break: locale punctuation changes could be mistaken for changed numeric meaning."""
@@ -1326,7 +1402,7 @@ class BatchValidationTests(unittest.TestCase):
         records = [json.loads(line) for line in destination.read_text(encoding="utf-8").splitlines()]
         self.assertEqual([record["run_id"] for record in records], ["run-b", "run-a"])
         self.assertEqual(len(records), 2)
-        self.assertTrue(all(record["applicable_checks"] == 1 for record in records))
+        self.assertTrue(all(record["applicable_checks"] == 2 for record in records))
         self.assertEqual(destination.read_bytes(), b"".join(canonical_bytes(record) for record in records))
         self.assertEqual(self.raw_snapshot(), raw_before)
 

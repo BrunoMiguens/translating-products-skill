@@ -41,6 +41,9 @@ _IDENTIFIER = re.compile(
     r"[A-Z][A-Z0-9_]{1,}|[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z0-9_]+)+)(?![\w])"
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+OUTPUT_CONTRACT = "output_contract"
+_REVIEW_FIELDS = {"corrected_translation", "issues"}
+_ISSUE_FIELDS = {"category", "source_span", "candidate_span", "explanation"}
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,9 @@ class ValidationResult:
     applicable_checks: int
     passed_checks: int
     failed_checks: int
+    skipped_checks: int
     validator_error_checks: int
+    skipped_invariants: tuple[str, ...]
     run_id: str | None = None
 
     def to_record(self) -> dict:
@@ -78,7 +83,9 @@ class ValidationResult:
             "applicable_checks": self.applicable_checks,
             "passed_checks": self.passed_checks,
             "failed_checks": self.failed_checks,
+            "skipped_checks": self.skipped_checks,
             "validator_error_checks": self.validator_error_checks,
+            "skipped_invariants": list(self.skipped_invariants),
         }
 
 
@@ -87,6 +94,116 @@ class _CandidateStructureError(ValueError):
 
 
 Check = Callable[[Mapping[str, object], str, Mapping[str, object]], tuple[Finding, ...]]
+
+
+def applicable_invariants(case: Mapping[str, object]) -> tuple[str, ...]:
+    checks = case.get("automatic_checks")
+    if not isinstance(checks, Sequence) or isinstance(checks, (str, bytes)):
+        raise BenchmarkError(f"case {case.get('id')} automatic_checks must be a list")
+    declared = []
+    for index, check in enumerate(checks):
+        if not isinstance(check, Mapping) or not isinstance(check.get("type"), str):
+            raise BenchmarkError(f"case {case.get('id')} automatic check {index} is invalid")
+        declared.append(check["type"])
+    return (OUTPUT_CONTRACT, *declared)
+
+
+def _reject_json_constant(value: str) -> object:
+    raise ValueError(f"invalid JSON constant {value}")
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field {key!r}")
+        result[key] = value
+    return result
+
+
+def _strict_json(text: str) -> object:
+    return json.loads(
+        text,
+        object_pairs_hook=_unique_object,
+        parse_constant=_reject_json_constant,
+    )
+
+
+def _contract_failure(output: str, message: str) -> tuple[Finding, ...]:
+    return (Finding(
+        invariant=OUTPUT_CONTRACT,
+        severity="critical",
+        expected="exact caller-requested artifact",
+        observed=output,
+        affected_span=(0, len(output)),
+        message=message,
+    ),)
+
+
+def _is_json_string(text: str) -> bool:
+    try:
+        return isinstance(_strict_json(text.strip()), str)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
+def _is_complete_fence(text: str) -> bool:
+    lines = text.strip().splitlines()
+    if len(lines) < 2:
+        return False
+    opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})[^\n]*", lines[0])
+    if opening is None:
+        return False
+    marker = opening.group(1)
+    closing = re.fullmatch(
+        rf" {{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*",
+        lines[-1],
+    )
+    return closing is not None
+
+
+def _output_contract(
+    case: Mapping[str, object], output: str,
+) -> tuple[str | None, tuple[Finding, ...]]:
+    task = case.get("task", "translation")
+    source = _source(case)
+    if not output.strip():
+        return None, _contract_failure(output, "candidate output is empty")
+    if task == "review":
+        try:
+            payload = _strict_json(output)
+        except (ValueError, TypeError, json.JSONDecodeError) as error:
+            return None, _contract_failure(
+                output, f"review output is not exact JSON: {error}",
+            )
+        valid = (
+            isinstance(payload, dict)
+            and set(payload) == _REVIEW_FIELDS
+            and isinstance(payload.get("corrected_translation"), str)
+            and isinstance(payload.get("issues"), list)
+            and all(
+                isinstance(issue, dict)
+                and set(issue) == _ISSUE_FIELDS
+                and all(isinstance(issue[field], str) for field in _ISSUE_FIELDS)
+                for issue in payload.get("issues", [])
+            )
+        )
+        if not valid:
+            return None, _contract_failure(
+                output, "review output does not match the exact schema",
+            )
+        return payload["corrected_translation"], ()
+    if task != "translation":
+        raise BenchmarkError(f"case {case.get('id')} has unknown task: {task!r}")
+    if _is_complete_fence(output) and not _is_complete_fence(source):
+        return None, _contract_failure(
+            output, "translation has an added presentation fence",
+        )
+    if _is_json_string(output) and not _is_json_string(source):
+        return None, _contract_failure(
+            output, "translation has an added JSON-string wrapper",
+        )
+    return output, ()
 
 
 def _severity(check: Mapping[str, object]) -> str:
@@ -1521,6 +1638,7 @@ CHECKS: dict[str, Check] = {
     "icu_topology": check_icu_topology,
     "forbidden_locale_form": check_forbidden_locale_form,
 }
+SUPPORTED_INVARIANTS = frozenset((OUTPUT_CONTRACT, *CHECKS))
 
 
 def validate_output(case: Mapping[str, object], output: str) -> ValidationResult:
@@ -1536,7 +1654,33 @@ def validate_output(case: Mapping[str, object], output: str) -> ValidationResult
         raise BenchmarkError(f"case {case_id} automatic_checks must be a list")
     findings: list[Finding] = []
     errors: list[str] = []
-    passed = failed = validator_errors = 0
+    selected_output, contract_findings = _output_contract(case, output)
+    findings.extend(contract_findings)
+    passed = 0 if contract_findings else 1
+    failed = 1 if contract_findings else 0
+    validator_errors = 0
+    skipped_invariants: tuple[str, ...] = ()
+    if selected_output is None:
+        skipped_invariants = tuple(
+            check.get("type", f"check[{index}]")
+            if isinstance(check, Mapping)
+            else f"check[{index}]"
+            for index, check in enumerate(checks)
+        )
+        status = "failed"
+        return ValidationResult(
+            case_id=case_id,
+            output=output,
+            status=status,
+            findings=tuple(findings),
+            validator_errors=(),
+            applicable_checks=1 + len(checks),
+            passed_checks=passed,
+            failed_checks=failed,
+            skipped_checks=len(skipped_invariants),
+            validator_error_checks=0,
+            skipped_invariants=skipped_invariants,
+        )
     for index, check in enumerate(checks):
         if not isinstance(check, Mapping):
             errors.append(f"check[{index}]: TypeError: check declaration must be an object")
@@ -1545,7 +1689,7 @@ def validate_output(case: Mapping[str, object], output: str) -> ValidationResult
         check_type = check.get("type")
         try:
             _validate_check_declaration(check)
-            check_findings = CHECKS[check_type](case, output, check)
+            check_findings = CHECKS[check_type](case, selected_output, check)
             if not isinstance(check_findings, tuple) or not all(
                 isinstance(finding, Finding) for finding in check_findings
             ):
@@ -1566,10 +1710,12 @@ def validate_output(case: Mapping[str, object], output: str) -> ValidationResult
         status=status,
         findings=tuple(findings),
         validator_errors=tuple(errors),
-        applicable_checks=len(checks),
+        applicable_checks=1 + len(checks),
         passed_checks=passed,
         failed_checks=failed,
+        skipped_checks=0,
         validator_error_checks=validator_errors,
+        skipped_invariants=(),
     )
 
 
