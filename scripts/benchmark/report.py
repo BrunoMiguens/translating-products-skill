@@ -154,6 +154,11 @@ def _condition_numbers(value: object, description: str, *, required: set[str] | 
 
 
 def _bootstrap(value: object, description: str) -> None:
+    if isinstance(value, Mapping) and value.get("available") is False:
+        record = _object(value, {"available", "reason"}, description)
+        _boolean(record["available"], f"{description} available")
+        _text(record["reason"], f"{description} reason")
+        return
     record = _object(
         value, {"estimate", "lower_95", "upper_95", "seed", "draws"},
         description,
@@ -213,13 +218,17 @@ def _validate_scorecards(value: object) -> None:
         _text(name, "invariant scorecard name")
         record = _object(
             value,
-            {"available", "applicable", "passed", "failures", "validator_errors",
+            {"available", "applicable", "passed", "failures", "skipped",
+             "validator_errors",
              "pass_rate", "paired_case_attempts",
              "paired_failure_difference_normal_minus_suite", "paired_difference"},
             f"invariant scorecard {name}",
         )
         _boolean(record["available"], f"invariant scorecard {name} available")
-        for field in ("applicable", "passed", "failures", "validator_errors", "pass_rate"):
+        for field in (
+            "applicable", "passed", "failures", "skipped",
+            "validator_errors", "pass_rate",
+        ):
             _condition_numbers(record[field], f"invariant {name} {field}", required=set(CONDITIONS))
         _integer(record["paired_case_attempts"], f"invariant {name} paired cases", minimum=0)
         _bootstrap(record["paired_failure_difference_normal_minus_suite"], f"invariant {name} paired failures")
@@ -880,7 +889,8 @@ def _render_markdown(
     )
     invariant_rows = [
         [name, value["applicable"]["suite"], value["passed"]["suite"],
-         value["failures"]["suite"], value["validator_errors"]["suite"],
+         value["failures"]["suite"], value["skipped"]["suite"],
+         value["validator_errors"]["suite"],
          _format_percent(value["pass_rate"]["suite"])]
         for name, value in sorted(cards["invariant"].items())
     ]
@@ -888,7 +898,7 @@ def _render_markdown(
         _HEADINGS[6]
         + f"\n\nSuite structural pass rate: {_format_percent(translation['suite_structural_pass_rate'])}."
         + "\n\nInvariant scorecard\n\n"
-        + (_table(("Invariant", "Applicable", "Passed", "Failures", "Validator errors", "Suite pass rate"), invariant_rows)
+        + (_table(("Invariant", "Applicable", "Passed", "Failures", "Skipped", "Validator errors", "Suite pass rate"), invariant_rows)
            if invariant_rows else "Unavailable: no applicable structural invariant scorecards.")
     )
     if not review["available"]:

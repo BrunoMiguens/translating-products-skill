@@ -129,6 +129,26 @@ def render_fixed(scores: dict | None = None) -> tuple[bytes, bytes]:
 
 
 class ReportTests(unittest.TestCase):
+    def test_report_accepts_skipped_invariants_and_unavailable_pairs(self):
+        document = fixed_score_document()
+        invariant = document["metrics"]["scorecards"]["invariant"][
+            "output_contract"
+        ]
+        invariant["skipped"]["normal"] = 1
+        unavailable_pair = {
+            "available": False,
+            "reason": "no paired observations",
+        }
+        invariant["paired_case_attempts"] = 0
+        invariant["paired_failure_difference_normal_minus_suite"] = unavailable_pair
+        invariant["paired_difference"] = unavailable_pair
+
+        _, markdown = render_fixed(document)
+
+        text = markdown.decode("utf-8")
+        self.assertIn("Skipped", text)
+        self.assertIn("output_contract", text)
+
     def test_fixed_scores_render_byte_identical_reports(self):
         """Break: report rendering could add wall-clock or iteration-order data."""
         first_json, first_md = render_fixed()
