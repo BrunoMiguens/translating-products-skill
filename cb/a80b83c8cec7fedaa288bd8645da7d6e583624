@@ -1,0 +1,32 @@
+tests/test_review_artifact.py
+  s_51f69c54a42bb0::t_29a55d32e3998c 1-181,190-290,306-311,329-361,378-503
+  s_51f69c54a42bb0::t_297576f4a03a29 362-377
+  s_51f69c54a42bb0::t_5bbdac5bd1f890 183-189
+  s_51f69c54a42bb0::t_36a12cfcd754b9 291-305
+  s_51f69c54a42bb0::t_44757fcfd1f97b 312-328
+  s_51f69c54a42bb0::t_880611cd896794 182
+skills/reviewing-translations/references/review-artifact-schema.json
+  s_51f69c54a42bb0::t_b4ef6e0116d197 1-48,50-133,135-227,234-263
+  s_51f69c54a42bb0::t_91a207c30567cc 49,134,228-233
+skills/reviewing-translations/scripts/validate_review_artifact.py
+  s_51f69c54a42bb0::t_a951dc5f5410e2 499-504
+  s_51f69c54a42bb0::t_875d2b93003696 1-498,505-589,592-761,763-776
+  s_51f69c54a42bb0::t_afdbdeeeeaa3c3 762
+  s_51f69c54a42bb0::t_a781b41ec5f7f5 590-591
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cba80b83c8cec7fedaa288bd8645da7d6e583624",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
