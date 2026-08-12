@@ -129,7 +129,14 @@ def _require_valid_curated_output(
 ) -> None:
     from .validate import validate_output
 
-    result = validate_output(case, output)
+    # Review references and accepted corrections are the corrected translation
+    # itself, not the runtime review agent's JSON delivery envelope.
+    validation_case = (
+        {**case, "task": "translation"}
+        if case.get("task") == "review"
+        else case
+    )
+    result = validate_output(validation_case, output)
     if result.status == "passed":
         return
     failures = [finding.invariant for finding in result.findings]

@@ -114,7 +114,12 @@ class PreparationTests(unittest.TestCase):
         seeded = read_json(root / "benchmarks/pt-pt-v1/seeded-errors.json")
         false_positive_decisions = 0
         for case in cases:
-            result = validate_output(case, case["reference"])
+            reference_case = (
+                {**case, "task": "translation"}
+                if case["task"] == "review"
+                else case
+            )
+            result = validate_output(reference_case, case["reference"])
             self.assertEqual(result.status, "passed", (case["id"], result.to_record()))
             if case["task"] == "review":
                 inventory = seeded[case["id"]]
