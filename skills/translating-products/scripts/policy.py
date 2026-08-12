@@ -38,6 +38,16 @@ GLOSSARY_HEADER = (
     "status",
     "notes",
 )
+DRAFT_TERMINOLOGY_FIELDS = (
+    "source_term",
+    "target_term",
+    "locale",
+    "domain",
+    "context",
+    "status",
+    "provenance",
+    "alternatives",
+)
 LOCALES_FIELDS = {
     "source_locale",
     "target_locales",
@@ -302,6 +312,29 @@ def _parse_glossary(text: str) -> tuple[str | None, list[str], int]:
     if malformed:
         return "malformed:glossary.csv", [], 0
     return None, incomplete, entries
+
+
+def validate_draft_terminology(text: str) -> Sequence[str]:
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    if tuple(reader.fieldnames or ()) != DRAFT_TERMINOLOGY_FIELDS:
+        return ("draft terminology has an invalid header",)
+    errors = []
+    required = DRAFT_TERMINOLOGY_FIELDS[:-1]
+    for row_number, row in enumerate(reader, start=2):
+        if None in row:
+            errors.append(f"draft terminology row {row_number} has extra columns")
+            continue
+        for field in required:
+            value = row.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(
+                    f"draft terminology row {row_number} has blank {field}"
+                )
+        if row.get("status") != "draft":
+            errors.append(
+                f"draft terminology row {row_number} must use draft status"
+            )
+    return tuple(errors)
 
 
 def _parse_protected_terms(text: str) -> tuple[str | None, int]:

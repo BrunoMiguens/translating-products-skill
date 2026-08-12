@@ -585,6 +585,43 @@ class ReviewArtifactCliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertNotEqual(completed.stderr, "")
 
+    def test_cli_validates_claimed_draft_terminology_without_changing_success_output(self):
+        """Break: a claimed malformed draft record could pass the review-output gate."""
+        with tempfile.TemporaryDirectory() as directory:
+            draft_path = Path(directory) / "draft-terminology.csv"
+            draft_path.write_text("source,target\nterm,value\n", encoding="utf-8")
+            rejected = self.run_cli(
+                json.dumps(request_fixture()),
+                json.dumps(result_fixture()),
+                "--draft-terminology",
+                str(draft_path),
+            )
+            self.assertEqual(rejected.returncode, 1)
+            self.assertEqual(rejected.stdout, "")
+            self.assertEqual(
+                rejected.stderr,
+                "draft terminology has an invalid header\n",
+            )
+
+            draft_path.write_text(
+                "source_term,target_term,locale,domain,context,status,provenance,alternatives\n"
+                "source,target,fr-FR,interface,short label,draft,review run,\n",
+                encoding="utf-8",
+            )
+            accepted = self.run_cli(
+                json.dumps(request_fixture()),
+                json.dumps(result_fixture()),
+                "--draft-terminology",
+                str(draft_path),
+            )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(
+            accepted.stdout,
+            '{"valid":true,"locales":1,"units":2,"counts":{"no_issue_detected":1,'
+            '"change_recommended":1,"blocked_by_source":0,"unresolved":0}}\n',
+        )
+        self.assertEqual(accepted.stderr, "")
+
 
 if __name__ == "__main__":
     unittest.main()

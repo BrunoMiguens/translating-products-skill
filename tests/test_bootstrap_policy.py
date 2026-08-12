@@ -20,6 +20,9 @@ CONTEXT_FILES = (
     "style-guide.md",
     "protected-terms.txt",
 )
+DRAFT_TERMINOLOGY_HEADER = (
+    "source_term,target_term,locale,domain,context,status,provenance,alternatives\n"
+)
 
 PROJECT_BRIEF = """# Translation project brief
 
@@ -256,6 +259,99 @@ class BootstrapPolicyTests(unittest.TestCase):
             )
             optional.write_text("changed optional decision\n", encoding="utf-8")
             self.assertIsNone(self.policy.bootstrap_issue(root, {}))
+
+    def test_draft_terminology_requires_complete_draft_rows(self):
+        """Break: an incomplete or approved draft term could be accepted as a record."""
+        valid = (
+            DRAFT_TERMINOLOGY_HEADER
+            + "source,target,fr-FR,interface,short label,draft,review run,\n"
+        )
+        cases = {
+            "valid": (valid, ()),
+            "invalid-header": ("source,target\nterm,value\n", (
+                "draft terminology has an invalid header",
+            )),
+            "blank-required": (
+                DRAFT_TERMINOLOGY_HEADER
+                + "source,target,fr-FR,,short label,draft,review run,\n",
+                ("draft terminology row 2 has blank domain",),
+            ),
+            "non-draft-status": (
+                DRAFT_TERMINOLOGY_HEADER
+                + "source,target,fr-FR,interface,short label,approved,review run,\n",
+                ("draft terminology row 2 must use draft status",),
+            ),
+            "extra-column": (
+                DRAFT_TERMINOLOGY_HEADER
+                + "source,target,fr-FR,interface,short label,draft,review run,,extra\n",
+                ("draft terminology row 2 has extra columns",),
+            ),
+        }
+        for name, (text, expected) in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(self.policy.validate_draft_terminology(text), expected)
+
+    def test_draft_terminology_template_is_an_empty_valid_record(self):
+        """Break: bootstrap could distribute a draft template review cannot validate."""
+        template = (ASSETS / "draft-terminology.csv").read_text(encoding="utf-8")
+        self.assertEqual(self.policy.validate_draft_terminology(template), ())
+
+    def test_draft_terminology_is_optional_and_outside_approval_hashes(self):
+        """Break: draft records could change a valid setup into a reapproval gate."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            approve(translation_dir)
+            approval_path = translation_dir / "setup-approval.json"
+            before = json.loads(approval_path.read_text(encoding="utf-8"))
+
+            self.assertFalse((translation_dir / "draft-terminology.csv").exists())
+            self.assertEqual(self.policy.bootstrap_action(root, {}), "translate")
+
+            draft = translation_dir / "draft-terminology.csv"
+            draft.write_text(
+                DRAFT_TERMINOLOGY_HEADER
+                + "source,target,fr-FR,interface,short label,draft,review run,\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(self.policy.bootstrap_action(root, {}), "translate")
+            draft.write_text(
+                DRAFT_TERMINOLOGY_HEADER
+                + "source,alternative,fr-FR,interface,short label,draft,review run,\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(self.policy.bootstrap_action(root, {}), "translate")
+            self.assertEqual(
+                json.loads(approval_path.read_text(encoding="utf-8")), before
+            )
+            self.assertEqual(set(before["context_sha256"]), set(CONTEXT_FILES))
+
+    def test_draft_terminology_does_not_promote_to_glossary_without_reapproval(self):
+        """Break: a draft term could become approved glossary authority automatically."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            approve(translation_dir)
+            (translation_dir / "draft-terminology.csv").write_text(
+                DRAFT_TERMINOLOGY_HEADER
+                + "source,target,fr-FR,interface,short label,draft,review run,\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(self.policy.bootstrap_action(root, {}), "translate")
+            (translation_dir / "glossary.csv").write_text(
+                "source_term,target_term,locale,context,status,notes\n"
+                "source,target,fr-FR,short label,approved,manual review\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                self.policy.bootstrap_issue(root, {}),
+                "approval-hash-mismatch:glossary.csv",
+            )
+            approve(translation_dir)
+            self.assertEqual(self.policy.bootstrap_action(root, {}), "translate")
 
     def test_approval_writer_rejects_unapproved_empty_collection(self):
         with tempfile.TemporaryDirectory() as tmp:

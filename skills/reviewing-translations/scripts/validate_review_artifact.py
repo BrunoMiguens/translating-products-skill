@@ -31,6 +31,24 @@ validate_check_declaration = _invariants.validate_check_declaration
 validate_invariants = _invariants.validate_invariants
 
 
+def _load_draft_terminology_validator():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "translating-products/scripts/policy.py"
+    )
+    name = "_draft_terminology_policy"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing.validate_draft_terminology
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("unable to load draft terminology validator")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module.validate_draft_terminology
+
+
 CLASSIFICATIONS = (
     "no_issue_detected",
     "change_recommended",
@@ -745,6 +763,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--result", required=True, type=Path)
+    parser.add_argument("--draft-terminology", type=Path)
     return parser
 
 
@@ -753,13 +772,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         request = _load_json(args.request, "request")
         result = _load_json(args.result, "result")
+        draft_text = (
+            args.draft_terminology.read_text(encoding="utf-8")
+            if args.draft_terminology is not None
+            else None
+        )
     except ValueError as error:
         print(error, file=sys.stderr)
+        return 2
+    except (OSError, UnicodeError) as error:
+        print(f"unable to read draft terminology file: {error}", file=sys.stderr)
         return 2
     if not isinstance(request, Mapping) or not isinstance(result, Mapping):
         print("request and result JSON roots must be objects", file=sys.stderr)
         return 2
-    errors = validate_review_artifact(request, result)
+    errors = list(validate_review_artifact(request, result))
+    if draft_text is not None:
+        errors.extend(_load_draft_terminology_validator()(draft_text))
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
