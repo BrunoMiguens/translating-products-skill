@@ -49,17 +49,19 @@ def validation(
     *,
     attempt: int = 1,
     applicable: int = 1,
-    passed: int = 1,
     findings: list[dict] | None = None,
     invariants: list[str] | None = None,
+    skipped_invariants: list[str] | None = None,
 ) -> dict:
     findings = [] if findings is None else findings
+    skipped_invariants = [] if skipped_invariants is None else skipped_invariants
     invariants = (
-        ["placeholder_multiset"] * applicable
+        ["output_contract"] * applicable
         if invariants is None
         else invariants
     )
     failed = 1 if findings else 0
+    passed = applicable - failed - len(skipped_invariants)
     return {
         "run_id": run_id,
         "case_id": case_id,
@@ -69,10 +71,12 @@ def validation(
         "findings": findings,
         "validator_errors": [],
         "applicable_checks": applicable,
-        "passed_checks": passed if not findings else max(0, passed - 1),
+        "passed_checks": passed,
         "failed_checks": failed,
+        "skipped_checks": len(skipped_invariants),
         "validator_error_checks": 0,
         "applicable_invariants": invariants,
+        "skipped_invariants": skipped_invariants,
     }
 
 
@@ -402,12 +406,18 @@ class ScoreTests(unittest.TestCase):
             record for record in evidence["validations"]
             if record["run_id"] == "t2-s"
         )
+        normal_validation = next(
+            record for record in evidence["validations"]
+            if record["run_id"] == "t2-n"
+        )
+        normal_validation["applicable_invariants"] = ["placeholder_multiset"]
         suite_validation.update({
             "status": "failed",
             "findings": [critical],
             "applicable_checks": 1,
             "passed_checks": 0,
             "failed_checks": 1,
+            "applicable_invariants": ["placeholder_multiset"],
         })
 
         metrics = score_evidence(evidence)
@@ -564,6 +574,87 @@ class ScoreTests(unittest.TestCase):
             0.0,
         )
 
+    def test_invariant_summary_counts_skips_and_omits_unavailable_pairs(self):
+        evidence = base_evidence()
+        replacements = {
+            "t1-n": validation(
+                "t1-n", "translation-1", "normal", applicable=2,
+                invariants=["output_contract", "placeholder_multiset"],
+                skipped_invariants=["placeholder_multiset"],
+            ),
+            "t1-s": validation(
+                "t1-s", "translation-1", "suite", applicable=2,
+                invariants=["output_contract", "placeholder_multiset"],
+            ),
+            "t1-c": validation(
+                "t1-c", "translation-1", "context_only", applicable=2,
+                invariants=["output_contract", "placeholder_multiset"],
+            ),
+        }
+        evidence["validations"] = [
+            replacements.get(record["run_id"], record)
+            for record in evidence["validations"]
+        ]
+
+        metric = score_evidence(evidence)["scorecards"]["invariant"][
+            "placeholder_multiset"
+        ]
+
+        self.assertEqual(metric["skipped"]["normal"], 1)
+        self.assertEqual(metric["paired_case_attempts"], 0)
+        self.assertFalse(
+            metric["paired_failure_difference_normal_minus_suite"]["available"]
+        )
+
+    def test_skipped_check_count_must_match_invariant_list(self):
+        evidence = base_evidence()
+        evidence["validations"][0]["skipped_checks"] = 1
+
+        with self.assertRaisesRegex(BenchmarkError, "skipped"):
+            score_evidence(evidence)
+
+    def test_skipped_invariant_must_be_declared_and_cannot_also_fail(self):
+        undeclared = base_evidence()
+        record = undeclared["validations"][0]
+        record.update({
+            "passed_checks": 0,
+            "skipped_checks": 1,
+            "skipped_invariants": ["placeholder_multiset"],
+        })
+        with self.assertRaisesRegex(BenchmarkError, "not declared applicable"):
+            score_evidence(undeclared)
+
+        overlapping = base_evidence()
+        for candidate in overlapping["validations"]:
+            if candidate["case_id"] == "translation-1":
+                candidate.update({
+                    "applicable_checks": 2,
+                    "passed_checks": 2,
+                    "applicable_invariants": [
+                        "output_contract", "placeholder_multiset",
+                    ],
+                })
+        record = overlapping["validations"][0]
+        record.update({
+            "status": "failed",
+            "applicable_checks": 2,
+            "passed_checks": 0,
+            "failed_checks": 1,
+            "skipped_checks": 1,
+            "applicable_invariants": ["output_contract", "placeholder_multiset"],
+            "skipped_invariants": ["placeholder_multiset"],
+            "findings": [{
+                "invariant": "placeholder_multiset",
+                "severity": "major",
+                "expected": ["{name}"],
+                "observed": [],
+                "affected_span": None,
+                "message": "placeholder changed",
+            }],
+        })
+        with self.assertRaisesRegex(BenchmarkError, "per-invariant"):
+            score_evidence(overlapping)
+
     def test_invariant_failures_must_name_a_declared_applicable_check(self):
         """Break: failure rows could invent applicability absent from declarations."""
         evidence = base_evidence()
@@ -615,13 +706,16 @@ class ScoreTests(unittest.TestCase):
                     "output": run["output"],
                     "findings": [],
                     "validator_errors": [],
-                    "applicable_checks": 2,
-                    "passed_checks": 2,
+                    "applicable_checks": 3,
+                    "passed_checks": 3,
                     "failed_checks": 0,
+                    "skipped_checks": 0,
                     "validator_error_checks": 0,
+                    "skipped_invariants": [],
                 })
             cases = [{
                 "id": "case-1",
+                "task": "review",
                 "automatic_checks": [
                     {"type": "url_multiset", "severity": "critical"},
                     {"type": "placeholder_multiset", "severity": "major"},
@@ -633,8 +727,8 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(
             [record["applicable_invariants"] for record in normalized],
             [
-                ["url_multiset", "placeholder_multiset"],
-                ["url_multiset", "placeholder_multiset"],
+                ["output_contract", "url_multiset", "placeholder_multiset"],
+                ["output_contract", "url_multiset", "placeholder_multiset"],
             ],
         )
 
@@ -1053,10 +1147,12 @@ class LockedScoringTests(unittest.TestCase):
                 "output": output,
                 "findings": [],
                 "validator_errors": [],
-                "applicable_checks": 0,
-                "passed_checks": 0,
+                "applicable_checks": 1,
+                "passed_checks": 1,
                 "failed_checks": 0,
+                "skipped_checks": 0,
                 "validator_error_checks": 0,
+                "skipped_invariants": [],
             })
         manifest = build_run_manifest(
             self.dataset,
