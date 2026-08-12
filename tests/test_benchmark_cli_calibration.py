@@ -28,6 +28,13 @@ class CalibrationRunnerTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
+    def make_suite_source(self, text: str = "canonical suite\n") -> Path:
+        source = self.temp_dir / f"suite-{len(list(self.temp_dir.glob('suite-*')))}"
+        skill = source / "translating-products"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(text, encoding="utf-8")
+        return source
+
     def make_pack(
         self,
         *,
@@ -157,6 +164,19 @@ record = {
         for relative in ('.claude.json', '.claude/skills/unrelated/SKILL.md')
         if (pathlib.Path(os.environ['HOME']) / relative).exists()
     ],
+    'skill_text': (
+        pathlib.Path(
+            '.claude/skills/translating-products/SKILL.md'
+            if app == 'claude'
+            else '.agents/skills/translating-products/SKILL.md'
+        ).read_text(encoding='utf-8')
+        if pathlib.Path(
+            '.claude/skills/translating-products/SKILL.md'
+            if app == 'claude'
+            else '.agents/skills/translating-products/SKILL.md'
+        ).exists()
+        else None
+    ),
 }
 pathlib.Path(__file__).with_suffix('.log').write_text(
     json.dumps(record, sort_keys=True), encoding='utf-8'
@@ -236,6 +256,12 @@ else:
 
     def test_claude_run_stages_only_suite_files_and_captures_response(self):
         root = self.make_pack(app="claude", condition="suite")
+        suite_source = self.make_suite_source("canonical claude suite\n")
+        transient = suite_source / "translating-products" / "__pycache__"
+        transient.mkdir()
+        (transient / "ignored.pyc").write_bytes(b"ignored")
+        (suite_source / ".DS_Store").write_bytes(b"ignored")
+        (suite_source / "ignored.pyo").write_bytes(b"ignored")
         fake = self.make_fake_cli("claude")
         source_home = self.temp_dir / "claude-operator-home"
         global_skill = source_home / ".claude" / "skills" / "unrelated"
@@ -245,7 +271,7 @@ else:
             '{"oauthAccount":{"fixture":true}}\n', encoding="utf-8"
         )
         summary = run_tasks(
-            load_pack(root),
+            load_pack(root, suite_source=suite_source),
             RunOptions(
                 apps={"claude"},
                 claude_executable=str(fake),
@@ -265,6 +291,13 @@ else:
         tools_index = invocation["argv"].index("--tools")
         self.assertEqual(invocation["argv"][tools_index + 1], "Read,Glob,Grep,Skill")
         self.assertIn(".claude/skills/translating-products/SKILL.md", invocation["files"])
+        self.assertEqual(invocation["skill_text"], "canonical claude suite\n")
+        self.assertNotIn(
+            ".claude/skills/translating-products/__pycache__/ignored.pyc",
+            invocation["files"],
+        )
+        self.assertNotIn(".claude/skills/.DS_Store", invocation["files"])
+        self.assertNotIn(".claude/skills/ignored.pyo", invocation["files"])
         self.assertIn(".translation/project-brief.md", invocation["files"])
         self.assertNotIn(".claude/worktrees/stale/SECRET.txt", invocation["files"])
         self.assertEqual(invocation["home"], str(source_home.resolve()))
@@ -277,9 +310,11 @@ else:
         self.assertEqual(evidence["output_sha256"], sha256_bytes(response.read_bytes()))
         self.assertEqual(evidence["model_observed"], "fake-claude-model")
         self.assertEqual(evidence["evidence_kind"], "diagnostic_cli_calibration")
+        self.assertRegex(evidence["suite_tree_sha256"], r"^[0-9a-f]{64}$")
 
     def test_codex_run_isolates_auth_and_uses_nonpersistent_flags(self):
         root = self.make_pack(app="codex", condition="suite")
+        suite_source = self.make_suite_source("canonical codex suite\n")
         fake = self.make_fake_cli("codex")
         source_home = self.temp_dir / "operator-home"
         auth = source_home / ".codex" / "auth.json"
@@ -288,7 +323,7 @@ else:
         auth.chmod(0o600)
 
         run_tasks(
-            load_pack(root),
+            load_pack(root, suite_source=suite_source),
             RunOptions(
                 apps={"codex"},
                 codex_executable=str(fake),
@@ -305,6 +340,7 @@ else:
         self.assertIn("--json", invocation["argv"])
         self.assertIn("read-only", invocation["argv"])
         self.assertIn(".agents/skills/translating-products/SKILL.md", invocation["files"])
+        self.assertEqual(invocation["skill_text"], "canonical codex suite\n")
         self.assertNotEqual(invocation["home"], str(source_home))
         self.assertNotEqual(invocation["codex_home"], str(source_home / ".codex"))
         self.assertFalse(Path(invocation["home"]).exists())
@@ -312,6 +348,64 @@ else:
             (root / "tasks/codex/01-suite-case-1/RESPONSE.txt").read_text(encoding="utf-8"),
             "Guardar alterações\n",
         )
+
+    def test_suite_resume_requires_current_tree_hash(self):
+        root = self.make_pack(app="claude", condition="suite")
+        suite_source = self.make_suite_source()
+        fake = self.make_fake_cli("claude")
+        options = RunOptions(
+            apps={"claude"},
+            claude_executable=str(fake),
+            timeout_seconds=5,
+        )
+
+        run_tasks(load_pack(root, suite_source=suite_source), options)
+        self.assertEqual(
+            task_states(
+                load_pack(root, suite_source=suite_source), {"claude"},
+            )[0].status,
+            "completed",
+        )
+
+        cache = suite_source / "translating-products" / "__pycache__"
+        cache.mkdir()
+        (cache / "ignored.pyc").write_bytes(b"changed")
+        (suite_source / ".DS_Store").write_bytes(b"changed")
+        (suite_source / "ignored.pyo").write_bytes(b"changed")
+        self.assertEqual(
+            task_states(
+                load_pack(root, suite_source=suite_source), {"claude"},
+            )[0].status,
+            "completed",
+        )
+
+        (suite_source / "translating-products" / "SKILL.md").write_text(
+            "changed canonical suite\n", encoding="utf-8",
+        )
+        state = task_states(
+            load_pack(root, suite_source=suite_source), {"claude"},
+        )[0]
+        self.assertEqual(state.status, "invalid")
+        self.assertIn("suite tree hash", state.reason)
+
+    def test_suite_source_rejects_symlink_before_invocation(self):
+        root = self.make_pack(app="claude", condition="suite")
+        suite_source = self.make_suite_source()
+        (suite_source / "linked-skill").symlink_to(
+            suite_source / "translating-products", target_is_directory=True,
+        )
+        fake = self.make_fake_cli("claude")
+
+        with self.assertRaisesRegex(BenchmarkError, "symlink"):
+            run_tasks(
+                load_pack(root, suite_source=suite_source),
+                RunOptions(
+                    apps={"claude"},
+                    claude_executable=str(fake),
+                    timeout_seconds=5,
+                ),
+            )
+        self.assertFalse(fake.with_suffix(".log").exists())
 
     def test_host_failure_records_evidence_without_response_and_stops(self):
         root = self.make_pack(app="claude")

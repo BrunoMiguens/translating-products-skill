@@ -17,6 +17,7 @@ from uuid import uuid4
 from .common import (
     BenchmarkError,
     append_jsonl_fsync,
+    canonical_bytes,
     read_json,
     read_jsonl,
     sha256_bytes,
@@ -31,6 +32,8 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_ROOT = _REPOSITORY_ROOT / "benchmark-private" / "desktop-calibration"
 _EVIDENCE_KIND = "diagnostic_cli_calibration"
+_TRANSIENT_NAMES = {"__pycache__", ".DS_Store"}
+_TRANSIENT_SUFFIXES = {".pyc", ".pyo"}
 
 
 class CalibrationRunError(RuntimeError):
@@ -59,6 +62,8 @@ class CalibrationPack:
     tasks: tuple[CalibrationTask, ...]
     evidence_path: Path
     evidence: tuple[Mapping[str, object], ...]
+    suite_source: Path | None
+    suite_tree_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -158,7 +163,41 @@ def _regular_file(path: Path, label: str) -> None:
         raise BenchmarkError(f"{label} must be a regular file: {path}")
 
 
-def load_pack(root: Path) -> CalibrationPack:
+def _suite_files(root: Path) -> tuple[Path, ...]:
+    if root.is_symlink() or not root.is_dir():
+        raise BenchmarkError(f"suite source must be a regular directory: {root}")
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise BenchmarkError(f"suite source contains symlink: {path}")
+        relative = path.relative_to(root)
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise BenchmarkError(f"suite source contains non-regular entry: {path}")
+        transient = (
+            any(part in _TRANSIENT_NAMES for part in relative.parts)
+            or path.suffix in _TRANSIENT_SUFFIXES
+        )
+        if transient:
+            continue
+        files.append(path)
+    return tuple(
+        sorted(files, key=lambda path: path.relative_to(root).as_posix())
+    )
+
+
+def _suite_tree_hash(root: Path) -> str:
+    entries = [
+        [path.relative_to(root).as_posix(), sha256_bytes(path.read_bytes())]
+        for path in _suite_files(root)
+    ]
+    if not entries:
+        raise BenchmarkError(f"suite source contains no files: {root}")
+    return sha256_bytes(canonical_bytes(entries))
+
+
+def load_pack(root: Path, *, suite_source: Path | None = None) -> CalibrationPack:
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
         raise BenchmarkError(f"calibration root does not exist: {root}")
@@ -247,7 +286,21 @@ def load_pack(root: Path) -> CalibrationPack:
     if evidence_path.exists():
         _regular_file(evidence_path, "calibration evidence")
         evidence = tuple(read_jsonl(evidence_path))
-    return CalibrationPack(root, tuple(tasks), evidence_path, evidence)
+    canonical_suite_source: Path | None = None
+    suite_tree_sha256: str | None = None
+    if any(task.skills for task in tasks):
+        if suite_source is None:
+            raise BenchmarkError("suite source is required for suite calibration tasks")
+        canonical_suite_source = Path(suite_source).expanduser().absolute()
+        suite_tree_sha256 = _suite_tree_hash(canonical_suite_source)
+    return CalibrationPack(
+        root,
+        tuple(tasks),
+        evidence_path,
+        evidence,
+        canonical_suite_source,
+        suite_tree_sha256,
+    )
 
 
 def _successful_evidence(pack: CalibrationPack, run_id: str) -> Mapping[str, object] | None:
@@ -288,6 +341,12 @@ def task_states(pack: CalibrationPack, apps: set[str] | frozenset[str]) -> list[
         ):
             states.append(TaskState(task, "invalid", "response/evidence hash mismatch"))
             continue
+        if (
+            task.skills
+            and evidence.get("suite_tree_sha256") != pack.suite_tree_sha256
+        ):
+            states.append(TaskState(task, "invalid", "suite tree hash mismatch"))
+            continue
         states.append(TaskState(task, "completed"))
     return states
 
@@ -310,7 +369,20 @@ def _copy_tree(source: Path, destination: Path) -> None:
             raise BenchmarkError(f"refusing non-regular prepared project entry: {path}")
 
 
-def _stage_project(task: CalibrationTask, destination: Path) -> None:
+def _copy_suite(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=False)
+    for path in _suite_files(source):
+        target = destination / path.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+
+
+def _stage_project(
+    task: CalibrationTask,
+    destination: Path,
+    suite_source: Path | None,
+    suite_tree_sha256: str | None,
+) -> None:
     destination.mkdir(parents=True)
     readme = task.project_source / "README.md"
     if readme.is_file() and not readme.is_symlink():
@@ -319,14 +391,18 @@ def _stage_project(task: CalibrationTask, destination: Path) -> None:
         return
     translation = task.project_source / ".translation"
     _copy_tree(translation, destination / ".translation")
+    if suite_source is None or suite_tree_sha256 is None:
+        raise BenchmarkError(f"suite source is missing for {task.run_id}")
     if task.app == "claude":
-        source = task.project_source / ".claude" / "skills"
         target = destination / ".claude" / "skills"
     else:
-        source = task.project_source / ".agents" / "skills"
         target = destination / ".agents" / "skills"
     target.parent.mkdir(parents=True)
-    _copy_tree(source, target)
+    _copy_suite(suite_source, target)
+    if _suite_tree_hash(target) != suite_tree_sha256:
+        raise BenchmarkError(
+            f"suite source changed while staging {task.run_id}"
+        )
 
 
 def _atomic_write_text(path: Path, value: str) -> None:
@@ -516,11 +592,15 @@ def _invoke_task(
     options: RunOptions,
     executable: str,
     cli_version: str,
+    suite_source: Path | None,
+    suite_tree_sha256: str | None,
 ) -> HostOutcome:
     with tempfile.TemporaryDirectory(prefix=f"translation-calibration-{task.app}-") as temporary:
         temporary_root = Path(temporary)
         project = temporary_root / "project"
-        _stage_project(task, project)
+        _stage_project(
+            task, project, suite_source, suite_tree_sha256,
+        )
         environment = _isolated_environment(task, temporary_root, options)
         output_path = temporary_root / "last-message.txt"
         model_requested = options.claude_model if task.app == "claude" else options.codex_model
@@ -659,9 +739,13 @@ def _invoke_task(
         )
 
 
-def _evidence_record(task: CalibrationTask, outcome: HostOutcome) -> dict:
+def _evidence_record(
+    task: CalibrationTask,
+    outcome: HostOutcome,
+    suite_tree_sha256: str | None,
+) -> dict:
     success = outcome.reason is None
-    return {
+    record = {
         "schema_version": 1,
         "evidence_kind": _EVIDENCE_KIND,
         "claim_bearing": False,
@@ -690,6 +774,9 @@ def _evidence_record(task: CalibrationTask, outcome: HostOutcome) -> dict:
         "model_observed": outcome.model_observed,
         "usage": outcome.usage,
     }
+    if task.skills:
+        record["suite_tree_sha256"] = suite_tree_sha256
+    return record
 
 
 def run_tasks(
@@ -745,7 +832,12 @@ def run_tasks(
                     {},
                     str(error),
                 )
-                append_jsonl_fsync(pack.evidence_path, _evidence_record(first_task, outcome))
+                append_jsonl_fsync(
+                    pack.evidence_path,
+                    _evidence_record(
+                        first_task, outcome, pack.suite_tree_sha256,
+                    ),
+                )
                 raise CalibrationRunError(f"{first_task.run_id}: {error}") from error
             executable_by_app[app] = executable
             version_by_app[app] = cli_version
@@ -760,8 +852,10 @@ def run_tasks(
             options,
             executable_by_app[task.app],
             version_by_app[task.app],
+            pack.suite_source,
+            pack.suite_tree_sha256,
         )
-        record = _evidence_record(task, outcome)
+        record = _evidence_record(task, outcome, pack.suite_tree_sha256)
         if outcome.reason is not None:
             append_jsonl_fsync(pack.evidence_path, record)
             raise CalibrationRunError(f"{task.run_id}: {outcome.reason}")
@@ -833,7 +927,10 @@ def _print_status(pack: CalibrationPack, apps: frozenset[str]) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        pack = load_pack(arguments.root)
+        pack = load_pack(
+            arguments.root,
+            suite_source=_REPOSITORY_ROOT / "skills",
+        )
         apps = _apps_argument(arguments.app)
         if arguments.command == "status":
             return _print_status(pack, apps)
