@@ -67,6 +67,11 @@ alternatives, headings, quotation wrappers, presentation fences, and other
 explanatory material. Preserve wrappers that belong to the source or requested
 artifact; do not add wrappers merely to present the answer.
 
+Separate artifact content from input transport. Decode data framing before
+translation: a quoted JSON-string carrier, escaped representation, or enclosing
+data fence does not make that carrier part of the translation. Reapply only the
+output framing explicitly requested by the caller.
+
 Add concise decision notes only when they are requested or the caller permits
 supporting notes and there are draft terminology choices, material assumptions,
 or unresolved constraints. Keep approved input decisions out of the notes.

@@ -9,6 +9,15 @@ description: Use when reviewing AI-generated translations for meaning, naturalne
 
 Review source and target as paired artifacts. Detect defects, identify the smallest safely correctable target segment, and route that unchanged segment to the installed skill responsible for correction; do not rewrite it during QA.
 
+## Delivery boundary
+
+Capture the caller's output schema before beginning review and check it again
+after the completion decision. If the caller requests exact JSON, emit one JSON
+value matching that schema and nothing else: no Markdown fence, heading,
+explanation before or after it, QA status, or internal finding format. Data-block
+and serialization labels on review inputs describe transport only and never add
+wrappers to the public response.
+
 ## Capabilities
 
 - `translation-qa`

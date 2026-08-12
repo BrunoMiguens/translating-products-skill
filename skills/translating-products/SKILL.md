@@ -13,6 +13,18 @@ QA. Teach the agent to inspect the project and artifact, establish missing
 setup before drafting, compose only relevant specialists, and keep the
 workflow portable across agent hosts.
 
+## Delivery invariant
+
+Identify the caller's public output contract before routing. Keep it unchanged
+through every internal handoff, then check it again as the last action before
+responding. Input transport markers—such as a data block, serialization label,
+quoted JSON string, escape sequence, or Markdown container—describe how source
+data was supplied; they do not become output wrappers unless the caller
+explicitly requests that wrapper as part of the delivered artifact.
+
+QA success means the artifact is ready for contract-safe serialization. It does
+not authorize a heading, fence, quotation wrapper, explanation, or QA message.
+
 ## Workflow
 
 Resolve `SKILL_DIRECTORY` to the absolute directory containing this `SKILL.md`. Resolve every `scripts/`, `assets/`, and `references/` path below from that directory, never from the product project root.
@@ -34,7 +46,8 @@ Follow this order:
 13. For each target branch, `translate` with core against `.translation/glossary.csv`, `.translation/style-guide.md`, and `.translation/protected-terms.txt`; `refine` broad-to-narrow with selected writing-system, language, and locale modules; `integrate` through the selected product modules; then `review` that branch. **Do not combine linguistic branches**: merge outputs only after every target passes QA.
 14. Use subagents only when `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` returns true and independent branches materially benefit. Continue sequentially through the identical phase plans when the host lacks subagent support.
 15. Append newly inferred decisions to `.translation/decisions.md` with `draft` status; do not silently promote them to approved policy.
-16. Apply the caller-requested output contract at final delivery. Keep routing,
+16. Re-read the caller-requested output contract and apply it to the completed
+    artifact as the last action before responding. Keep routing,
     specialist, retry, QA, research, and decision-note formats as private
     workflow artifacts unless the caller explicitly requests them.
 
@@ -62,6 +75,12 @@ Do not attach generic risk warnings to each output. Report a risk only when a co
 The caller-requested output contract outranks every internal phase or QA handoff
 format. After all selected specialists and QA have completed, serialize only the
 requested public artifact.
+
+Determine source-owned syntax from the decoded artifact, not from the transport
+used to carry it. A JSON-string-encoded data block does not make its transport
+quotation marks source-owned. A fenced input container does not authorize a
+fenced answer. Preserve a wrapper only when it is content inside the decoded
+source or explicitly required by the caller's output schema.
 
 When the caller requests `return only`, add no heading, quotation wrapper,
 presentation fence, explanation, QA status, routing trace, disclosure, or
