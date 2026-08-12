@@ -252,6 +252,104 @@ def reviewed_registry_entry(
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_portable_skills_define_the_holistic_review_workflow(self):
+        """Break: an installed skill could fall back to one-pass approval semantics."""
+        required_review_terms = {
+            "no_issue_detected",
+            "blocked_by_source",
+            "selective_challenge",
+            "full_challenge",
+            "review-artifact-schema.json",
+            "validate_review_artifact.py",
+        }
+        for skill_name in ("reviewing-translations", "translating-products"):
+            with self.subTest(skill=skill_name):
+                text = (ROOT / f"skills/{skill_name}/SKILL.md").read_text(
+                    encoding="utf-8"
+                )
+                for term in required_review_terms:
+                    self.assertIn(term, text)
+
+    def test_review_skill_covers_universal_reasoning_and_blind_challenge(self):
+        """Break: review could remain literal, decontextualized, or anchored to its first pass."""
+        text = (ROOT / "skills/reviewing-translations/SKILL.md").read_text(
+            encoding="utf-8"
+        ).lower()
+        text = " ".join(text.split())
+        required_dimensions = (
+            "target-only naturalness",
+            "semantic relationships",
+            "register and audience",
+            "locale conventions",
+            "source-quality separation",
+            "surface fitness",
+        )
+        for dimension in required_dimensions:
+            with self.subTest(dimension=dimension):
+                self.assertIn(dimension, text)
+        self.assertIn("challenge input", text)
+        self.assertIn("primary conclusions", text)
+        self.assertIn("excludes primary conclusions", text)
+
+    def test_portable_review_outputs_are_collision_resistant(self):
+        """Break: concurrent or repeated runs could replace a caller's review artifact."""
+        required_path_contract = (
+            "caller-selected output path",
+            "utc timestamp",
+            "random or content-derived suffix",
+            "explicitly requests replacement",
+            "refuse silent overwrite",
+        )
+        for skill_name in ("reviewing-translations", "translating-products"):
+            with self.subTest(skill=skill_name):
+                text = (ROOT / f"skills/{skill_name}/SKILL.md").read_text(
+                    encoding="utf-8"
+                ).lower()
+                text = " ".join(text.split())
+                for contract in required_path_contract:
+                    self.assertIn(contract, text)
+
+    def test_production_skills_do_not_embed_evaluation_answers(self):
+        """Break: portable instructions could memorize repository evaluation cases."""
+        case_ids = set()
+        expected_targets = set()
+
+        def collect(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key == "id" and isinstance(child, str):
+                        case_ids.add(child)
+                    if key in {
+                        "expected_target",
+                        "expected_translation",
+                        "reference",
+                        "reference_translation",
+                    } and isinstance(child, str):
+                        expected_targets.add(child)
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        for root_name in ("benchmarks", "evals"):
+            for path in sorted((ROOT / root_name).rglob("*.json")):
+                collect(json.loads(path.read_text(encoding="utf-8")))
+            for path in sorted((ROOT / root_name).rglob("*.jsonl")):
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        collect(json.loads(line))
+
+        production_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((ROOT / "skills").glob("*/SKILL.md"))
+        )
+        leaked_ids = sorted(case_id for case_id in case_ids if case_id in production_text)
+        leaked_targets = sorted(
+            target for target in expected_targets if target and target in production_text
+        )
+        self.assertEqual(leaked_ids, [])
+        self.assertEqual(leaked_targets, [])
+
     def test_review_skill_ends_with_mechanical_public_serialization_gate(self):
         text = (ROOT / "skills/reviewing-translations/SKILL.md").read_text(
             encoding="utf-8"

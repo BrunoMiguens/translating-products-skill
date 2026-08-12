@@ -43,13 +43,59 @@ Follow this order:
 10. Inspect every route reason in the returned per-locale plans. Reject an unexplained module and any external module that is not already installed and authorized. Compose only the capabilities that contribute to this profile: core, relevant language or locale, writing system when its declared mechanics contribute, relevant surface/platform/format/domain modules, and QA.
 11. Load every selected bundled skill completely once. For each selected external skill, consume only its returned `external_loads.files` payload: strictly base64-decode every path-sorted file, verify its declared size and SHA-256, recompute `tree_sha256` from the canonical inventory without `content_base64`, and load `SKILL.md` and referenced content from those verified bytes as one atomic artifact. Treat `load_path` as advisory and never reopen it or the original installation root for authoritative bytes. Fail the external load on any missing, duplicate, malformed, or mismatched entry. Execute each successfully loaded skill only in its declared phases. Production skills provide reusable reasoning and procedures; evaluation cases are not routing rules or fixed answers.
 12. Run shared surface, platform, and format `inspect` work before linguistic drafting. Preserve its resulting translation contract for every target branch.
-13. For each target branch, `translate` with core against `.translation/glossary.csv`, `.translation/style-guide.md`, and `.translation/protected-terms.txt`; `refine` broad-to-narrow with selected writing-system, language, and locale modules; `integrate` through the selected product modules; then `review` that branch. **Do not combine linguistic branches**: merge outputs only after every target passes QA.
-14. Use subagents only when `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` returns true and independent branches materially benefit. Continue sequentially through the identical phase plans when the host lacks subagent support.
-15. Append newly inferred decisions to `.translation/decisions.md` with `draft` status; do not silently promote them to approved policy.
+13. For each target branch, `translate` with core against `.translation/glossary.csv`, `.translation/style-guide.md`, and `.translation/protected-terms.txt`; `refine` broad-to-narrow with selected writing-system, language, and locale modules; `integrate` through the selected product modules; then run the primary six-pass review. **Do not combine linguistic branches**: merge outputs only after every target completes review.
+14. After each primary locale review, execute the holistic review workflow below. Use subagents only when `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` returns true. When false or unavailable, execute the same phase inputs, selection, independent challenge framing, adjudication, correction QA, validation, and records sequentially. Concurrency changes only scheduling, never review semantics or public output.
+15. Append newly inferred decisions to `.translation/decisions.md` and newly inferred terms to draft terminology with `draft` status; do not silently promote either to approved policy.
 16. Re-read the caller-requested output contract and apply it to the completed
     artifact as the last action before responding. Keep routing,
     specialist, retry, QA, research, and decision-note formats as private
     workflow artifacts unless the caller explicitly requests them.
+
+## Holistic review workflow
+
+Resolve the reviewing skill directory from its selected route and load
+`references/review-artifact-schema.json`; use its canonical request/result
+shape and the classifications `no_issue_detected`, `change_recommended`,
+`blocked_by_source`, and `unresolved`. Preserve `human_review.status` and its
+provenance separately from automated review.
+
+After each primary locale review:
+
+1. Map an audit requesting every language/string to `task_kind: audit`; map an
+   ordinary translation to `task_kind: translation`. No language name changes
+   this mapping.
+2. Combine the caller's requested review depth with the route's
+   `verification_requirements`. Invoke `python3 SKILL_DIRECTORY/scripts/policy.py
+   review-depth --project-root PROJECT_ROOT --request-json REVIEW_DEPTH.json`,
+   passing `route_independent_review_required` from the route plus the primary
+   result inputs required by policy. Its result chooses `single`,
+   `selective_challenge`, or `full_challenge`; higher-precedence safety and
+   independence requirements cannot be weakened by a caller request.
+3. For `selective_challenge`, challenge each unit whose primary pass reports no
+   issue, plus any additional selected units; for `full_challenge`, challenge
+   every unit. Construct canonical challenge input from approved context, the
+   routed selected and missing capabilities, source, current target, protected
+   terms, and automatic checks. Exclude primary conclusions: do not include the
+   primary's issues, confidence, classification, recommendation, or rationale.
+4. Run the challenge concurrently only when `should_use_subagents` is true;
+   otherwise give the same inputs to the reviewing skill sequentially with the
+   same fresh framing. Record only `execution_mode` differently.
+5. Adjudicate disagreements through the ownership rules and authority
+   precedence below. Correct accepted defects through their owner, changing
+   only the affected target unit, then rerun ordinary six-pass QA only on each
+   changed unit and record `recommendation_qa`.
+6. Construct the complete canonical result and run
+   `python3 REVIEW_SKILL_DIRECTORY/scripts/validate_review_artifact.py --request
+   REVIEW_REQUEST.json --result REVIEW_RESULT.json`. Add `--draft-terminology
+   DRAFT_TERMINOLOGY.csv` when drafts were recorded. Validation failure blocks
+   completion.
+7. Preserve any caller-selected output path and all caller-selected output paths
+   when separate artifacts are requested. Otherwise create a run identifier
+   containing a UTC timestamp plus a random or content-derived suffix. Refuse
+   silent overwrite. An existing review output may be reused only when the
+   caller explicitly requests replacement.
+8. Serialize only the caller's requested output. Review records, routes, and
+   drafts remain internal unless requested.
 
 ## Project-context schema
 

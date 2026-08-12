@@ -30,6 +30,14 @@ Read the complete source, complete target, source and target locales, project br
 
 Run all six passes in order. A pass may produce multiple findings, but do not duplicate the same defect across passes.
 
+Across those passes, reason about target-only naturalness, semantic relationships,
+register and audience, locale conventions, source-quality separation, and surface
+fitness. Inspect target wording independently before source comparison so a
+grammatical but awkward translation is still visible. Separate a source defect
+from a translation defect; do not repair ambiguous or defective source by
+silently inventing target meaning. Route language-specific mechanics to the
+installed language or locale specialist.
+
 ## Semantic QA
 
 Compare meaning unit by unit. Find omissions, additions, mistranslations, changed factual polarity, weakened or strengthened claims, altered relationships, and drift in names, numbers, dates, units, or uncertainty. Check that idioms, humor, and calls to action preserve their intended effect.
@@ -66,24 +74,49 @@ Apply the explicit constraints supplied by each installed surface, platform, dom
 
 Route each failure to the specialist that supplied the constraint. When a hard explicit constraint conflicts with an approved term, name the conflict and route it to the constraint owner without silently changing either decision.
 
-## Finding Contract
+## Canonical review record
 
-Under an orchestrator, this is an internal QA handoff. It governs external
-output only when the caller explicitly requests QA findings. Otherwise return
-findings to the orchestrator and let the caller's output contract determine the
-public artifact.
+For a structured audit, load
+`SKILL_DIRECTORY/references/review-artifact-schema.json` as the canonical
+request/result vocabulary. Record one result per unit with its primary pass,
+optional challenge, adjudication, recommendation and correction QA, source
+issue, and separate `human_review.status` provenance. Classify each unit as
+`no_issue_detected`, `change_recommended`, `blocked_by_source`, or `unresolved`.
+These are review findings, not automated approval or claims of human or native
+quality.
 
-Return one finding per independently correctable segment, grouping multiple defects only when the same owner must correct the same segment. Include:
+The primary reviewer applies all six passes and records issues, confidence, and
+whether human review is required. For `selective_challenge`, challenge only the
+units whose primary pass found no issue, plus any additional selected units; for
+`full_challenge`, challenge every unit. Construct challenge input from approved
+context, route capabilities, source, current target, protected terms, and
+automatic checks. Challenge input excludes primary conclusions: omit primary
+findings, confidence, classification, recommendation, and rationale so the
+challenge is independent rather than an edit of the first pass.
 
-```text
-- pass: <semantic | terminology | linguistic | locale | structural | surface>
-  issue: <specific source-versus-target mismatch or violated decision>
-  owner: <responsible installed skill>
-  affected segment: <smallest complete target segment, copied unchanged>
-  status: retry
+Adjudicate primary/challenge disagreement using ownership and authority
+precedence. Accepted defects become `change_recommended`; source defects that
+prevent a sound decision become `blocked_by_source`; unresolved evidence or
+ownership conflicts remain `unresolved`. The correction owner changes only the
+smallest affected target segment, then an ordinary six-pass QA runs on that
+changed unit and is recorded in `recommendation_qa`.
+
+After constructing the complete request and result, run:
+
+```sh
+python3 SKILL_DIRECTORY/scripts/validate_review_artifact.py \
+  --request REVIEW_REQUEST.json --result REVIEW_RESULT.json
 ```
 
-Copy the affected target segment exactly as received. Include enough enclosing structure, such as its resource key or complete sentence, for a safe correction. Do not supply a replacement, rewrite the segment, or return unaffected content.
+Add `--draft-terminology DRAFT_TERMINOLOGY.csv` when inferred terms were
+recorded. Validation is the deterministic completion gate; draft terms remain
+non-authoritative and cannot satisfy approved terminology requirements.
+
+Under an orchestrator, the canonical record is an internal QA handoff unless
+the caller requests it. For an unstructured QA handoff, return one finding per
+independently correctable segment with pass, issue, owner, affected segment, and
+retry status. Copy that target segment unchanged and include enough enclosing
+structure for safe correction.
 
 ## Retry Ownership
 
@@ -95,19 +128,30 @@ A changed failure is a new finding only when the target changed and the issue is
 
 ## Completion Contract
 
-Under an orchestrator, this is also an internal QA handoff. `QA passed` is a
-workflow signal, not text to append to a translated artifact, unless the caller
-explicitly requests QA status.
+Under an orchestrator, this is also an internal QA handoff.
+`no_issue_detected` is a review classification, not text to append to a
+translated artifact, unless the caller explicitly requests QA status.
 
-Return only QA findings, in source order, when defects exist. Return `QA passed` when all six passes produce no findings. A translation is not complete while any finding has `status: retry` or `status: unresolved`.
+Return only QA findings, in source order, when defects exist. Return
+`no_issue_detected` when all six passes produce no findings. A translation is
+not complete while any finding has `status: retry` or `status: unresolved`.
 
 Do not include corrected prose, unaffected segments, process narration, or unsupported quality claims.
+
+## Review artifact paths
+
+Preserve any caller-selected output path and all caller-selected output paths
+when separate artifacts are requested. Otherwise create a run identifier
+containing a UTC timestamp plus a random or content-derived suffix and place
+review request, result, and optional draft-terminology artifacts beneath that
+run path. Refuse silent overwrite. An existing review output may be reused only
+when the caller explicitly requests replacement.
 
 ## Final response serialization
 
 Apply this public boundary after every review and after the completion contract
 above. When the caller supplies an explicit output schema, the generic finding
-and `QA passed` forms are internal only; serialize the requested schema instead.
+and `no_issue_detected` forms are internal only; serialize the requested schema instead.
 Build the complete public value before emitting any part of the response.
 
 For an exact JSON-object response, mechanically verify the serialized result:

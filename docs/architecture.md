@@ -61,6 +61,13 @@ then produces independent per-locale profiles, routes, drafts, and QA before
 reintegration. This prevents linguistic decisions from one branch leaking into
 another.
 
+Each route also returns `verification_requirements`, including whether an
+independent review is required and which selected capabilities require it. The
+orchestrator combines that route metadata with the caller's requested review
+depth and approved project policy; language or locale identity does not alter
+whether a request is an ordinary translation or an audit of every requested
+language/string.
+
 Unknown languages can use core when it can cover the task coherently. Missing
 essential capabilities are reported rather than invented, and no route
 downloads a skill.
@@ -122,6 +129,14 @@ guide, and structural constraints. The orchestrator composes and reviews the
 result. Hosts without sub-agent support execute the same specialist stages
 sequentially, so concurrency never changes the public behavior.
 
+This equivalence also applies to independent review. The same canonical unit
+inputs, review-depth selection, blinded challenge, adjudication rules,
+correction QA, validation gate, and result record are used in either mode;
+only `execution_mode` differs. Caller-selected output paths are preserved.
+Otherwise each run uses a collision-resistant identifier containing a UTC
+timestamp and a random or content-derived suffix, and an existing review
+artifact is never silently overwritten.
+
 ## External adapter trust
 
 Bundled adaptations are locked to immutable upstream commits and SHA-256
@@ -152,7 +167,7 @@ Only host-recognized installed skill instructions operate as skills. System
 and developer instructions, the actual user request, and approved project
 configuration retain their normal authority.
 
-## Structural and linguistic QA
+## Holistic review and deterministic gate
 
 Structural QA compares placeholders, ICU topology, keys, markup, links, code,
 commands, identifiers, numbers, and other protected material. Surface and
@@ -163,6 +178,38 @@ Linguistic QA checks meaning, omissions, additions, terminology, locale,
 register, naturalness, literal idioms, mixed-language residue, plurals,
 typography, and locale formats. Failures return only the affected segment to
 the responsible specialist; valid output is preserved.
+
+The primary reviewer retains six ordered passes: semantic, terminology,
+linguistic, locale, structural, and surface. It also reads the target
+independently for naturalness and checks semantic relationships, audience and
+register, locale conventions, source quality separately from translation
+quality, and fitness for the selected surface. Locale-specific grammar and
+mechanics remain owned by installed specialists.
+
+Review depth resolves through `policy.py review-depth`. Full caller requests,
+route- or project-required independent review, a missing essential specialist,
+low primary confidence, or a source block select `full_challenge`. A caller's
+selective request or a multi-unit audit selects `selective_challenge` when no
+higher-precedence full-review condition applies; ordinary translation QA is a
+`single` review otherwise.
+
+Challenge input contains the approved context, route capabilities, source,
+current target, protected terms, and automatic checks, but no primary finding,
+confidence, classification, recommendation, or rationale. This blinded data
+flow lets the challenge form an independent conclusion. Disagreements resolve
+through ownership and the normal authority order. Accepted defects are
+corrected by their owner, and only changed units repeat ordinary QA.
+
+The canonical schema and validator define request/result records. Unit status
+is one of `no_issue_detected`, `change_recommended`, `blocked_by_source`, or
+`unresolved`; automated status is not approval. Human-review status, decision,
+correction, severity, notes, and reviewer provenance are explicit separate
+fields. The complete artifact must pass `validate_review_artifact.py` before
+completion, with optional draft terminology validated in the same gate.
+
+Inferred terminology is recorded only as `draft`. It remains non-authoritative,
+cannot satisfy approved glossary requirements, and requires the project's
+normal human or declared approval process before use as policy.
 
 ## Failure recovery
 
