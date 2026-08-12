@@ -506,6 +506,41 @@ class BootstrapPolicyTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unknown review-depth request fields", result.stderr)
 
+    def test_review_depth_cli_checks_approval_before_optional_declaration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            (translation_dir / "project-brief.md").write_text(
+                PROJECT_BRIEF + "\n- Independent review required: sometimes\n",
+                encoding="utf-8",
+            )
+            approve(translation_dir, status="draft")
+            request = root / "review-depth-request.json"
+            request.write_text(
+                json.dumps({"task_kind": "translation", "source_units": 1}),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(POLICY),
+                    "review-depth",
+                    "--project-root",
+                    str(root),
+                    "--request-json",
+                    str(request),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unapproved:setup-approval.json", result.stderr)
+            self.assertNotIn("malformed:project-brief.md", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

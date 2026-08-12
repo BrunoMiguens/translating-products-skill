@@ -173,27 +173,17 @@ def _parse_labeled_markdown(
     return None, incomplete
 
 
-def _parse_project_brief(
-    text: str,
-) -> tuple[str | None, list[str], bool]:
-    malformed, incomplete = _parse_labeled_markdown(
-        text,
-        "project-brief.md",
-        PROJECT_BRIEF_FIELDS,
-    )
-    if malformed is not None:
-        return malformed, incomplete, False
-
+def _parse_independent_review_requirement(text: str) -> tuple[str | None, bool]:
     values = []
     for line in text.splitlines():
         match = re.match(r"^-\s*Independent review required:\s*(.*)$", line.strip())
         if match is not None:
             values.append(match.group(1))
     if not values:
-        return None, incomplete, False
+        return None, False
     if len(values) != 1 or values[0] not in {"true", "false"}:
-        return "malformed:project-brief.md", [], False
-    return None, incomplete, values[0] == "true"
+        return "malformed:project-brief.md", False
+    return None, values[0] == "true"
 
 
 def _parse_yaml_string(value: str) -> str | None:
@@ -327,12 +317,20 @@ def _parse_protected_terms(text: str) -> tuple[str | None, int]:
 
 def _inspect_semantics(
     text_files: Mapping[str, str],
+    *,
+    parse_independent_review_requirement: bool = True,
 ) -> tuple[str | None, dict[str, object]]:
-    (
-        brief_malformed,
-        brief_incomplete,
-        independent_review_required,
-    ) = _parse_project_brief(text_files["project-brief.md"])
+    brief_malformed, brief_incomplete = _parse_labeled_markdown(
+        text_files["project-brief.md"],
+        "project-brief.md",
+        PROJECT_BRIEF_FIELDS,
+    )
+    independent_review_required = False
+    if brief_malformed is None and parse_independent_review_requirement:
+        (
+            brief_malformed,
+            independent_review_required,
+        ) = _parse_independent_review_requirement(text_files["project-brief.md"])
     locales_malformed, locales_incomplete, locales = _parse_locales(
         text_files["locales.yaml"]
     )
@@ -539,14 +537,20 @@ def project_independent_review_required(project_root: object) -> bool:
     if issue is not None:
         raise ValueError(issue)
     assert translation_dir is not None
-    issue, semantic = _inspect_semantics(text_files)
+    issue, semantic = _inspect_semantics(
+        text_files,
+        parse_independent_review_requirement=False,
+    )
     if issue is not None:
         raise ValueError(issue)
     issue, _ = _load_approval(translation_dir, raw_files, semantic)
     if issue is not None:
         raise ValueError(issue)
-    required = semantic["independent_review_required"]
-    assert type(required) is bool
+    issue, required = _parse_independent_review_requirement(
+        text_files["project-brief.md"]
+    )
+    if issue is not None:
+        raise ValueError(issue)
     return required
 
 
