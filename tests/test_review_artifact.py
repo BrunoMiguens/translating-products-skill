@@ -213,6 +213,32 @@ class ReviewArtifactTests(unittest.TestCase):
                 self.assertIsNone(re.search(pattern, " \t\n"))
                 self.assertIsNotNone(re.search(pattern, "x"))
 
+    def test_schema_nullable_conditional_strings_are_nonblank_when_present(self):
+        """Break: activated nullable evidence fields could accept whitespace-only strings."""
+        definitions = json.loads(SCHEMA.read_text(encoding="utf-8"))["$defs"]
+        branches = {
+            "native_review_reason": definitions["review_pass"]["properties"][
+                "native_review_reason"
+            ],
+            "adjudication.rationale": definitions["adjudication"]["properties"][
+                "rationale"
+            ],
+            "human_review.reviewer": definitions["human_review"]["properties"][
+                "reviewer"
+            ],
+            "human_review.correction": definitions["human_review"]["properties"][
+                "correction"
+            ],
+        }
+        for name, branch in branches.items():
+            with self.subTest(branch=name):
+                self.assertIn("null", branch["type"])
+                self.assertEqual(branch.get("minLength"), 1)
+                pattern = branch.get("pattern")
+                self.assertIsInstance(pattern, str)
+                self.assertIsNone(re.search(pattern, " \t\n"))
+                self.assertIsNotNone(re.search(pattern, "human evidence"))
+
     def test_all_classifications_have_valid_explicit_shapes(self):
         """Break: a canonical status could become impossible to represent."""
         cases = {

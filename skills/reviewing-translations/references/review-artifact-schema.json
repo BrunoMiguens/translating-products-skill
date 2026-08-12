@@ -138,7 +138,11 @@
         "issues": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
         "confidence": {"enum": ["low", "medium", "high"]},
         "native_review_required": {"type": "boolean"},
-        "native_review_reason": {"type": ["string", "null"]}
+        "native_review_reason": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "pattern": "\\S"
+        }
       }
     },
     "adjudication": {
@@ -155,7 +159,7 @@
             "unresolved"
           ]
         },
-        "rationale": {"type": ["string", "null"]}
+        "rationale": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"}
       }
     },
     "recommendation": {
@@ -195,10 +199,10 @@
       "properties": {
         "status": {"enum": ["not_requested", "pending", "completed"]},
         "decision": {"enum": [null, "no_issue_detected", "change_required"]},
-        "correction": {"type": ["string", "null"]},
+        "correction": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"},
         "notes": {"type": ["string", "null"]},
         "severity": {"enum": [null, "minor", "major", "critical"]},
-        "reviewer": {"type": ["string", "null"]}
+        "reviewer": {"type": ["string", "null"], "minLength": 1, "pattern": "\\S"}
       }
     },
     "result_unit": {
