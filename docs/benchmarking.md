@@ -93,3 +93,56 @@ blinding or a claim-bearing report.
 After unblinding, PT-PT v1 is a regression set. A new comparative claim requires
 a fresh holdout. The benchmark says nothing about other locales or future product
 outputs, and it never implies those outputs received human translation review.
+
+## Private product-review regression packets
+
+Real product review output must stay in ignored private storage. Prepare a
+packet from an exact current-suite CSV without copying product strings into the
+tracked `benchmarks/` tree:
+
+```bash
+python3 -m scripts.benchmark.product_review prepare \
+  --input-csv /absolute/path/automated-review.csv \
+  --output-dir benchmark-private/product-review-baseline \
+  --suite-git-object 13cf73e
+```
+
+Preparation preserves the input bytes at
+`conditions/current-suite.csv`, records their hash and the suite Git object,
+and creates `human-review.csv`. The curation CSV contains only `locale`, `key`,
+`english_source`, and `current_translation`, followed by blank
+`human_decision`, `human_correction`, `human_notes`, and `human_severity`
+fields. It never contains the automated status, reason, or recommendation and
+never creates a human sign-off. A qualified human completes those fields
+separately; the tool does not infer a decision, correction, severity, or
+preference.
+
+After human completion, score all three mandatory conditions against the same
+completed human-review bytes:
+
+```bash
+python3 -m scripts.benchmark.product_review score \
+  --packet-dir benchmark-private/product-review-baseline \
+  --candidate normal=/absolute/path/normal-review.csv \
+  --candidate current_suite=benchmark-private/product-review-baseline/conditions/current-suite.csv \
+  --candidate improved=/absolute/path/improved-review.csv \
+  --output benchmark-private/product-review-baseline/score.json
+```
+
+The scorer reports `required_error_recall`, `reported_error_precision`,
+`false_positive_correction_rate`, and exact `correction_success_rate` for each
+condition, plus the percentage-point differences `improved - normal` and
+`improved - current_suite`. A candidate correction that differs from the human
+correction remains an explicit disagreement with no inferred human preference.
+The scorer refuses incomplete human rows, drifted preserved bytes, mismatched
+product identities or source fields, duplicate or aliased inputs, missing
+conditions, symlinks, and overwrite.
+
+This current product run is baseline evidence. Once human decisions are added,
+these reviewed cases form a regression set, not a fresh superiority holdout.
+The three conditions provide a holistic diagnostic comparison only. Production
+skills never read these packets, and product data never enters the tracked
+benchmark dataset. Any comparative public claim requires a fresh, signed
+holdout. When canonical run evidence supplies latency, token usage, or cost,
+use the existing benchmark scorer's `latency_seconds`, `usage`, and `cost_usd`
+diagnostics rather than deriving them from the product-review CSVs.
