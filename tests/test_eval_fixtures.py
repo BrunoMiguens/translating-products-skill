@@ -55,7 +55,7 @@ SCHEMAS = {
 EXPECTED_COUNTS = {
     "routing-cases.json": 40,
     "bootstrap-cases.json": 14,
-    "orchestration-cases.json": 10,
+    "orchestration-cases.json": 17,
     "research-cases.json": 15,
     "prompt-injection-cases.json": 10,
     "translation-quality-cases.json": 22,
@@ -90,6 +90,13 @@ EXPECTED_IDS = {
         "missing-external-use-bundled",
         "missing-specialist-use-core",
         "missing-required-capability",
+        "single-review-depth",
+        "selective-audit-depth",
+        "exhaustive-audit-depth",
+        "capability-forced-full-depth",
+        "missing-specialist-full-depth",
+        "low-confidence-full-depth",
+        "source-blocked-full-depth",
     },
     "research-cases.json": {
         "ordinary-ui",

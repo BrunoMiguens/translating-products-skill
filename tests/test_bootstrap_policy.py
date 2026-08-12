@@ -95,6 +95,7 @@ def load_policy():
     spec = importlib.util.spec_from_file_location("bootstrap_policy", POLICY)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules["bootstrap_policy"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -394,6 +395,116 @@ class BootstrapPolicyTests(unittest.TestCase):
                 json.loads(result.stdout),
                 {"action": "translate", "issue": None, "question": None},
             )
+
+    def test_independent_review_declaration_is_optional_and_strict(self):
+        declarations = {
+            "absent": ("", False, None),
+            "true": ("\n- Independent review required: true\n", True, None),
+            "false": ("\n- Independent review required: false\n", False, None),
+            "duplicate": (
+                "\n- Independent review required: true\n"
+                "- Independent review required: false\n",
+                None,
+                "malformed:project-brief.md",
+            ),
+            "invalid": (
+                "\n- Independent review required: sometimes\n",
+                None,
+                "malformed:project-brief.md",
+            ),
+        }
+        for name, (declaration, expected_requirement, expected_issue) in declarations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                translation_dir = root / ".translation"
+                write_context(translation_dir)
+                (translation_dir / "project-brief.md").write_text(
+                    PROJECT_BRIEF + declaration, encoding="utf-8"
+                )
+                approve(translation_dir)
+
+                self.assertEqual(self.policy.bootstrap_issue(root, {}), expected_issue)
+                if expected_issue is None:
+                    requirement = self.policy.project_independent_review_required(root)
+                    self.assertEqual(requirement, expected_requirement)
+
+    def test_review_depth_cli_uses_approved_project_and_route_requirements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            (translation_dir / "project-brief.md").write_text(
+                PROJECT_BRIEF + "\n- Independent review required: true\n",
+                encoding="utf-8",
+            )
+            approve(translation_dir)
+            request = root / "review-depth-request.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "task_kind": "translation",
+                        "source_units": 1,
+                        "route_independent_review_required": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(POLICY),
+                    "review-depth",
+                    "--project-root",
+                    str(root),
+                    "--request-json",
+                    str(request),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(result.stdout),
+                {
+                    "review_depth": "full_challenge",
+                    "reasons": ["capability-requires-independent-review"],
+                },
+            )
+
+    def test_review_depth_cli_rejects_unknown_request_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            approve(translation_dir)
+            request = root / "review-depth-request.json"
+            request.write_text(
+                json.dumps(
+                    {"task_kind": "translation", "source_units": 1, "extra": True}
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(POLICY),
+                    "review-depth",
+                    "--project-root",
+                    str(root),
+                    "--request-json",
+                    str(request),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown review-depth request fields", result.stderr)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -926,6 +927,121 @@ class PolicyTests(unittest.TestCase):
             "report-missing-capability",
         )
 
+    def test_select_review_depth_applies_mandatory_precedence(self):
+        cases = [
+            ({"task_kind": "translation", "source_units": 1}, "single", ("ordinary-translation-qa",)),
+            ({"task_kind": "audit", "source_units": 20}, "selective_challenge", ("multi-unit-audit",)),
+            (
+                {
+                    "task_kind": "audit",
+                    "source_units": 20,
+                    "requested_depth": "full_challenge",
+                },
+                "full_challenge",
+                ("caller-exhaustive",),
+            ),
+            (
+                {
+                    "task_kind": "audit",
+                    "source_units": 20,
+                    "independent_review_required": True,
+                },
+                "full_challenge",
+                ("capability-requires-independent-review",),
+            ),
+            (
+                {
+                    "task_kind": "translation",
+                    "source_units": 1,
+                    "missing_essential_specialist": True,
+                },
+                "full_challenge",
+                ("missing-essential-specialist",),
+            ),
+            (
+                {
+                    "task_kind": "translation",
+                    "source_units": 1,
+                    "primary_confidence": "low",
+                },
+                "full_challenge",
+                ("low-primary-confidence",),
+            ),
+            (
+                {
+                    "task_kind": "translation",
+                    "source_units": 1,
+                    "source_blocked": True,
+                },
+                "full_challenge",
+                ("source-blocked",),
+            ),
+        ]
+        for inputs, expected_depth, expected_reasons in cases:
+            with self.subTest(inputs=inputs):
+                decision = self.policy.select_review_depth(**inputs)
+                self.assertEqual(decision.depth, expected_depth)
+                self.assertEqual(decision.reasons, expected_reasons)
+
+    def test_select_review_depth_preserves_all_mandatory_reasons(self):
+        decision = self.policy.select_review_depth(
+            task_kind="translation",
+            source_units=1,
+            requested_depth="single",
+            independent_review_required=True,
+            missing_essential_specialist=True,
+            primary_confidence="low",
+            source_blocked=True,
+        )
+
+        self.assertEqual(decision.depth, "full_challenge")
+        self.assertEqual(
+            decision.reasons,
+            (
+                "capability-requires-independent-review",
+                "missing-essential-specialist",
+                "low-primary-confidence",
+                "source-blocked",
+            ),
+        )
+
+    def test_select_review_depth_fails_closed_for_invalid_inputs(self):
+        invalid_cases = [
+            {"task_kind": "copywriting", "source_units": 1},
+            {"task_kind": "translation", "source_units": 0},
+            {"task_kind": "translation", "source_units": -1},
+            {"task_kind": "translation", "source_units": True},
+            {
+                "task_kind": "translation",
+                "source_units": 1,
+                "requested_depth": "minimal",
+            },
+            {
+                "task_kind": "translation",
+                "source_units": 1,
+                "primary_confidence": "certain",
+            },
+            {
+                "task_kind": "translation",
+                "source_units": 1,
+                "independent_review_required": 1,
+            },
+            {
+                "task_kind": "translation",
+                "source_units": 1,
+                "missing_essential_specialist": "yes",
+            },
+            {
+                "task_kind": "translation",
+                "source_units": 1,
+                "source_blocked": None,
+            },
+        ]
+        for inputs in invalid_cases:
+            with self.subTest(inputs=inputs):
+                with self.assertRaises(ValueError):
+                    self.policy.select_review_depth(**inputs)
+
     def test_research_evaluations_match_capability_gate(self):
         for case in load_cases("research-cases.json"):
             with self.subTest(case=case["id"]):
@@ -941,6 +1057,9 @@ class PolicyTests(unittest.TestCase):
         functions = {
             "subagents": self.policy.should_use_subagents,
             "missing-specialist": self.policy.missing_specialist_action,
+            "review-depth": lambda **inputs: self.policy.select_review_depth(
+                **inputs
+            ).depth,
         }
         for case in load_cases("orchestration-cases.json"):
             with self.subTest(case=case["id"]):

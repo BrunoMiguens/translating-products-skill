@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping, Sequence
 import csv
+from dataclasses import dataclass
 import hashlib
 import io
 import json
@@ -172,6 +173,29 @@ def _parse_labeled_markdown(
     return None, incomplete
 
 
+def _parse_project_brief(
+    text: str,
+) -> tuple[str | None, list[str], bool]:
+    malformed, incomplete = _parse_labeled_markdown(
+        text,
+        "project-brief.md",
+        PROJECT_BRIEF_FIELDS,
+    )
+    if malformed is not None:
+        return malformed, incomplete, False
+
+    values = []
+    for line in text.splitlines():
+        match = re.match(r"^-\s*Independent review required:\s*(.*)$", line.strip())
+        if match is not None:
+            values.append(match.group(1))
+    if not values:
+        return None, incomplete, False
+    if len(values) != 1 or values[0] not in {"true", "false"}:
+        return "malformed:project-brief.md", [], False
+    return None, incomplete, values[0] == "true"
+
+
 def _parse_yaml_string(value: str) -> str | None:
     value = value.strip()
     if not value:
@@ -304,11 +328,11 @@ def _parse_protected_terms(text: str) -> tuple[str | None, int]:
 def _inspect_semantics(
     text_files: Mapping[str, str],
 ) -> tuple[str | None, dict[str, object]]:
-    brief_malformed, brief_incomplete = _parse_labeled_markdown(
-        text_files["project-brief.md"],
-        "project-brief.md",
-        PROJECT_BRIEF_FIELDS,
-    )
+    (
+        brief_malformed,
+        brief_incomplete,
+        independent_review_required,
+    ) = _parse_project_brief(text_files["project-brief.md"])
     locales_malformed, locales_incomplete, locales = _parse_locales(
         text_files["locales.yaml"]
     )
@@ -345,6 +369,7 @@ def _inspect_semantics(
         None,
         {
             "locales": locales,
+            "independent_review_required": independent_review_required,
             "empty_collections": {
                 "glossary.csv": glossary_entries == 0,
                 "protected-terms.txt": protected_entries == 0,
@@ -509,6 +534,22 @@ def bootstrap_action(
     )
 
 
+def project_independent_review_required(project_root: object) -> bool:
+    issue, translation_dir, raw_files, text_files = _load_context_files(project_root)
+    if issue is not None:
+        raise ValueError(issue)
+    assert translation_dir is not None
+    issue, semantic = _inspect_semantics(text_files)
+    if issue is not None:
+        raise ValueError(issue)
+    issue, _ = _load_approval(translation_dir, raw_files, semantic)
+    if issue is not None:
+        raise ValueError(issue)
+    required = semantic["independent_review_required"]
+    assert type(required) is bool
+    return required
+
+
 def bootstrap_question(issue: str | None) -> str | None:
     if issue is None:
         return None
@@ -657,6 +698,60 @@ def missing_specialist_action(
     return "report-missing-capability"
 
 
+@dataclass(frozen=True)
+class ReviewDepthDecision:
+    depth: str
+    reasons: tuple[str, ...]
+
+
+def select_review_depth(
+    *,
+    task_kind: str,
+    source_units: int,
+    requested_depth: str | None = None,
+    independent_review_required: bool = False,
+    missing_essential_specialist: bool = False,
+    primary_confidence: str = "medium",
+    source_blocked: bool = False,
+) -> ReviewDepthDecision:
+    depths = {"single", "selective_challenge", "full_challenge"}
+    if task_kind not in {"translation", "audit"}:
+        raise ValueError("task_kind must be translation or audit")
+    if type(source_units) is not int or source_units < 1:
+        raise ValueError("source_units must be a positive integer")
+    if requested_depth is not None and requested_depth not in depths:
+        raise ValueError("requested_depth is invalid")
+    if primary_confidence not in {"low", "medium", "high"}:
+        raise ValueError("primary_confidence is invalid")
+    flags = {
+        "independent_review_required": independent_review_required,
+        "missing_essential_specialist": missing_essential_specialist,
+        "source_blocked": source_blocked,
+    }
+    if any(type(value) is not bool for value in flags.values()):
+        raise ValueError("review-depth flags must be booleans")
+
+    reasons = []
+    if requested_depth == "full_challenge":
+        reasons.append("caller-exhaustive")
+    if independent_review_required:
+        reasons.append("capability-requires-independent-review")
+    if missing_essential_specialist:
+        reasons.append("missing-essential-specialist")
+    if primary_confidence == "low":
+        reasons.append("low-primary-confidence")
+    if source_blocked:
+        reasons.append("source-blocked")
+    if reasons:
+        return ReviewDepthDecision("full_challenge", tuple(reasons))
+    if requested_depth == "selective_challenge":
+        return ReviewDepthDecision("selective_challenge", ("caller-selective",))
+    if task_kind == "audit" and source_units > 1:
+        return ReviewDepthDecision("selective_challenge", ("multi-unit-audit",))
+    reason = "caller-single" if requested_depth == "single" else "ordinary-translation-qa"
+    return ReviewDepthDecision("single", (reason,))
+
+
 AUTHORITY_ORDER = (
     "explicit-user-requirements",
     "approved-project-configuration",
@@ -674,12 +769,52 @@ def _request_from_json(path: str | None) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _review_depth_request(request: object) -> dict[str, object]:
+    if not isinstance(request, Mapping):
+        raise ValueError("review-depth request must be an object")
+    allowed = {
+        "task_kind",
+        "source_units",
+        "requested_depth",
+        "route_independent_review_required",
+        "missing_essential_specialist",
+        "primary_confidence",
+        "source_blocked",
+    }
+    unknown = set(request) - allowed
+    if unknown:
+        raise ValueError(
+            "unknown review-depth request fields: " + ", ".join(sorted(unknown))
+        )
+    for name in ("task_kind", "source_units"):
+        if name not in request:
+            raise ValueError(f"review-depth request missing {name}")
+
+    route_required = request.get("route_independent_review_required", False)
+    if type(route_required) is not bool:
+        raise ValueError("route_independent_review_required must be boolean")
+    return {
+        "task_kind": request["task_kind"],
+        "source_units": request["source_units"],
+        "requested_depth": request.get("requested_depth"),
+        "route_independent_review_required": route_required,
+        "missing_essential_specialist": request.get(
+            "missing_essential_specialist", False
+        ),
+        "primary_confidence": request.get("primary_confidence", "medium"),
+        "source_blocked": request.get("source_blocked", False),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect translation bootstrap policy")
     subparsers = parser.add_subparsers(dest="command", required=True)
     inspect_parser = subparsers.add_parser("bootstrap")
     inspect_parser.add_argument("--project-root", required=True)
     inspect_parser.add_argument("--request-json")
+    review_depth_parser = subparsers.add_parser("review-depth")
+    review_depth_parser.add_argument("--project-root", required=True)
+    review_depth_parser.add_argument("--request-json", required=True)
     approve_parser = subparsers.add_parser("approve")
     approve_parser.add_argument("--project-root", required=True)
     approve_parser.add_argument("--approved-by", required=True)
@@ -701,6 +836,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 approved_empty=args.approved_empty,
             )
             print(json.dumps(record, sort_keys=True))
+            return 0
+        if args.command == "review-depth":
+            request = _review_depth_request(_request_from_json(args.request_json))
+            project_required = project_independent_review_required(args.project_root)
+            decision = select_review_depth(
+                task_kind=request["task_kind"],  # type: ignore[arg-type]
+                source_units=request["source_units"],  # type: ignore[arg-type]
+                requested_depth=request["requested_depth"],  # type: ignore[arg-type]
+                independent_review_required=(
+                    project_required
+                    or request["route_independent_review_required"]  # type: ignore[truthy-bool]
+                ),
+                missing_essential_specialist=request["missing_essential_specialist"],  # type: ignore[arg-type]
+                primary_confidence=request["primary_confidence"],  # type: ignore[arg-type]
+                source_blocked=request["source_blocked"],  # type: ignore[arg-type]
+            )
+            print(
+                json.dumps(
+                    {"review_depth": decision.depth, "reasons": list(decision.reasons)},
+                    separators=(",", ":"),
+                )
+            )
             return 0
         request = _request_from_json(args.request_json)
         issue = bootstrap_issue(args.project_root, request)

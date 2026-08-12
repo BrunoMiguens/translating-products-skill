@@ -8,5 +8,12 @@
   {"id": "unsupported-host-sequential", "policy": "subagents", "inputs": {"host_supports_subagents": false, "target_locales": 4, "source_units": 200, "separable_sections": 5, "terminology_pass": true, "independent_review": true}, "expected": false},
   {"id": "missing-external-use-bundled", "policy": "missing-specialist", "inputs": {"core_can_cover": true, "bundled_available": true}, "expected": "use-bundled-specialist"},
   {"id": "missing-specialist-use-core", "policy": "missing-specialist", "inputs": {"core_can_cover": true, "bundled_available": false}, "expected": "use-core"},
-  {"id": "missing-required-capability", "policy": "missing-specialist", "inputs": {"core_can_cover": false, "bundled_available": false}, "expected": "report-missing-capability"}
+  {"id": "missing-required-capability", "policy": "missing-specialist", "inputs": {"core_can_cover": false, "bundled_available": false}, "expected": "report-missing-capability"},
+  {"id": "single-review-depth", "policy": "review-depth", "inputs": {"task_kind": "translation", "source_units": 1}, "expected": "single"},
+  {"id": "selective-audit-depth", "policy": "review-depth", "inputs": {"task_kind": "audit", "source_units": 2}, "expected": "selective_challenge"},
+  {"id": "exhaustive-audit-depth", "policy": "review-depth", "inputs": {"task_kind": "audit", "source_units": 2, "requested_depth": "full_challenge"}, "expected": "full_challenge"},
+  {"id": "capability-forced-full-depth", "policy": "review-depth", "inputs": {"task_kind": "translation", "source_units": 1, "independent_review_required": true}, "expected": "full_challenge"},
+  {"id": "missing-specialist-full-depth", "policy": "review-depth", "inputs": {"task_kind": "translation", "source_units": 1, "missing_essential_specialist": true}, "expected": "full_challenge"},
+  {"id": "low-confidence-full-depth", "policy": "review-depth", "inputs": {"task_kind": "translation", "source_units": 1, "primary_confidence": "low"}, "expected": "full_challenge"},
+  {"id": "source-blocked-full-depth", "policy": "review-depth", "inputs": {"task_kind": "translation", "source_units": 1, "source_blocked": true}, "expected": "full_challenge"}
 ]
