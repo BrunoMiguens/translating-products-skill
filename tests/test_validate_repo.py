@@ -57,6 +57,30 @@ MALFORMED_INVENTORIES = (
         "skill inventory start marker appears 2 times",
     ),
 )
+
+
+def write_synthetic_routing_fixture(root: Path) -> tuple[str, list[str]]:
+    nonce = root.name.replace("_", "-")
+    case_id = f"route-{nonce}"
+    expected = [f"{nonce}-skill-{index}" for index in range(2)]
+    cases = root / "evals" / "routing-cases.json"
+    cases.parent.mkdir(parents=True)
+    cases.write_text(
+        json.dumps(
+            [
+                {
+                    "id": case_id,
+                    "expected_routes": [
+                        {"target_locale": "xx", "selected": expected}
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return case_id, expected
+
+
 VALID_WORKFLOW = """name: Validate
 
 on:
@@ -357,6 +381,97 @@ class ValidatorTests(unittest.TestCase):
                 "evals/routing-cases.json case route-private field expected_routes"
             ],
         )
+
+    def test_fixture_separation_rejects_nested_expected_targets_in_policy_python(self):
+        for container in (list, tuple):
+            with self.subTest(container=container.__name__), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                case_id, expected = write_synthetic_routing_fixture(root)
+                self.assertTrue(all("-" in target for target in expected))
+                self.assertTrue(all(len(target) < 48 for target in expected))
+                scripts = root / "skills" / "translating-products" / "scripts"
+                scripts.mkdir(parents=True)
+                encoded = repr(container(expected))
+                (scripts / "policy.py").write_text(
+                    f"EXPECTED = {encoded}\n",
+                    encoding="utf-8",
+                )
+
+                errors = validate_fixture_separation(root)
+
+            rendered = json.dumps(expected, separators=(",", ":"))
+            self.assertEqual(
+                errors,
+                [
+                    "skills/translating-products/scripts/policy.py: contains expected "
+                    f"evaluation target {rendered} from evals/routing-cases.json case "
+                    f"{case_id} field expected_routes"
+                ],
+            )
+
+    def test_fixture_separation_rejects_nested_expected_targets_in_router_python(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case_id, expected = write_synthetic_routing_fixture(root)
+            router = root / "scripts" / "route_capabilities.py"
+            router.parent.mkdir(parents=True)
+            router.write_text(
+                f"ROUTES = {{'fixture': {{'selected': {expected!r}}}}}\n",
+                encoding="utf-8",
+            )
+
+            errors = validate_fixture_separation(root)
+
+        rendered = json.dumps(expected, separators=(",", ":"))
+        self.assertEqual(
+            errors,
+            [
+                "scripts/route_capabilities.py: contains expected evaluation target "
+                f"{rendered} from evals/routing-cases.json case {case_id} field "
+                "expected_routes"
+            ],
+        )
+
+    def test_fixture_separation_rejects_nested_expected_targets_in_skill_markdown(self):
+        for presentation in ("list", "inline"):
+            with self.subTest(presentation=presentation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                case_id, expected = write_synthetic_routing_fixture(root)
+                if presentation == "list":
+                    leaked = "Leaked targets:\n" + "\n".join(
+                        f"- `{target}`" for target in expected
+                    )
+                else:
+                    leaked = "Leaked targets: " + ", ".join(
+                        f"`{target.upper()}`" for target in expected
+                    )
+                write_skill(root, "translating-demo", leaked + "\n")
+
+                errors = validate_fixture_separation(root)
+
+            rendered = json.dumps(expected, separators=(",", ":"))
+            self.assertEqual(
+                errors,
+                [
+                    "skills/translating-demo/SKILL.md: contains expected evaluation "
+                    f"target {rendered} from evals/routing-cases.json case {case_id} "
+                    "field expected_routes"
+                ],
+            )
+
+    def test_fixture_separation_does_not_match_separated_short_target_members(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _case_id, expected = write_synthetic_routing_fixture(root)
+            write_skill(
+                root,
+                "translating-demo",
+                f"The `{expected[0]}` capability is independently documented.\n"
+                "Generic schema and routing vocabulary may occur between entries.\n"
+                f"The `{expected[1]}` capability is independently documented.\n",
+            )
+
+            self.assertEqual(validate_fixture_separation(root), [])
 
     def test_repository_validation_enforces_fixture_separation_in_both_modes(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -258,6 +258,26 @@ def _generic_expected_target(value: object) -> bool:
     )
 
 
+def _raw_text_contains_composite_target(text: str, target: object) -> bool:
+    leaves = tuple(
+        normalized
+        for value in _nested_strings(target)
+        if (normalized := _normalized_prose(value))
+    )
+    if len(leaves) < 2:
+        return False
+    leaf_patterns = [
+        re.escape(leaf).replace(r"\ ", r"\s+")
+        for leaf in leaves
+    ]
+    pattern = (
+        r"(?<![A-Za-z0-9_-])"
+        + r"[^A-Za-z0-9]+".join(leaf_patterns)
+        + r"(?![A-Za-z0-9_-])"
+    )
+    return re.search(pattern, text.casefold()) is not None
+
+
 def validate_fixture_separation(root: Path) -> list[str]:
     skill_bodies = [
         (path.relative_to(root).as_posix(), _normalized_prose(_skill_body(path)))
@@ -306,6 +326,8 @@ def validate_fixture_separation(root: Path) -> list[str]:
                 normalized is not None
                 and len(normalized) >= FIXTURE_TEXT_MINIMUM
                 and normalized in _normalized_prose(text)
+            ) or (
+                _raw_text_contains_composite_target(text, expected)
             ) or (
                 document is not None and _json_contains_value(document, expected)
             ):
