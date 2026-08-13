@@ -297,6 +297,67 @@ class ValidatorTests(unittest.TestCase):
 
             self.assertEqual(validate_fixture_separation(root), [])
 
+    def test_fixture_separation_rejects_case_ids_in_policy_or_router(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = root / "evals" / "routing-cases.json"
+            cases.parent.mkdir(parents=True)
+            cases.write_text(
+                json.dumps([{"id": "private-routing-case", "expected": True}]),
+                encoding="utf-8",
+            )
+            scripts = root / "skills" / "translating-products" / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "policy.py").write_text(
+                'EVALUATION_SHORTCUT = "private-routing-case"\n',
+                encoding="utf-8",
+            )
+
+            errors = validate_fixture_separation(root)
+
+        self.assertEqual(
+            errors,
+            [
+                "skills/translating-products/scripts/policy.py: contains evaluation "
+                "case id private-routing-case from evals/routing-cases.json"
+            ],
+        )
+
+    def test_fixture_separation_rejects_nested_expected_targets_in_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = root / "evals" / "routing-cases.json"
+            cases.parent.mkdir(parents=True)
+            expected = ["private-skill-a", "private-skill-b"]
+            cases.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "route-private",
+                            "expected_routes": [
+                                {"target_locale": "xx", "selected": expected}
+                            ],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (root / "skills-manifest.json").write_text(
+                json.dumps({"leaked_expected_route": expected}),
+                encoding="utf-8",
+            )
+
+            errors = validate_fixture_separation(root)
+
+        self.assertEqual(
+            errors,
+            [
+                "skills-manifest.json: contains expected evaluation target "
+                '[\"private-skill-a\",\"private-skill-b\"] from '
+                "evals/routing-cases.json case route-private field expected_routes"
+            ],
+        )
+
     def test_repository_validation_enforces_fixture_separation_in_both_modes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -512,6 +512,41 @@ class ReviewArtifactCliTests(unittest.TestCase):
         )
         self.assertEqual(completed.stderr, "")
 
+    def test_parallel_and_sequential_audits_have_identical_decisions(self):
+        """Break: execution topology could change a deterministic review decision."""
+        request = request_fixture()
+        artifacts = {}
+        for execution_mode in ("parallel", "sequential"):
+            result = result_fixture()
+            result["locales"][0]["execution_mode"] = execution_mode
+            completed = self.run_cli(json.dumps(request), json.dumps(result))
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(completed.stdout)["valid"], True)
+            artifacts[execution_mode] = result
+
+        def decisions(artifact):
+            return {
+                "units": [
+                    {
+                        "classification": unit["classification"],
+                        "primary": unit["primary"],
+                        "challenge": unit["challenge"],
+                        "adjudication": unit["adjudication"],
+                        "recommendation": unit["recommendation"],
+                    }
+                    for locale in artifact["locales"]
+                    for unit in locale["units"]
+                ],
+                "counts": artifact["summary"]["counts"],
+            }
+
+        self.assertEqual(decisions(artifacts["parallel"]), decisions(artifacts["sequential"]))
+        parallel_without_mode = copy.deepcopy(artifacts["parallel"])
+        sequential_without_mode = copy.deepcopy(artifacts["sequential"])
+        del parallel_without_mode["locales"][0]["execution_mode"]
+        del sequential_without_mode["locales"][0]["execution_mode"]
+        self.assertEqual(parallel_without_mode, sequential_without_mode)
+
     def test_cli_emits_counts_in_canonical_order_from_reordered_input(self):
         """Break: caller insertion order could make valid success output nondeterministic."""
         result = result_fixture()

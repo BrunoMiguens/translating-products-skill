@@ -89,6 +89,7 @@ class CatalogTests(unittest.TestCase):
                 render_readme_inventory(ROOT / "skills-manifest.json", readme)
             )
             text = readme.read_text(encoding="utf-8")
+            self.assertIn("Suite version: `0.3.0`", text)
             linked = [
                 line.split("(skills/", 1)[1].split("/)", 1)[0]
                 for line in text.splitlines()
@@ -121,6 +122,9 @@ class CatalogTests(unittest.TestCase):
                 [item["name"] for item in manifest["skills"]],
             )
             self.assertIn("Authority order", markdown_path.read_text(encoding="utf-8"))
+            markdown = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("- Independent review required: `true`", markdown)
+            self.assertIn("- Independent review required: `false`", markdown)
 
     def test_catalog_disclosure_is_generated_and_check_detects_its_removal(self):
         with tempfile.TemporaryDirectory() as tmp:

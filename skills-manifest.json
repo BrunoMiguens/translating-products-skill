@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "suite_version": "0.2.0",
+  "suite_version": "0.3.0",
   "orchestrator": "translating-products",
   "minimum_skill_versions": {
     "translating-core": "0.1.0",
-    "reviewing-translations": "0.1.0",
+    "reviewing-translations": "0.2.0",
     "translating-web": "0.1.0",
     "localizing-software": "0.1.0",
     "translating-mobile": "0.1.0",
@@ -28,7 +28,7 @@
   "skills": [
     {
       "name": "translating-products",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "orchestrator",
       "description": "Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.",
       "capabilities": [
@@ -54,7 +54,10 @@
       "specificity": "universal",
       "required_context": [],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-core",
@@ -86,11 +89,14 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "reviewing-translations",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "quality",
       "description": "Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.",
       "capabilities": [
@@ -115,7 +121,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-web",
@@ -155,7 +164,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "localizing-software",
@@ -196,7 +208,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "translating-mobile",
@@ -229,7 +244,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "translating-ios",
@@ -267,7 +285,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "translating-android",
@@ -305,7 +326,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "translating-flutter",
@@ -343,7 +367,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "translating-app-stores",
@@ -377,7 +404,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "translating-marketing",
@@ -412,7 +442,10 @@
         "purpose"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "translating-documentation",
@@ -444,7 +477,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": true
+      }
     },
     {
       "name": "translating-rtl",
@@ -482,7 +518,10 @@
         "target_locale"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-arabic",
@@ -514,7 +553,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-hebrew",
@@ -546,7 +588,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-japanese",
@@ -577,7 +622,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-chinese",
@@ -609,7 +657,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-korean",
@@ -640,7 +691,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-portuguese",
@@ -672,7 +726,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-spanish",
@@ -704,7 +761,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-french",
@@ -736,7 +796,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     },
     {
       "name": "translating-german",
@@ -769,7 +832,10 @@
         "register"
       ],
       "conflicts": [],
-      "supersedes": []
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
     }
   ],
   "sources": [

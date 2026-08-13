@@ -64,6 +64,11 @@ PROFILE_FIELDS = {
     "register",
 }
 FIXTURE_TEXT_MINIMUM = 48
+EXPECTED_FIXTURE_FIELDS = {
+    "accepted_corrections",
+    "literal_failure",
+    "reference",
+}
 
 
 def _normalized_prose(value: str) -> str:
@@ -132,6 +137,127 @@ def _fixture_texts(root: Path) -> list[tuple[str, str, str, str]]:
     return fixtures
 
 
+def _fixture_documents(root: Path) -> list[tuple[Path, object]]:
+    documents = []
+    for directory in (root / "benchmarks", root / "evals"):
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file() or path.suffix not in {".json", ".jsonl"}:
+                continue
+            if path.suffix == ".json":
+                documents.append((path.relative_to(root), json.loads(path.read_text(encoding="utf-8"))))
+                continue
+            records = []
+            with path.open(encoding="utf-8") as handle:
+                for line in handle:
+                    if line.strip():
+                        records.append(json.loads(line))
+            documents.append((path.relative_to(root), records))
+    return documents
+
+
+def _nested_strings(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(
+            string
+            for item in value
+            for string in _nested_strings(item)
+        )
+    if isinstance(value, dict):
+        return tuple(
+            string
+            for item in value.values()
+            for string in _nested_strings(item)
+        )
+    return ()
+
+
+def _evaluation_leakage_values(
+    root: Path,
+) -> tuple[list[tuple[str, str]], list[tuple[object, str, str, str]]]:
+    case_ids: list[tuple[str, str]] = []
+    expected: list[tuple[object, str, str, str]] = []
+
+    def add_expected(
+        value: object, relative: Path, case_id: str, field: str
+    ) -> None:
+        if _nested_strings(value):
+            expected.append((value, relative.as_posix(), case_id, field))
+        if isinstance(value, list):
+            for item in value:
+                add_expected(item, relative, case_id, field)
+        elif isinstance(value, dict):
+            for item in value.values():
+                add_expected(item, relative, case_id, field)
+
+    def visit(value: object, relative: Path, case_id: str) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item, relative, case_id)
+            return
+        if not isinstance(value, dict):
+            return
+        local_case = value.get("id")
+        if isinstance(local_case, str) and local_case.strip():
+            case_id = local_case
+            case_ids.append((local_case, relative.as_posix()))
+        for field, item in value.items():
+            if field.startswith("expected") or field in EXPECTED_FIXTURE_FIELDS:
+                add_expected(item, relative, case_id, field)
+            visit(item, relative, case_id)
+
+    for relative, document in _fixture_documents(root):
+        visit(document, relative, "unknown")
+    return case_ids, expected
+
+
+def _production_files(root: Path) -> list[Path]:
+    paths = []
+    skills = root / "skills"
+    if skills.is_dir():
+        paths.extend(
+            path
+            for path in skills.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+        )
+    manifest = root / "skills-manifest.json"
+    if manifest.is_file():
+        paths.append(manifest)
+    for name in ("policy.py", "route_capabilities.py"):
+        path = root / "scripts" / name
+        if path.is_file():
+            paths.append(path)
+    return sorted(set(paths))
+
+
+def _contains_complete_token(text: str, token: str) -> bool:
+    return re.search(
+        rf"(?<![A-Za-z0-9_-]){re.escape(token)}(?![A-Za-z0-9_-])",
+        text,
+    ) is not None
+
+
+def _json_contains_value(container: object, target: object) -> bool:
+    if type(container) is type(target) and container == target:
+        return True
+    if isinstance(container, list):
+        return any(_json_contains_value(item, target) for item in container)
+    if isinstance(container, dict):
+        return any(_json_contains_value(item, target) for item in container.values())
+    return False
+
+
+def _generic_expected_target(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) < FIXTURE_TEXT_MINIMUM
+        and re.fullmatch(r"[a-z][a-z0-9_-]*", value) is not None
+    )
+
+
 def validate_fixture_separation(root: Path) -> list[str]:
     skill_bodies = [
         (path.relative_to(root).as_posix(), _normalized_prose(_skill_body(path)))
@@ -144,6 +270,57 @@ def validate_fixture_separation(root: Path) -> list[str]:
                 errors.append(
                     f"{skill_path}: contains normalized benchmark text from "
                     f"{relative} case {case_id} field {field}"
+                )
+    production = []
+    for path in _production_files(root):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        document = None
+        if path.suffix == ".json":
+            try:
+                document = json.loads(text)
+            except json.JSONDecodeError:
+                pass
+        production.append((path.relative_to(root).as_posix(), text, document))
+
+    case_ids, expected_values = _evaluation_leakage_values(root)
+    for case_id, source in case_ids:
+        for production_path, text, _document in production:
+            if _contains_complete_token(text, case_id):
+                errors.append(
+                    f"{production_path}: contains evaluation case id {case_id} from {source}"
+                )
+    for expected, source, case_id, field in expected_values:
+        if _generic_expected_target(expected):
+            continue
+        rendered = json.dumps(expected, ensure_ascii=False, separators=(",", ":"))
+        normalized = (
+            _normalized_prose(expected)
+            if isinstance(expected, str)
+            else None
+        )
+        for production_path, text, document in production:
+            if (
+                normalized is not None
+                and len(normalized) >= FIXTURE_TEXT_MINIMUM
+                and normalized in _normalized_prose(text)
+            ) or (
+                document is not None and _json_contains_value(document, expected)
+            ):
+                old_skill_check = (
+                    production_path.startswith("skills/")
+                    and production_path.endswith("/SKILL.md")
+                    and field in {"literal_failure", "reference"}
+                    and isinstance(expected, str)
+                    and len(normalized or "") >= FIXTURE_TEXT_MINIMUM
+                )
+                if old_skill_check:
+                    continue
+                errors.append(
+                    f"{production_path}: contains expected evaluation target {rendered} "
+                    f"from {source} case {case_id} field {field}"
                 )
     return sorted(errors)
 

@@ -23,9 +23,16 @@ class ManifestTests(unittest.TestCase):
 
     def test_manifest_has_expected_suite_and_orchestrator(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")
+        by_name = {skill.name: skill for skill in manifest.skills}
         self.assertEqual(manifest.schema_version, 2)
-        self.assertEqual(manifest.suite_version, "0.2.0")
+        self.assertEqual(manifest.suite_version, "0.3.0")
         self.assertEqual(manifest.orchestrator, "translating-products")
+        self.assertEqual(by_name["translating-products"].version, "0.3.0")
+        self.assertEqual(by_name["reviewing-translations"].version, "0.2.0")
+        self.assertEqual(
+            manifest.minimum_skill_versions["reviewing-translations"],
+            "0.2.0",
+        )
         self.assertEqual(len(manifest.skills), 22)
         self.assertEqual(
             set(manifest.minimum_skill_versions),
@@ -44,7 +51,7 @@ class ManifestTests(unittest.TestCase):
     def test_manifest_exposes_declarative_routing_metadata(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")
         self.assertEqual(manifest.schema_version, 2)
-        self.assertEqual(manifest.suite_version, "0.2.0")
+        self.assertEqual(manifest.suite_version, "0.3.0")
 
         web = skill_by_name(manifest, "translating-web")
         self.assertEqual(
@@ -59,6 +66,37 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(web.required_context, ("target_locale",))
         self.assertEqual(web.conflicts, ())
         self.assertEqual(web.supersedes, ())
+
+    def test_manifest_declares_normalized_independent_review_requirements(self):
+        raw = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )
+        required = {
+            "translating-web",
+            "localizing-software",
+            "translating-mobile",
+            "translating-ios",
+            "translating-android",
+            "translating-flutter",
+            "translating-app-stores",
+            "translating-marketing",
+            "translating-documentation",
+        }
+
+        self.assertEqual(
+            {
+                skill["name"]
+                for skill in raw["skills"]
+                if skill.get("verification", {}).get("independent_review_required")
+            },
+            required,
+        )
+        for skill in raw["skills"]:
+            with self.subTest(skill=skill["name"]):
+                self.assertEqual(
+                    set(skill.get("verification", {})),
+                    {"independent_review_required"},
+                )
 
     def test_language_and_quality_records_have_distinct_ownership(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")

@@ -140,6 +140,8 @@ by [`scripts/render_catalog.py`](scripts/render_catalog.py). The generated
 is the machine-oriented routing view of the same manifest records.
 
 <!-- skill-inventory:start -->
+Suite version: `0.3.0`
+
 | Skill | Category | When to use |
 | --- | --- | --- |
 | [`translating-products`](skills/translating-products/) | `orchestrator` | Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA. |

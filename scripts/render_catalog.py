@@ -181,6 +181,9 @@ def _render_markdown(catalog: dict) -> str:
             f"`{capability}`: {', '.join(f'`{phase}`' for phase in phases)}"
             for capability, phases in item["ownership"].items()
         ) or "none"
+        independent_review_required = str(
+            item["verification"]["independent_review_required"]
+        ).lower()
         lines.extend(
             (
                 f"### {item['name']}",
@@ -196,6 +199,8 @@ def _render_markdown(catalog: dict) -> str:
                 f"- Conflicts: {conflicts}",
                 f"- Supersedes: {supersedes}",
                 f"- Ownership: {ownership}",
+                "- Independent review required: "
+                f"`{independent_review_required}`",
                 "",
             )
         )
@@ -233,6 +238,8 @@ def render_catalog(
 def _render_readme_inventory(manifest: Manifest) -> str:
     lines = [
         INVENTORY_START,
+        f"Suite version: `{manifest.suite_version}`",
+        "",
         "| Skill | Category | When to use |",
         "| --- | --- | --- |",
     ]

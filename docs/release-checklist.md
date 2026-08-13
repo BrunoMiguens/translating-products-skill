@@ -2,7 +2,7 @@
 
 ## Current decision
 
-The suite remains a prerelease at `<!-- suite-version:start -->0.2.0<!-- suite-version:end -->`. Do not promote
+The suite remains a prerelease at `<!-- suite-version:start -->0.3.0<!-- suite-version:end -->`. Do not promote
 `skills-manifest.json` or its manifest test to `1.0.0` until every gate below
 is complete and its evidence is recorded.
 

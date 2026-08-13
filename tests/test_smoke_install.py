@@ -230,6 +230,12 @@ class SmokeInstallTests(unittest.TestCase):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         entrypoint = manifest["orchestrator"]
         manifest_names = [item["name"] for item in manifest["skills"]]
+        reviewer_resources = {
+            "SKILL.md",
+            "references/review-artifact-schema.json",
+            "scripts/invariants.py",
+            "scripts/validate_review_artifact.py",
+        }
         for entry, target_exists in zip(entries, run["targets_exist"]):
             self.assertEqual(
                 entry["argv"],
@@ -264,6 +270,21 @@ class SmokeInstallTests(unittest.TestCase):
                     path.is_relative_to(target / HOST_SKILL_ROOTS[entry["argv"][6]])
                     for path in installed
                 )
+            )
+            reviewer_root = (
+                target
+                / HOST_SKILL_ROOTS[entry["argv"][6]]
+                / "reviewing-translations"
+            )
+            self.assertTrue(
+                reviewer_resources.issubset(
+                    {
+                        path.relative_to(reviewer_root).as_posix()
+                        for path in installed
+                        if path.is_relative_to(reviewer_root)
+                    }
+                ),
+                entry["argv"][6],
             )
         for entry in individual_entries:
             agent = entry["argv"][6]
