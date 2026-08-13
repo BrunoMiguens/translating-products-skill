@@ -183,6 +183,23 @@ def write_skill(root: Path, name: str, body: str = "# Demo\n") -> Path:
 
 
 class ValidatorTests(unittest.TestCase):
+    def test_product_review_runner_operations_are_documented_without_human_claims(self):
+        documentation = (ROOT / "docs/benchmarking.md").read_text(encoding="utf-8")
+        section = documentation.split("## Automated product review runner", 1)
+        self.assertEqual(len(section), 2)
+        operations = section[1]
+        for command in (
+            "scripts.benchmark.product_runner run",
+            "scripts.benchmark.product_runner status",
+            "scripts.benchmark.product_runner inspect",
+            "--product-git-object",
+            "--translation-context",
+            "scripts.benchmark.product_review prepare",
+            "scripts.benchmark.product_review score",
+        ):
+            self.assertIn(command, operations)
+        self.assertIn("does not create human labels", operations)
+
     def test_manifest_loader_rejects_identity_schema_and_version_drift(self):
         original = json.loads((ROOT / "skills-manifest.json").read_text(encoding="utf-8"))
 

@@ -23,6 +23,10 @@ blind presentations, the reviewer attestation and annotation lock, post-lock
 adjudication, unblinding, and every predeclared gate are complete and bound to
 the exact evidence bytes.
 
+For private real-product regression checks, the runbook also provides a
+resumable Claude/Codex runner that compares no skills, a previous suite Git
+object, and an improved suite Git object without manual prompt copying.
+
 The skills use the open `SKILL.md` format and are designed for Claude Code,
 Codex, Cursor, and universal Agent Skills hosts. They do not depend on a
 host-specific invocation syntax.

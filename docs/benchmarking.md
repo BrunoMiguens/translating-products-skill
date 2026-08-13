@@ -94,6 +94,82 @@ After unblinding, PT-PT v1 is a regression set. A new comparative claim requires
 a fresh holdout. The benchmark says nothing about other locales or future product
 outputs, and it never implies those outputs received human translation review.
 
+## Automated product review runner
+
+The product runner invokes Claude Code and Codex itself. It creates isolated
+normal, previous-suite, and improved-suite reviews from exact Git objects, so
+no prompt or response needs to be copied between desktop apps.
+The runner does not create human labels or claim that any output received
+human review.
+
+Before running it, create and approve the product's `.translation` directory
+through `translating-products`. Keep that approved directory outside the exact
+product snapshot. Both declared suite revisions must accept the same context as
+ready before the first model call.
+
+From this repository, start with one probe per host:
+
+```bash
+/opt/homebrew/bin/python3 -m scripts.benchmark.product_runner run \
+  --root benchmark-private/product-repository-ptpt-v2/runs \
+  --product-repo /Users/example/.codex/worktrees/0c7d/product-repository \
+  --product-git-object 9e0f2f1a1 \
+  --translation-context benchmark-private/product-repository-ptpt-context/.translation \
+  --suite-repo /Users/example/Documents/Codex/2026-07-30/find \
+  --current-suite-git-object 13cf73e \
+  --improved-suite-git-object 8f9b047 \
+  --app all \
+  --timeout-seconds 600 \
+  --probe
+```
+
+If the probe succeeds, resume the remaining calls with the same command after
+removing only `--probe`. Omit `--force`: evidence-bound successes are skipped.
+If one durable model failure or timeout must be deliberately replaced, add its
+`--app` and `--condition` filters plus `--force` while keeping every provenance
+argument unchanged. Pin models on the first command with `--claude-model` and
+`--codex-model` when the host aliases are not immutable.
+
+Check progress or validate all completed outputs without invoking a model:
+
+```bash
+/opt/homebrew/bin/python3 -m scripts.benchmark.product_runner status \
+  --root benchmark-private/product-repository-ptpt-v2/runs \
+  --app all
+
+/opt/homebrew/bin/python3 -m scripts.benchmark.product_runner inspect \
+  --root benchmark-private/product-repository-ptpt-v2/runs \
+  --app all
+```
+
+`inspect` must report three passes for each selected host. It also verifies
+that every condition has the same locale/key/source/current-translation rows.
+The candidates are then ready for the existing human workflow. For Codex:
+
+```bash
+/opt/homebrew/bin/python3 -m scripts.benchmark.product_review prepare \
+  --input-csv benchmark-private/product-repository-ptpt-v2/runs/codex/current-suite.csv \
+  --output-dir benchmark-private/product-repository-ptpt-v2/codex-packet \
+  --suite-git-object 13cf73e
+```
+
+Complete every row in
+`benchmark-private/product-repository-ptpt-v2/codex-packet/human-review.csv`, then
+score the three conditions:
+
+```bash
+/opt/homebrew/bin/python3 -m scripts.benchmark.product_review score \
+  --packet-dir benchmark-private/product-repository-ptpt-v2/codex-packet \
+  --candidate normal=benchmark-private/product-repository-ptpt-v2/runs/codex/normal.csv \
+  --candidate current_suite=benchmark-private/product-repository-ptpt-v2/codex-packet/conditions/current-suite.csv \
+  --candidate improved=benchmark-private/product-repository-ptpt-v2/runs/codex/improved.csv \
+  --output benchmark-private/product-repository-ptpt-v2/codex-packet/score.json
+```
+
+Repeat packet preparation and scoring with `claude` paths to measure that host
+separately. Do not compare Claude and Codex scores as if they were one model;
+the controlled comparisons are within each host.
+
 ## Private product-review regression packets
 
 Real product review output must stay in ignored private storage. Prepare a
