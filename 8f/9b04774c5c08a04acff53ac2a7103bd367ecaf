@@ -1,0 +1,42 @@
+.superpowers/sdd/2026-08-12-holistic-translation-review-verification/final-fix-report.md
+  s_51f69c54a42bb0::t_8486a9f98cf221 1-111
+tests/test_review_artifact.py
+  s_51f69c54a42bb0::t_241679018af0ea 489-499
+  s_51f69c54a42bb0::t_874162c1a8a693 89-97,174-199,226-243,320-323,386-400,452-479,559-691,760-761
+  s_51f69c54a42bb0::t_b87a0556b77688 480
+skills/reviewing-translations/scripts/validate_review_artifact.py
+  s_51f69c54a42bb0::t_a200d0014d053f 81,87,100,111,125,318-325,391-397,404-409,461-467,476-477,506-523,591-610,616-619,630-633,638-652,664-684,705,710,712,716-720
+  s_51f69c54a42bb0::t_de21a5416f6d74 685-697
+skills/reviewing-translations/SKILL.md
+  s_e650fb804747fc::t_d82f7e3eed79c7 93-102,117-123
+skills/reviewing-translations/scripts/invariants.py
+  s_e650fb804747fc::t_0e37d808c0c8af 162,171-175,209-256,291-297,470-473,475-476,479-480,487-494,497-498,501,505-543,545,547,553-620
+skills/translating-products/SKILL.md
+  s_e650fb804747fc::t_b54126c202f391 199-204
+skills/translating-products/scripts/policy.py
+  s_e650fb804747fc::t_63f3ee888cf336 786-787,790
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8f9b04774c5c08a04acff53ac2a7103bd367ecaf",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    },
+    "s_e650fb804747fc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffa68-17f6-71a2-ab4e-feaeed28001b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
