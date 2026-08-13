@@ -1,0 +1,20 @@
+docs/superpowers/specs/2026-08-13-interactive-product-context-setup-design.md
+  s_51f69c54a42bb0::t_0331173d626b88 71-75
+  s_51f69c54a42bb0::t_ee6524b9b7c84d 1-70,76-177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d36118c58334fc5145a4633d8e905cc9375b07d4",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
