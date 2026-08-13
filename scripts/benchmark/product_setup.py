@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .common import BenchmarkError
+from collections.abc import Callable
+from typing import Mapping
+
+from .common import BenchmarkError, utc_now
 from . import product_runner
 
 
@@ -32,6 +37,15 @@ You may create or update only these files under .translation:
 
 Show me the complete proposed configuration before ending the session. Never create setup-approval.json and never run the policy approve command. Approval is handled by the outer runner after this session exits.
 """
+
+
+def _reject_symlink_path(value: Path | str, label: str) -> None:
+    path = Path(os.path.abspath(os.fspath(Path(value).expanduser())))
+    for candidate in reversed((path, *path.parents)):
+        if candidate == Path(candidate.anchor) or candidate.parent == Path(candidate.anchor):
+            continue
+        if candidate.is_symlink():
+            raise BenchmarkError(f"{label} must not contain a symlink: {candidate}")
 
 
 @dataclass(frozen=True)
@@ -67,6 +81,7 @@ class ProductSetupOptions:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise BenchmarkError(f"{name} must be non-empty text when provided")
+        _reject_symlink_path(self.translation_context, "translation context path")
         product_repo = product_runner._resolved(self.product_repo)
         suite_repo = product_runner._resolved(self.suite_repo)
         context = product_runner._resolved(self.translation_context)
@@ -238,3 +253,228 @@ def launch_setup_session(
             f"{completed.returncode}"
         )
 
+
+def _resolved_suite_commits(options: ProductSetupOptions) -> tuple[str, str]:
+    return (
+        product_runner._commit(
+            options.suite_repo, options.current_suite_git_object
+        ),
+        product_runner._commit(
+            options.suite_repo, options.improved_suite_git_object
+        ),
+    )
+
+
+def context_requires_setup(options: ProductSetupOptions) -> bool:
+    context = options.translation_context
+    if context.is_symlink():
+        raise BenchmarkError(f"translation context must not be a symlink: {context}")
+    if not context.exists():
+        return True
+    if not context.is_dir():
+        raise BenchmarkError(f"translation context must be a directory: {context}")
+    try:
+        product_runner._validate_context(context)
+        for commit in _resolved_suite_commits(options):
+            product_runner._preflight_context_path(
+                context, options.suite_repo, commit
+            )
+    except BenchmarkError as error:
+        message = str(error)
+        if (
+            "missing required files" in message
+            or "not ready for suite" in message
+            or "context preflight failed" in message
+        ):
+            return True
+        raise
+    return False
+
+
+def _proposal(
+    translation: Path,
+) -> tuple[tuple[str, bytes], ...]:
+    if translation.is_symlink() or not translation.is_dir():
+        raise BenchmarkError("interactive setup did not create a translation proposal")
+    files = product_runner._tree_files(translation)
+    names = tuple(path.relative_to(translation).as_posix() for path in files)
+    if "setup-approval.json" in names:
+        raise BenchmarkError("the setup agent must not create setup-approval.json")
+    if names != tuple(sorted(PROPOSAL_FILES)):
+        missing = sorted(set(PROPOSAL_FILES) - set(names))
+        extra = sorted(set(names) - set(PROPOSAL_FILES))
+        raise BenchmarkError(
+            f"translation proposal must contain exactly five context files; "
+            f"missing={missing} extra={extra}"
+        )
+    proposal: list[tuple[str, bytes]] = []
+    for name in sorted(PROPOSAL_FILES):
+        raw = (translation / name).read_bytes()
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise BenchmarkError(
+                f"translation proposal is not UTF-8: {name}"
+            ) from error
+        proposal.append((name, raw))
+    return tuple(proposal)
+
+
+def _empty_collections(proposal: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]:
+    text = {name: raw.decode("utf-8") for name, raw in proposal}
+    empty: list[str] = []
+    glossary_lines = [line for line in text["glossary.csv"].splitlines() if line.strip()]
+    if glossary_lines == ["source,target,locale,status"]:
+        empty.append("glossary.csv")
+    protected = [
+        line
+        for line in text["protected-terms.txt"].splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not protected:
+        empty.append("protected-terms.txt")
+    return tuple(empty)
+
+
+def _run_policy_approval(
+    stage: SetupStage,
+    options: ProductSetupOptions,
+    approved_empty: tuple[str, ...],
+) -> None:
+    command = [
+        sys.executable,
+        str(stage.policy),
+        "approve",
+        "--project-root",
+        str(stage.project),
+        "--approved-by",
+        options.approved_by,
+        "--approved-at",
+        utc_now(),
+    ]
+    for name in approved_empty:
+        command.extend(("--approved-empty", name))
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=stage.project,
+        )
+    except OSError as error:
+        raise BenchmarkError(f"cannot run setup approval policy: {error}") from error
+    if completed.returncode != 0:
+        raise BenchmarkError(
+            f"setup approval policy failed: {completed.stderr.strip()}"
+        )
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise BenchmarkError("setup approval policy returned invalid JSON") from error
+    if not isinstance(result, Mapping) or result.get("status") != "approved":
+        raise BenchmarkError("setup approval policy did not approve the context")
+
+
+def _publish_context(
+    source: Path,
+    target: Path,
+    *,
+    replace: bool,
+) -> None:
+    parent = target.parent
+    if parent.is_symlink():
+        raise BenchmarkError(f"translation context parent must not be a symlink: {parent}")
+    parent.mkdir(parents=True, exist_ok=True)
+    temporary_root = Path(
+        tempfile.mkdtemp(prefix=f".{target.name}.setup-", dir=parent)
+    )
+    staged = temporary_root / "context"
+    backup = temporary_root / "previous"
+    installed = False
+    backed_up = False
+    try:
+        product_runner._copy_tree(source, staged)
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_dir():
+                raise BenchmarkError(
+                    f"translation context must be a regular directory: {target}"
+                )
+            if not replace:
+                raise BenchmarkError(
+                    "translation context already exists; use --replace-context to change it"
+                )
+            os.rename(target, backup)
+            backed_up = True
+        os.rename(staged, target)
+        installed = True
+        descriptor = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        if backed_up:
+            shutil.rmtree(backup)
+            backed_up = False
+    except Exception:
+        if installed and target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        if backed_up:
+            os.rename(backup, target)
+        raise
+    finally:
+        shutil.rmtree(temporary_root, ignore_errors=True)
+
+
+def approve_and_publish(
+    stage: SetupStage,
+    options: ProductSetupOptions,
+    *,
+    confirm: Callable[[str], str] = input,
+    emit: Callable[[str], None] = print,
+) -> None:
+    translation = stage.project / ".translation"
+    proposal = _proposal(translation)
+    empty = _empty_collections(proposal)
+    for name, raw in proposal:
+        emit(f"--- {name} ---")
+        emit(raw.decode("utf-8"))
+        if name in empty:
+            emit(f"{name}: empty")
+    if confirm("Type approve to bind and publish this configuration: ") != "approve":
+        raise BenchmarkError("exact approval token was not provided; context was not published")
+    _run_policy_approval(stage, options, empty)
+    product_runner._validate_context(translation)
+    for commit in _resolved_suite_commits(options):
+        product_runner._preflight_context_path(
+            translation, options.suite_repo, commit
+        )
+    _publish_context(
+        translation,
+        options.translation_context,
+        replace=options.replace_context,
+    )
+
+
+def ensure_translation_context(
+    options: ProductSetupOptions,
+    *,
+    confirm: Callable[[str], str] = input,
+    emit: Callable[[str], None] = print,
+) -> bool:
+    if not context_requires_setup(options):
+        return False
+    if options.translation_context.exists() and not options.replace_context:
+        raise BenchmarkError(
+            "translation context is incomplete; use --replace-context to change it"
+        )
+    with tempfile.TemporaryDirectory(prefix="product-context-setup-") as text:
+        stage = stage_setup_project(options, Path(text) / "workspace")
+        launch_setup_session(stage, options)
+        approve_and_publish(
+            stage,
+            options,
+            confirm=confirm,
+            emit=emit,
+        )
+    return True

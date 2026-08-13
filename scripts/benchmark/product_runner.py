@@ -539,13 +539,13 @@ def _suite_archive(config: RunnerConfig, manifest: ProductRunManifest, condition
     return raw
 
 
-def _preflight_context(config: RunnerConfig, commit: str) -> None:
-    raw = _archive(config.suite_repo, commit, "skills")
+def _preflight_context_path(context: Path, suite_repo: Path, commit: str) -> None:
+    raw = _archive(suite_repo, commit, "skills")
     with tempfile.TemporaryDirectory(prefix="product-runner-preflight-") as temporary:
         root = Path(temporary)
         project = root / "project"
         project.mkdir()
-        _copy_tree(config.translation_context, project / ".translation")
+        _copy_tree(context, project / ".translation")
         suite = root / "suite"
         _extract_archive(raw, suite)
         policy = suite / "skills" / "translating-products" / "scripts" / "policy.py"
@@ -583,6 +583,14 @@ def _preflight_context(config: RunnerConfig, commit: str) -> None:
             raise BenchmarkError(
                 f"approved translation context is not ready for suite {commit}: {action!r}"
             )
+
+
+def _preflight_context(config: RunnerConfig, commit: str) -> None:
+    _preflight_context_path(
+        config.translation_context,
+        config.suite_repo,
+        commit,
+    )
 
 
 def prepare_manifest(config: RunnerConfig) -> ProductRunManifest:
