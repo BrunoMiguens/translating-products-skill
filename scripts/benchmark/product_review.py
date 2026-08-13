@@ -219,6 +219,30 @@ def _rename_noreplace(parent_fd: int, source: str, destination: str) -> None:
         raise OSError(number, os.strerror(number), destination)
 
 
+def _stabilize_failed_publication(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int],
+    *,
+    directory: bool,
+) -> None:
+    """Retry directory durability without mutating a raceable public name."""
+    try:
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if not expected_type(named.st_mode) or (named.st_dev, named.st_ino) != identity:
+        return
+    # Standard unlink/rename APIs cannot atomically require this observed inode.
+    # A retrying writer may replace the name immediately after the stat, so only
+    # a non-destructive durability retry is safe here.
+    try:
+        os.fsync(parent_fd)
+    except OSError:
+        pass
+
+
 def _named_symlink(path: Path, description: str) -> None:
     try:
         if path.is_symlink():
@@ -471,27 +495,12 @@ def prepare_packet(
         return manifest
     except (OSError, BenchmarkError) as error:
         if published and staged_identity is not None:
-            try:
-                named = os.stat(
-                    output_path.name, dir_fd=parent_fd, follow_symlinks=False
-                )
-                if (
-                    stat.S_ISDIR(named.st_mode)
-                    and (named.st_dev, named.st_ino) == staged_identity
-                ):
-                    os.rename(
-                        output_path.name,
-                        temporary_name,
-                        src_dir_fd=parent_fd,
-                        dst_dir_fd=parent_fd,
-                    )
-                    published = False
-                    try:
-                        os.fsync(parent_fd)
-                    except OSError:
-                        pass
-            except OSError:
-                pass
+            _stabilize_failed_publication(
+                parent_fd,
+                output_path.name,
+                staged_identity,
+                directory=True,
+            )
         if isinstance(error, OSError):
             if error.errno in {errno.EEXIST, errno.ENOTEMPTY}:
                 error = BenchmarkError(f"output directory already exists: {output_path}")
@@ -797,20 +806,12 @@ def _publish_exclusive_json(
         raise BenchmarkError(f"score output already exists: {path}") from error
     except (OSError, BenchmarkError) as error:
         if published and staged_identity is not None:
-            try:
-                named = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-                if (
-                    stat.S_ISREG(named.st_mode)
-                    and (named.st_dev, named.st_ino) == staged_identity
-                ):
-                    os.unlink(path.name, dir_fd=parent_fd)
-                    published = False
-                    try:
-                        os.fsync(parent_fd)
-                    except OSError:
-                        pass
-            except OSError:
-                pass
+            _stabilize_failed_publication(
+                parent_fd,
+                path.name,
+                staged_identity,
+                directory=False,
+            )
         if isinstance(error, BenchmarkError):
             raise
         raise BenchmarkError(f"cannot publish score output {path}: {error}") from error

@@ -144,6 +144,13 @@ conditions, symlinks, and overwrite. Packets and candidates stored inside this
 repository must be beneath ignored `benchmark-private/`; external private paths
 remain supported.
 
+If a parent-directory durability check or final held-input verification fails
+after publication, the command returns an error and never removes or moves the
+public pathname: standard pathname APIs cannot atomically condition cleanup on
+the inode previously observed. Inspect and explicitly remove the failed output
+before retrying. This fail-closed behavior prevents automatic cleanup from
+deleting a concurrently installed replacement.
+
 This current product run is baseline evidence. Once human decisions are added,
 these reviewed cases form a regression set, not a fresh superiority holdout.
 The three conditions provide a holistic diagnostic comparison only. Production
