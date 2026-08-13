@@ -1,0 +1,25 @@
+docs/benchmarking.md
+  s_51f69c54a42bb0::t_d00891c0d93a94 101-103
+  s_51f69c54a42bb0::t_347b3dd33ab745 172
+  s_51f69c54a42bb0::t_0dedeeff15af3f 97-100,104-171
+README.md
+  s_51f69c54a42bb0::t_0dedeeff15af3f 26-29
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_27384b880a9d51 186-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b66abfacb1ec7c6f6769422c262c79e55c5de74d",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
