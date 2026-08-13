@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import errno
 import json
 import io
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -26,7 +28,7 @@ def run_git(root: Path, *arguments: str) -> str:
 class ProductRunnerManifestTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
+        self.addCleanup(self._cleanup_temporary)
         self.root = Path(self.temporary.name)
         self.product = self.root / "product"
         self.suite = self.root / "suite"
@@ -57,6 +59,18 @@ class ProductRunnerManifestTests(unittest.TestCase):
             "setup-approval.json": '{"status":"approved"}\n',
         }.items():
             (self.context / name).write_text(value, encoding="utf-8")
+
+    def _cleanup_temporary(self) -> None:
+        # Filesystem observers may briefly recreate VCS metadata while rmtree
+        # is walking a disposable repository. Retry only transient ENOTEMPTY.
+        for attempt in range(5):
+            try:
+                self.temporary.cleanup()
+                return
+            except OSError as error:
+                if error.errno != errno.ENOTEMPTY or attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
     def _init_repo(self, root: Path) -> None:
         root.mkdir()
@@ -198,7 +212,7 @@ record = {{
 with pathlib.Path(os.environ['FAKE_INVOCATION_LOG']).open('a', encoding='utf-8') as target:
     target.write(json.dumps(record, sort_keys=True) + '\\n')
 if os.environ.get('FAKE_TIMEOUT_CONDITION') == record['condition']:
-    time.sleep(2)
+    time.sleep(5)
 csv = {self.CSV!r}
 if os.environ.get('FAKE_MISMATCH_CONDITION') == record['condition']:
     csv = csv.replace(',Welcome,', ',Different source,')
@@ -297,7 +311,7 @@ else:
         options = self.options(
             apps=frozenset({"codex"}),
             conditions=frozenset({"normal", "current_suite"}),
-            timeout_seconds=0.5,
+            timeout_seconds=2,
         )
         environment = {
             "FAKE_INVOCATION_LOG": str(self.invocation_log),
