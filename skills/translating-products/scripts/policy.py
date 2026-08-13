@@ -783,10 +783,11 @@ def select_review_depth(
         return ReviewDepthDecision("full_challenge", tuple(reasons))
     if requested_depth == "selective_challenge":
         return ReviewDepthDecision("selective_challenge", ("caller-selective",))
+    if requested_depth == "single":
+        return ReviewDepthDecision("single", ("caller-single",))
     if task_kind == "audit" and source_units > 1:
         return ReviewDepthDecision("selective_challenge", ("multi-unit-audit",))
-    reason = "caller-single" if requested_depth == "single" else "ordinary-translation-qa"
-    return ReviewDepthDecision("single", (reason,))
+    return ReviewDepthDecision("single", ("ordinary-translation-qa",))
 
 
 AUTHORITY_ORDER = (

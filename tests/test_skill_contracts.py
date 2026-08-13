@@ -400,6 +400,29 @@ class SkillContractTests(unittest.TestCase):
         )
         self.assertIn("separate provenance", " ".join(section.split()))
 
+    def test_review_artifact_documents_numeric_and_research_provenance_contracts(self):
+        """Break: portable producers could guess locale formats or invent research provenance."""
+        reviewer = (ROOT / "skills/reviewing-translations/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        orchestrator = (ROOT / "skills/translating-products/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        canonical = " ".join(markdown_section(reviewer, "Canonical review record").split())
+        research = " ".join(markdown_section(orchestrator, "Research gate").split())
+
+        for field in (
+            "source_decimal_separator",
+            "source_grouping_separator",
+            "target_decimal_separator",
+            "target_grouping_separator",
+        ):
+            self.assertIn(f"`{field}`", canonical)
+        self.assertIn("locale-neutral", canonical)
+        self.assertIn("`research`", research)
+        self.assertIn("only when `should_research` returns true", research)
+        self.assertIn("one concrete unresolved question", research)
+
     def test_subagent_policy_contract_calls_exactly_six_derived_inputs(self):
         """Break: the skill could mention policy without making an operational decision."""
         text = (ROOT / "skills/translating-products/SKILL.md").read_text(

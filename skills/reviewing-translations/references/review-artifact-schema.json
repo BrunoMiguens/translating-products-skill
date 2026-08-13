@@ -88,6 +88,7 @@
         "unit_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "source": {"type": "string"},
         "current_target": {"type": "string"},
+        "source_invariant": {"type": "boolean", "default": false},
         "protected_terms": {"$ref": "#/$defs/string_list"},
         "automatic_checks": {
           "type": "array",
@@ -112,6 +113,12 @@
         "execution_mode": {"enum": ["sequential", "parallel"]},
         "selected_capabilities": {"$ref": "#/$defs/string_list"},
         "missing_capabilities": {"$ref": "#/$defs/string_list"},
+        "research": {
+          "anyOf": [
+            {"$ref": "#/$defs/research"},
+            {"type": "null"}
+          ]
+        },
         "units": {
           "type": "array",
           "minItems": 1,
@@ -190,6 +197,15 @@
       "properties": {
         "issue": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "blocks_decision": {"type": "boolean"}
+      }
+    },
+    "research": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "source"],
+      "properties": {
+        "question": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "source": {"type": "string", "minLength": 1, "pattern": "\\S"}
       }
     },
     "human_review": {

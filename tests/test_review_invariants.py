@@ -84,7 +84,15 @@ class ReviewInvariantTests(unittest.TestCase):
                 {"values": ["AccountID"]},
             ),
             ("protected_term_multiset", "Use API", "Use Api", {}),
-            ("number_multiset", "Value 1,234.50", "Value 1 235,50", {}),
+            (
+                "number_multiset", "Value 1,234.50", "Value 1 235,50",
+                {
+                    "source_decimal_separator": ".",
+                    "source_grouping_separator": ",",
+                    "target_decimal_separator": ",",
+                    "target_grouping_separator": " ",
+                },
+            ),
             ("character_limit", "Short", "123456789", {"max": 8}),
             ("line_count", "One line", "One\nTwo", {"count": 1}),
         )
@@ -98,6 +106,112 @@ class ReviewInvariantTests(unittest.TestCase):
                     checks=({"type": check_type, "severity": "major", **options},),
                 )
                 self.assertEqual([finding.check for finding in findings], [check_type])
+
+    def test_number_multiset_uses_explicit_language_neutral_formats(self):
+        """Break: number equivalence could depend on hard-coded language locale tables."""
+        formats = (
+            (
+                "fr-FR",
+                "de-DE",
+                "Total 1\u202f234,50",
+                "Summe 1.234,50",
+                {
+                    "source_decimal_separator": ",",
+                    "source_grouping_separator": "\u202f",
+                    "target_decimal_separator": ",",
+                    "target_grouping_separator": ".",
+                },
+            ),
+            (
+                "de-DE",
+                "fr-FR",
+                "Summe 1.234,50",
+                "Total 1\u202f234,50",
+                {
+                    "source_decimal_separator": ",",
+                    "source_grouping_separator": ".",
+                    "target_decimal_separator": ",",
+                    "target_grouping_separator": "\u202f",
+                },
+            ),
+            (
+                "zz-Latn-ZZ",
+                "qaa-Zzzz-001",
+                "Value 1'234.50",
+                "Value 1_234:50",
+                {
+                    "source_decimal_separator": ".",
+                    "source_grouping_separator": "'",
+                    "target_decimal_separator": ":",
+                    "target_grouping_separator": "_",
+                },
+            ),
+        )
+        for source_locale, target_locale, source, candidate, declaration in formats:
+            with self.subTest(source_locale=source_locale, target_locale=target_locale):
+                try:
+                    findings = self.validate(
+                        source=source,
+                        candidate=candidate,
+                        source_locale=source_locale,
+                        target_locale=target_locale,
+                        checks=({
+                            "type": "number_multiset",
+                            "severity": "critical",
+                            **declaration,
+                        },),
+                    )
+                except ValueError as error:
+                    self.fail(str(error))
+                self.assertEqual(findings, ())
+
+    def test_number_multiset_defaults_only_for_unambiguous_forms(self):
+        """Break: an unknown locale could fail safe integer/date checks or guess punctuation."""
+        try:
+            findings = self.validate(
+                source="Due 01/11/2026 at 30%",
+                candidate="Due 01/11/2026 at 30 %",
+                source_locale="fr-FR",
+                target_locale="de-DE",
+                checks=({"type": "number_multiset", "severity": "critical"},),
+            )
+        except ValueError as error:
+            self.fail(str(error))
+        self.assertEqual(findings, ())
+
+        with self.assertRaisesRegex(ValueError, "explicit separators.*ambiguous"):
+            self.validate(
+                source="Value 1,234",
+                candidate="Value 1.234",
+                source_locale="fr-FR",
+                target_locale="de-DE",
+                checks=({"type": "number_multiset", "severity": "critical"},),
+            )
+
+    def test_number_multiset_explicit_format_declaration_is_exact(self):
+        """Break: partial or ambiguous numeric format declarations could be guessed."""
+        valid = {
+            "type": "number_multiset",
+            "severity": "critical",
+            "source_decimal_separator": ".",
+            "source_grouping_separator": ",",
+            "target_decimal_separator": ",",
+            "target_grouping_separator": ".",
+        }
+        try:
+            validate_check_declaration(valid)
+        except ValueError as error:
+            self.fail(str(error))
+
+        invalid = (
+            {key: value for key, value in valid.items() if key != "target_grouping_separator"},
+            {**valid, "source_decimal_separator": 1},
+            {**valid, "source_decimal_separator": ".", "source_grouping_separator": "."},
+            {**valid, "target_grouping_separator": ".."},
+        )
+        for declaration in invalid:
+            with self.subTest(declaration=declaration), self.assertRaises(ValueError):
+                validate_check_declaration(declaration)
 
     def test_declared_literal_line_and_embedded_contracts_run(self):
         """Break: extracting configured contracts could drop their declared options or dispatch."""

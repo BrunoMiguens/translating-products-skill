@@ -1005,6 +1005,28 @@ class PolicyTests(unittest.TestCase):
             ),
         )
 
+    def test_caller_single_opts_multi_unit_audit_down_after_mandatory_checks(self):
+        """Break: the audit default could override an explicit non-mandatory single request."""
+        decision = self.policy.select_review_depth(
+            task_kind="audit",
+            source_units=20,
+            requested_depth="single",
+        )
+        self.assertEqual(decision.depth, "single")
+        self.assertEqual(decision.reasons, ("caller-single",))
+
+        mandatory = self.policy.select_review_depth(
+            task_kind="audit",
+            source_units=20,
+            requested_depth="single",
+            independent_review_required=True,
+        )
+        self.assertEqual(mandatory.depth, "full_challenge")
+        self.assertEqual(
+            mandatory.reasons,
+            ("capability-requires-independent-review",),
+        )
+
     def test_select_review_depth_fails_closed_for_invalid_inputs(self):
         invalid_cases = [
             {"task_kind": "copywriting", "source_units": 1},

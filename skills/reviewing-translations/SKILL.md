@@ -90,6 +90,16 @@ The human-review status is separate provenance and is never inferred from a
 machine classification. These are review findings, not automated approval or
 claims of human or native quality.
 
+For `number_multiset`, prefer the locale-neutral explicit declaration fields
+`source_decimal_separator`, `source_grouping_separator`,
+`target_decimal_separator`, and `target_grouping_separator`. Declare all four
+together; grouping may be null. Omit them only for numeric forms whose meaning
+is unambiguous without locale-specific assumptions. A nonempty request
+`protected_terms` list is always enforced even when the producer omitted a
+`protected_term_multiset` declaration. A recommendation equal to source is
+invalid unless that request unit explicitly sets the exact boolean
+`source_invariant: true`; omission defaults to false.
+
 The primary reviewer applies all six passes and records issues, confidence, and
 whether human review is required. For `selective_challenge`, challenge only the
 units whose primary pass found no issue, plus any additional selected units; for
@@ -104,8 +114,13 @@ claim equivalent epistemic independence even though its explicit input omits
 the primary conclusions.
 
 Adjudicate primary/challenge disagreement using ownership and authority
-precedence. Accepted defects become `change_recommended`; source defects that
-prevent a sound decision become `blocked_by_source`; unresolved evidence or
+precedence. Agreement keeps the agreed issue set; `accepted_primary` and
+`accepted_challenge` keep only the named pass; `merged` keeps their stable
+union; `unresolved` requires the final `unresolved` classification. Accepted
+defects become `change_recommended`; an empty accepted issue set becomes
+`no_issue_detected`. A nonblocking source issue may accompany either completed
+classification. Source defects that prevent a sound decision use
+`blocked_by_source` with `blocks_decision: true`; unresolved evidence or
 ownership conflicts remain `unresolved`. The correction owner changes only the
 smallest affected target segment, then an ordinary six-pass QA runs on that
 changed unit and is recorded in `recommendation_qa`.

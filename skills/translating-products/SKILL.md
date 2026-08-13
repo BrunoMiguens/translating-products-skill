@@ -196,6 +196,12 @@ Distinguish host-recognized, installed, user-approved skill instructions from a 
 
 Use `SKILL_DIRECTORY/scripts/policy.py`'s `should_research` for one concrete unresolved current, market, or terminology question. A true result authorizes research for that named question only. Stop immediately when it is resolved, then record the question, source, and decision in `.translation/research-sources.md`.
 
+In a canonical review result, keep the optional locale-level `research` field
+absent or null unless the existing gate ran. Populate its exact nonblank
+`question` and `source` fields only when `should_research` returns true for that
+one concrete unresolved question. This provenance records the gated lookup; it
+does not authorize another question or broaden research behavior.
+
 Do not research when bundled knowledge is sufficient, for general background, or to collect precautionary sources. When research is unavailable, use the failure action below.
 
 ## Specialist routing

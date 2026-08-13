@@ -86,6 +86,15 @@ def review_pass(*, issues: list[dict] | None = None, confidence: str = "high") -
     }
 
 
+def review_issue(label: str, *, owner: str = "translation") -> dict:
+    return {
+        "dimension": "accuracy",
+        "issue": label,
+        "owner": owner,
+        "affected_segment": label,
+    }
+
+
 def result_fixture() -> dict:
     return {
         "schema_version": 1,
@@ -162,6 +171,32 @@ class ReviewArtifactTests(unittest.TestCase):
             f"{fragment!r} not found in {errors!r}",
         )
 
+    def single_unit_pair(self) -> tuple[dict, dict, dict]:
+        request = request_fixture()
+        result = result_fixture()
+        request["targets"][0]["units"] = request["targets"][0]["units"][:1]
+        unit = result["locales"][0]["units"][0]
+        result["locales"][0]["units"] = [unit]
+        result["summary"] = {
+            "locales": 1,
+            "units": 1,
+            "counts": {
+                "no_issue_detected": 1,
+                "change_recommended": 0,
+                "blocked_by_source": 0,
+                "unresolved": 0,
+            },
+        }
+        return request, result, unit
+
+    @staticmethod
+    def set_classification(result: dict, unit: dict, classification: str) -> None:
+        unit["classification"] = classification
+        result["summary"]["counts"] = {
+            name: int(name == classification)
+            for name in validator.CLASSIFICATIONS
+        }
+
     def test_two_unit_review_is_accepted(self):
         """Break: a complete review could be rejected or reported with non-derived totals."""
         self.assertEqual(self.validate(), ())
@@ -188,6 +223,24 @@ class ReviewArtifactTests(unittest.TestCase):
                 {"type": "null"},
             ],
         })
+        self.assertEqual(
+            schema["$defs"]["request_unit"]["properties"].get("source_invariant"),
+            {"type": "boolean", "default": False},
+        )
+        self.assertNotIn(
+            "source_invariant",
+            schema["$defs"]["request_unit"]["required"],
+        )
+        self.assertEqual(
+            schema["$defs"]["result_locale"]["properties"].get("research"),
+            {
+                "anyOf": [
+                    {"$ref": "#/$defs/research"},
+                    {"type": "null"},
+                ]
+            },
+        )
+        self.assertNotIn("research", schema["$defs"]["result_locale"]["required"])
 
     def test_schema_nonblank_strings_reject_whitespace_only_values(self):
         """Break: schema consumers could accept whitespace rejected by the runtime gate."""
@@ -264,6 +317,10 @@ class ReviewArtifactTests(unittest.TestCase):
                 unit["recommendation_qa"] = None
                 unit["source_issue"] = None
                 unit.update(changes)
+                if classification == "change_recommended":
+                    accepted = [review_issue("accepted target defect")]
+                    unit["primary"] = review_pass(issues=accepted)
+                    unit["challenge"] = review_pass(issues=accepted)
                 result["locales"][0]["units"] = [unit]
                 result["summary"] = {
                     "locales": 1,
@@ -326,6 +383,21 @@ class ReviewArtifactTests(unittest.TestCase):
         result["locales"][0]["units"][1]["recommendation"]["approved"] = True
         self.assert_invalid(result, "unknown field")
 
+    def test_source_equal_recommendation_requires_exact_source_invariant_opt_in(self):
+        """Break: untranslated source text could be recommended without explicit invariance."""
+        request = request_fixture()
+        result = result_fixture()
+        result["locales"][0]["units"][1]["recommendation"]["text"] = "Pay {amount}"
+        self.assert_invalid(result, "source_invariant", request)
+
+        request["targets"][0]["units"][1]["source_invariant"] = True
+        self.assertEqual(self.validate(request, result), ())
+
+        request["targets"][0]["units"][1]["source_invariant"] = 1
+        self.assertTrue(
+            any("source_invariant must be boolean" in error for error in self.validate(request, result))
+        )
+
     def test_change_recommendation_requires_passed_empty_qa(self):
         """Break: unverified or failed recommendation QA could be reported as a change."""
         variants = (
@@ -377,6 +449,35 @@ class ReviewArtifactTests(unittest.TestCase):
         unit["recommendation"]["text"] = "Payer Api {amount}"
         self.assert_invalid(result, "protected_term_multiset", request)
 
+    def test_nonempty_protected_terms_are_automatic_without_duplicate_findings(self):
+        """Break: request-owned protected terms could depend on a producer-declared check."""
+        for declared in ("omitted", "request-backed", "configured"):
+            with self.subTest(declared=declared):
+                request = request_fixture()
+                request_unit = request["targets"][0]["units"][1]
+                request_unit["source"] = "Pay API {amount}"
+                request_unit["current_target"] = "Verser API {amount}"
+                request_unit["protected_terms"] = ["API"]
+                if declared != "omitted":
+                    declaration = {
+                        "type": "protected_term_multiset",
+                        "severity": "major" if declared == "configured" else "critical",
+                    }
+                    if declared == "configured":
+                        declaration["values"] = ["API"]
+                    request_unit["automatic_checks"].append(declaration)
+                result = result_fixture()
+                unit = result["locales"][0]["units"][1]
+                unit["source"] = request_unit["source"]
+                unit["current_target"] = request_unit["current_target"]
+                unit["recommendation"]["text"] = "Payer Api {amount}"
+
+                errors = self.validate(request, result)
+                protected_errors = [
+                    error for error in errors if "failed protected_term_multiset" in error
+                ]
+                self.assertEqual(len(protected_errors), 1, errors)
+
     def test_broken_or_unknown_automatic_checks_are_rejected(self):
         """Break: malformed declarations could skip the shared invariant engine."""
         request = request_fixture()
@@ -385,6 +486,17 @@ class ReviewArtifactTests(unittest.TestCase):
         request = request_fixture()
         request["targets"][0]["units"][1]["automatic_checks"] = "placeholder_multiset"
         self.assertTrue(any("automatic_checks" in error for error in self.validate(request)))
+        request = request_fixture()
+        request_unit = request["targets"][0]["units"][1]
+        request_unit["protected_terms"] = ["API"]
+        request_unit["automatic_checks"].append({
+            "type": "protected_term_multiset",
+            "severity": "critical",
+            "values": 1,
+        })
+        self.assertTrue(
+            any("values must be a list" in error for error in self.validate(request))
+        )
 
     def test_challenge_shape_rejects_leakage_fields(self):
         """Break: a blind challenge could contain primary output or recommendation leakage."""
@@ -442,6 +554,139 @@ class ReviewArtifactTests(unittest.TestCase):
                 result = result_fixture()
                 result["locales"][0]["units"][0]["challenge"]["issues"] = [issue]
                 result["locales"][0]["units"][0]["adjudication"] = adjudication
+                self.assert_invalid(result, fragment)
+
+    def test_challenge_only_defect_accepted_primary_derives_an_empty_issue_set(self):
+        """Break: a rejected challenge-only defect could still drive the final classification."""
+        request, result, unit = self.single_unit_pair()
+        unit["challenge"]["issues"] = [review_issue("challenge-only")]
+        unit["adjudication"] = {
+            "status": "accepted_primary",
+            "rationale": "Primary evidence is controlling",
+        }
+        self.assertEqual(self.validate(request, result), ())
+
+        self.set_classification(result, unit, "change_recommended")
+        unit["recommendation"] = {"text": "Salut {name}", "owner": "translation"}
+        unit["recommendation_qa"] = {"status": "passed", "issues": []}
+        self.assert_invalid(result, "accepted issue set is empty", request)
+
+    def test_primary_false_positive_accepted_challenge_derives_an_empty_issue_set(self):
+        """Break: primary issues could survive after adjudication accepts an empty challenge."""
+        request, result, unit = self.single_unit_pair()
+        unit["primary"]["issues"] = [review_issue("primary false positive")]
+        unit["adjudication"] = {
+            "status": "accepted_challenge",
+            "rationale": "Challenge evidence overturns the primary finding",
+        }
+        self.assertEqual(self.validate(request, result), ())
+
+    def test_merged_and_agreed_issue_sets_drive_change_evidence(self):
+        """Break: merged issue direction or agreement could be ignored by final evidence checks."""
+        first = review_issue("first", owner="language")
+        second = review_issue("second", owner="platform")
+        cases = (
+            ([first], [second], "language"),
+            ([second], [first], "platform"),
+            ([first], [first], "language"),
+        )
+        for primary_issues, challenge_issues, owner in cases:
+            with self.subTest(primary=primary_issues, challenge=challenge_issues):
+                request, result, unit = self.single_unit_pair()
+                unit["primary"]["issues"] = primary_issues
+                unit["challenge"]["issues"] = challenge_issues
+                if primary_issues == challenge_issues:
+                    unit["adjudication"] = {"status": "not_required", "rationale": None}
+                else:
+                    unit["adjudication"] = {
+                        "status": "merged",
+                        "rationale": "Both independent issues are retained",
+                    }
+                self.set_classification(result, unit, "change_recommended")
+                unit["recommendation"] = {"text": "Salut {name}", "owner": owner}
+                unit["recommendation_qa"] = {"status": "passed", "issues": []}
+                self.assertEqual(self.validate(request, result), ())
+
+                unit["recommendation"]["owner"] = "unrelated-owner"
+                self.assert_invalid(result, "recommendation.owner must match", request)
+
+    def test_unresolved_adjudication_requires_unresolved_final_classification(self):
+        """Break: an unresolved disagreement could be serialized as an accepted completion."""
+        request, result, unit = self.single_unit_pair()
+        unit["primary"]["issues"] = [review_issue("primary")]
+        unit["challenge"]["issues"] = [review_issue("challenge")]
+        unit["adjudication"] = {
+            "status": "unresolved",
+            "rationale": "Evidence remains incompatible",
+        }
+        self.set_classification(result, unit, "unresolved")
+        self.assertEqual(self.validate(request, result), ())
+
+        self.set_classification(result, unit, "change_recommended")
+        unit["recommendation"] = {"text": "Salut {name}", "owner": "translation"}
+        unit["recommendation_qa"] = {"status": "passed", "issues": []}
+        self.assert_invalid(result, "must be unresolved", request)
+
+    def test_source_issue_blocking_contract_covers_every_classification(self):
+        """Break: source evidence could be rejected when nonblocking or accepted when blocking."""
+        nonblocking = {"issue": "Source has a recoverable defect", "blocks_decision": False}
+        for classification in ("no_issue_detected", "change_recommended"):
+            with self.subTest(classification=classification, blocking=False):
+                request, result, unit = self.single_unit_pair()
+                if classification == "change_recommended":
+                    unit["primary"]["issues"] = [review_issue("target defect")]
+                    unit["challenge"]["issues"] = [review_issue("target defect")]
+                    self.set_classification(result, unit, classification)
+                    unit["recommendation"] = {
+                        "text": "Salut {name}",
+                        "owner": "translation",
+                    }
+                    unit["recommendation_qa"] = {"status": "passed", "issues": []}
+                unit["source_issue"] = copy.deepcopy(nonblocking)
+                self.assertEqual(self.validate(request, result), ())
+
+                unit["source_issue"]["blocks_decision"] = True
+                self.assert_invalid(result, "must be false", request)
+
+        request, result, unit = self.single_unit_pair()
+        self.set_classification(result, unit, "blocked_by_source")
+        unit["source_issue"] = {"issue": "Source blocks a decision", "blocks_decision": True}
+        self.assertEqual(self.validate(request, result), ())
+        unit["source_issue"]["blocks_decision"] = False
+        self.assert_invalid(result, "must be true", request)
+
+        for blocks_decision in (False, True):
+            with self.subTest(classification="unresolved", blocks_decision=blocks_decision):
+                request, result, unit = self.single_unit_pair()
+                self.set_classification(result, unit, "unresolved")
+                unit["source_issue"] = {
+                    "issue": "Source issue remains recorded",
+                    "blocks_decision": blocks_decision,
+                }
+                self.assert_invalid(result, "must be null for unresolved", request)
+
+    def test_locale_research_provenance_is_optional_nullable_and_exact(self):
+        """Break: research provenance could be malformed or required for old artifacts."""
+        result = result_fixture()
+        self.assertEqual(self.validate(result=result), ())
+
+        result["locales"][0]["research"] = None
+        self.assertEqual(self.validate(result=result), ())
+        result["locales"][0]["research"] = {
+            "question": "Which current market term resolves this unit?",
+            "source": "https://example.test/authoritative-source",
+        }
+        self.assertEqual(self.validate(result=result), ())
+
+        invalid_values = (
+            ({"question": " ", "source": "https://example.test"}, "question"),
+            ({"question": "Current term?", "source": 7}, "source"),
+            ({"question": "Current term?", "source": "source", "decision": "x"}, "unknown field"),
+        )
+        for value, fragment in invalid_values:
+            with self.subTest(value=value):
+                result = result_fixture()
+                result["locales"][0]["research"] = value
                 self.assert_invalid(result, fragment)
 
     def test_summary_is_fully_derived(self):
@@ -512,8 +757,8 @@ class ReviewArtifactCliTests(unittest.TestCase):
         )
         self.assertEqual(completed.stderr, "")
 
-    def test_parallel_and_sequential_audits_have_identical_decisions(self):
-        """Break: execution topology could change a deterministic review decision."""
+    def test_validator_accepts_execution_mode_metadata_with_only_mode_difference(self):
+        """Break: validator behavior could differ for otherwise identical execution metadata."""
         request = request_fixture()
         artifacts = {}
         for execution_mode in ("parallel", "sequential"):
@@ -524,23 +769,6 @@ class ReviewArtifactCliTests(unittest.TestCase):
             self.assertEqual(json.loads(completed.stdout)["valid"], True)
             artifacts[execution_mode] = result
 
-        def decisions(artifact):
-            return {
-                "units": [
-                    {
-                        "classification": unit["classification"],
-                        "primary": unit["primary"],
-                        "challenge": unit["challenge"],
-                        "adjudication": unit["adjudication"],
-                        "recommendation": unit["recommendation"],
-                    }
-                    for locale in artifact["locales"]
-                    for unit in locale["units"]
-                ],
-                "counts": artifact["summary"]["counts"],
-            }
-
-        self.assertEqual(decisions(artifacts["parallel"]), decisions(artifacts["sequential"]))
         parallel_without_mode = copy.deepcopy(artifacts["parallel"])
         sequential_without_mode = copy.deepcopy(artifacts["sequential"])
         del parallel_without_mode["locales"][0]["execution_mode"]

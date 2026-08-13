@@ -509,24 +509,39 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(result.findings, ())
         self.assertEqual(result.applicable_checks, 2)
 
-    def test_numbers_are_compared_by_normalized_locale_value(self):
-        """Break: locale punctuation changes could be mistaken for changed numeric meaning."""
+    def test_numbers_are_compared_by_declared_numeric_format(self):
+        """Break: declared punctuation changes could be mistaken for changed numeric meaning."""
         case = case_with_checks(
             source="Total: 1,234.50 (25%)",
-            checks=[{"type": "number_multiset", "severity": "critical"}],
+            checks=[{
+                "type": "number_multiset",
+                "severity": "critical",
+                "source_decimal_separator": ".",
+                "source_grouping_separator": ",",
+                "target_decimal_separator": ",",
+                "target_grouping_separator": ".",
+            }],
             source_locale="en-US",
             target_locale="pt-PT",
         )
 
         result = validate_output(case, "Total: 1.234,50 (25 %)")
 
+        self.assertEqual(result.status, "passed")
         self.assertEqual(result.findings, ())
 
-    def test_ambiguous_number_separators_follow_each_declared_locale(self):
-        """Break: identical punctuation could hide different locale-specific numeric values."""
+    def test_ambiguous_number_separators_follow_each_declared_numeric_format(self):
+        """Break: identical punctuation could hide different explicitly declared numeric values."""
         case = case_with_checks(
             source="Value: 1,234",
-            checks=[{"type": "number_multiset", "severity": "critical"}],
+            checks=[{
+                "type": "number_multiset",
+                "severity": "critical",
+                "source_decimal_separator": ".",
+                "source_grouping_separator": ",",
+                "target_decimal_separator": ",",
+                "target_grouping_separator": ".",
+            }],
             source_locale="en-US",
             target_locale="pt-PT",
         )
@@ -536,6 +551,7 @@ class ValidatorTests(unittest.TestCase):
 
         self.assertEqual(corrupted.status, "failed")
         self.assertEqual({finding.invariant for finding in corrupted.findings}, {"number_multiset"})
+        self.assertEqual(equivalent.status, "passed")
         self.assertEqual(equivalent.findings, ())
 
     def test_icu_sibling_arguments_may_reorder_without_changing_topology(self):

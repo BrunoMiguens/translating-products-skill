@@ -159,7 +159,7 @@ _CHECK_FIELDS: dict[str, frozenset[str]] = {
     name: frozenset({"type", "severity"})
     for name in (
         "placeholder_multiset", "format_specifier_multiset", "url_multiset",
-        "email_multiset", "code_span_multiset", "number_multiset",
+        "email_multiset", "code_span_multiset",
         "json_structure", "xml_structure", "html_structure",
         "markdown_structure", "fenced_block_exact", "icu_topology",
     )
@@ -168,6 +168,11 @@ _CHECK_FIELDS.update({
     "command_multiset": frozenset({"type", "severity", "values", "commands"}),
     "identifier_multiset": frozenset({"type", "severity", "values", "identifiers"}),
     "protected_term_multiset": frozenset({"type", "severity", "values", "terms"}),
+    "number_multiset": frozenset({
+        "type", "severity",
+        "source_decimal_separator", "source_grouping_separator",
+        "target_decimal_separator", "target_grouping_separator",
+    }),
     "character_limit": frozenset({"type", "severity", "max"}),
     "line_count": frozenset({"type", "severity", "count", "lines"}),
     "csv_shape": frozenset({"type", "severity", "delimiter"}),
@@ -199,6 +204,54 @@ def _string_list(value: object, label: str, *, allow_empty: bool = False) -> tup
     if len(result) != len(set(result)):
         raise ValueError(f"{label} must not contain duplicates")
     return result
+
+
+_NUMBER_SEPARATOR_FIELDS = (
+    "source_decimal_separator",
+    "source_grouping_separator",
+    "target_decimal_separator",
+    "target_grouping_separator",
+)
+
+
+def _declared_number_format(
+    check: Mapping[str, object],
+    role: str,
+) -> tuple[str, str | None] | None:
+    declared = [field for field in _NUMBER_SEPARATOR_FIELDS if field in check]
+    if not declared:
+        return None
+    missing = [field for field in _NUMBER_SEPARATOR_FIELDS if field not in check]
+    if missing:
+        raise ValueError(
+            "number_multiset explicit format requires all source and target separators"
+        )
+    decimal = check[f"{role}_decimal_separator"]
+    grouping = check[f"{role}_grouping_separator"]
+    if (
+        type(decimal) is not str
+        or len(decimal) != 1
+        or decimal.isspace()
+        or decimal.isdigit()
+        or decimal in "+-%"
+    ):
+        raise ValueError(
+            f"number_multiset {role}_decimal_separator must be one non-whitespace symbol"
+        )
+    if grouping is not None and (
+        type(grouping) is not str
+        or len(grouping) != 1
+        or grouping.isdigit()
+        or grouping in "+-%"
+    ):
+        raise ValueError(
+            f"number_multiset {role}_grouping_separator must be null or one symbol"
+        )
+    if grouping == decimal:
+        raise ValueError(
+            f"number_multiset {role} decimal and grouping separators must differ"
+        )
+    return decimal, grouping
 
 
 def validate_check_declaration(check: Mapping[str, object]) -> None:
@@ -235,6 +288,13 @@ def validate_check_declaration(check: Mapping[str, object]) -> None:
     elif check_type == "character_limit" and "max" in check:
         if type(check["max"]) is not int or check["max"] < 0:
             raise ValueError("character_limit requires a non-negative integer max")
+    elif check_type == "number_multiset":
+        source_format = _declared_number_format(check, "source")
+        target_format = _declared_number_format(check, "target")
+        if (source_format is None) != (target_format is None):
+            raise ValueError(
+                "number_multiset explicit format requires all source and target separators"
+            )
     elif check_type == "line_count":
         value = check.get("count", check.get("lines"))
         if value is not None and (type(value) is not int or value < 0):
@@ -407,63 +467,155 @@ def check_protected_terms(case: Mapping[str, object], output: str, check: Mappin
 
 
 def check_numbers(case: Mapping[str, object], output: str, check: Mapping[str, object]) -> tuple[_InvariantEvidence, ...]:
-    source_locale = _locale(case, "source_locale")
-    target_locale = _locale(case, "target_locale")
+    source_format = _declared_number_format(check, "source")
+    target_format = _declared_number_format(check, "target")
+    source_pattern = _number_pattern(source_format)
+    target_pattern = _number_pattern(target_format)
     source_values = [
-        _normalize_number(match.group(0), source_locale)
-        for match in _NUMBER.finditer(_source(case))
+        _normalize_number(match.group(0), source_format)
+        for match in source_pattern.finditer(_source(case))
     ]
     output_values = [
-        _normalize_number(match.group(0), target_locale)
-        for match in _NUMBER.finditer(output)
+        _normalize_number(match.group(0), target_format)
+        for match in target_pattern.finditer(output)
     ]
     return _multiset_finding(
         "number_multiset", _severity(check), source_values, output_values, output,
     )
 
 
-def _locale(case: Mapping[str, object], field: str) -> str:
-    value = case.get(field)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"case {field} must be non-empty text")
-    normalized = value.replace("_", "-").lower()
-    if normalized == "pt" or normalized.startswith("pt-"):
-        return "pt"
-    if normalized == "en" or normalized.startswith("en-"):
-        return "en"
-    raise ValueError(f"unsupported numeric locale: {value}")
+def _number_pattern(number_format: tuple[str, str | None] | None) -> re.Pattern[str]:
+    if number_format is None:
+        return _NUMBER
+    decimal, grouping = number_format
+    separators = decimal + ("" if grouping is None else grouping)
+    return re.compile(
+        rf"(?<![\w])[-+]?\d+(?:[{re.escape(separators)}]\d+)*(?:\s?%)?(?![\w])"
+    )
 
 
-def _normalize_number(value: str, locale: str) -> str:
-    compact = re.sub(r"\s+", "", value)
+def _number_parts(value: str) -> tuple[str, str, str]:
+    compact = value.strip()
     suffix = "%" if compact.endswith("%") else ""
     if suffix:
-        compact = compact[:-1]
+        compact = compact[:-1].rstrip()
     sign = ""
     if compact[:1] in {"+", "-"}:
         sign, compact = compact[0], compact[1:]
-    decimal_separator, grouping_separator = (",", ".") if locale == "pt" else (".", ",")
-    if compact.count(decimal_separator) > 1:
-        return f"invalid:{locale}:{value}"
-    integer, separator, fraction = compact.partition(decimal_separator)
-    groups = integer.split(grouping_separator)
-    if len(groups) > 1 and not (
-        1 <= len(groups[0]) <= 3
-        and all(len(group) == 3 and group.isdigit() for group in groups[1:])
-    ):
-        return f"invalid:{locale}:{value}"
-    if not all(group.isdigit() for group in groups):
-        return f"invalid:{locale}:{value}"
-    if separator and (not fraction or not fraction.isdigit() or grouping_separator in fraction):
-        return f"invalid:{locale}:{value}"
-    compact = "".join(groups) + (("." + fraction) if separator else "")
+    return sign, compact, suffix
+
+
+def _invalid_number(
+    value: str,
+    decimal_separator: str | None,
+    grouping_separator: str | None,
+) -> str:
+    return f"invalid:{decimal_separator!r}:{grouping_separator!r}:{value}"
+
+
+def _normalize_with_separators(
+    value: str,
+    decimal_separator: str | None,
+    grouping_separator: str | None,
+) -> str:
+    sign, compact, suffix = _number_parts(value)
+    if grouping_separator is not None and decimal_separator == grouping_separator:
+        return _invalid_number(value, decimal_separator, grouping_separator)
+    if decimal_separator is None:
+        integer, separator, fraction = compact, "", ""
+    else:
+        if compact.count(decimal_separator) > 1:
+            return _invalid_number(value, decimal_separator, grouping_separator)
+        integer, separator, fraction = compact.partition(decimal_separator)
+    if grouping_separator is None:
+        groups = [integer]
+    else:
+        groups = integer.split(grouping_separator)
+        if len(groups) > 1 and not (
+            1 <= len(groups[0]) <= 3
+            and all(len(group) == 3 and group.isdigit() for group in groups[1:])
+        ):
+            return _invalid_number(value, decimal_separator, grouping_separator)
+    if not groups or not all(group.isdigit() for group in groups):
+        return _invalid_number(value, decimal_separator, grouping_separator)
+    if separator and (not fraction or not fraction.isdigit()):
+        return _invalid_number(value, decimal_separator, grouping_separator)
+    normalized_input = "".join(groups) + (("." + fraction) if separator else "")
     try:
-        normalized = format(Decimal(f"{sign}{compact}").normalize(), "f")
+        normalized = format(Decimal(f"{sign}{normalized_input}").normalize(), "f")
     except InvalidOperation:
-        return f"{sign}{compact}{suffix}"
+        return _invalid_number(value, decimal_separator, grouping_separator)
     if normalized == "-0":
         normalized = "0"
     return normalized + suffix
+
+
+def _infer_number_separators(value: str) -> tuple[str | None, str | None]:
+    _, compact, _ = _number_parts(value)
+    whitespace = [character for character in compact if character.isspace()]
+    punctuation = [
+        character for character in compact
+        if not character.isdigit() and not character.isspace()
+    ]
+    punctuation_kinds = set(punctuation)
+    if whitespace:
+        whitespace_kinds = set(whitespace)
+        if len(whitespace_kinds) != 1:
+            raise ValueError(
+                f"number_multiset requires explicit separators for ambiguous number {value!r}"
+            )
+        grouping = whitespace[0]
+        if len(punctuation_kinds) > 1:
+            raise ValueError(
+                f"number_multiset requires explicit separators for ambiguous number {value!r}"
+            )
+        decimal = next(iter(punctuation_kinds), None)
+        return decimal, grouping
+    if not punctuation:
+        return None, None
+    if len(punctuation_kinds) == 2:
+        last_positions = {
+            separator: compact.rfind(separator) for separator in punctuation_kinds
+        }
+        decimal = max(last_positions, key=last_positions.get)
+        grouping = next(separator for separator in punctuation_kinds if separator != decimal)
+        return decimal, grouping
+    if len(punctuation_kinds) > 2:
+        raise ValueError(
+            f"number_multiset requires explicit separators for ambiguous number {value!r}"
+        )
+    separator = punctuation[0]
+    if len(punctuation) > 1:
+        groups = compact.split(separator)
+        if (
+            1 <= len(groups[0]) <= 3
+            and all(len(group) == 3 and group.isdigit() for group in groups[1:])
+        ):
+            return None, separator
+        raise ValueError(
+            f"number_multiset requires explicit separators for ambiguous number {value!r}"
+        )
+    integer, fraction = compact.split(separator)
+    if 1 <= len(integer) <= 3 and len(fraction) == 3:
+        raise ValueError(
+            f"number_multiset requires explicit separators for ambiguous number {value!r}"
+        )
+    return separator, None
+
+
+def _normalize_number(
+    value: str,
+    number_format: tuple[str, str | None] | None,
+) -> str:
+    if number_format is None:
+        decimal_separator, grouping_separator = _infer_number_separators(value)
+    else:
+        decimal_separator, grouping_separator = number_format
+    return _normalize_with_separators(
+        value,
+        decimal_separator,
+        grouping_separator,
+    )
 
 
 def check_character_limit(case: Mapping[str, object], output: str, check: Mapping[str, object]) -> tuple[_InvariantEvidence, ...]:
