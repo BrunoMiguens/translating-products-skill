@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import subprocess
 import tempfile
@@ -199,6 +200,8 @@ with pathlib.Path(os.environ['FAKE_INVOCATION_LOG']).open('a', encoding='utf-8')
 if os.environ.get('FAKE_TIMEOUT_CONDITION') == record['condition']:
     time.sleep(2)
 csv = {self.CSV!r}
+if os.environ.get('FAKE_MISMATCH_CONDITION') == record['condition']:
+    csv = csv.replace(',Welcome,', ',Different source,')
 if '--print' in sys.argv:
     print(json.dumps({{'result': csv, 'modelUsage': {{'claude-observed': {{}}}}}}))
 else:
@@ -294,7 +297,7 @@ else:
         options = self.options(
             apps=frozenset({"codex"}),
             conditions=frozenset({"normal", "current_suite"}),
-            timeout_seconds=0.1,
+            timeout_seconds=0.5,
         )
         environment = {
             "FAKE_INVOCATION_LOG": str(self.invocation_log),
@@ -314,6 +317,89 @@ else:
         )
         self.assertEqual([state.status for state in states], ["completed", "failed"])
         self.assertEqual(len(self.invocation_records()), 2)
+
+
+class ProductRunnerCliTests(ProductRunnerExecutionTests):
+    def run_cli(self, *arguments: str) -> tuple[int, str, str]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch("sys.stdout", stdout), mock.patch("sys.stderr", stderr):
+            status = product_runner.main(list(arguments))
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def run_arguments(self) -> tuple[str, ...]:
+        return (
+            "run",
+            "--root",
+            str(self.output),
+            "--product-repo",
+            str(self.product),
+            "--product-git-object",
+            self.product_commit,
+            "--translation-context",
+            str(self.context),
+            "--suite-repo",
+            str(self.suite),
+            "--current-suite-git-object",
+            self.old_commit,
+            "--improved-suite-git-object",
+            self.improved_commit,
+            "--app",
+            "all",
+            "--claude-executable",
+            str(self.fake_cli),
+            "--codex-executable",
+            str(self.fake_cli),
+            "--claude-model",
+            "claude-test",
+            "--codex-model",
+            "codex-test",
+        )
+
+    def test_cli_runs_statuses_and_inspects_all_conditions(self):
+        with mock.patch.dict(os.environ, {"FAKE_INVOCATION_LOG": str(self.invocation_log)}):
+            status, output, error = self.run_cli(*self.run_arguments())
+        self.assertEqual((status, error), (0, ""))
+        self.assertIn("completed=6", output)
+
+        status, output, error = self.run_cli(
+            "status", "--root", str(self.output), "--app", "all"
+        )
+        self.assertEqual((status, error), (0, ""))
+        self.assertIn("claude: pending=0 completed=3 failed=0 invalid=0", output)
+        self.assertIn("codex: pending=0 completed=3 failed=0 invalid=0", output)
+
+        status, output, error = self.run_cli(
+            "inspect", "--root", str(self.output), "--app", "all"
+        )
+        self.assertEqual((status, error), (0, ""))
+        self.assertIn("claude: passed=3 failed=0 pending=0 invalid=0", output)
+        self.assertIn("codex: passed=3 failed=0 pending=0 invalid=0", output)
+
+    def test_cli_probe_runs_first_pending_condition_per_app(self):
+        with mock.patch.dict(os.environ, {"FAKE_INVOCATION_LOG": str(self.invocation_log)}):
+            status, output, error = self.run_cli(*self.run_arguments(), "--probe")
+        self.assertEqual((status, error), (0, ""))
+        self.assertIn("completed=2", output)
+        self.assertEqual(
+            [(row["condition"], "--sandbox" in row["argv"]) for row in self.invocation_records()],
+            [("normal", False), ("normal", True)],
+        )
+
+    def test_inspect_rejects_cross_condition_source_mismatch(self):
+        environment = {
+            "FAKE_INVOCATION_LOG": str(self.invocation_log),
+            "FAKE_MISMATCH_CONDITION": "improved",
+        }
+        with mock.patch.dict(os.environ, environment):
+            status, _, error = self.run_cli(*self.run_arguments())
+        self.assertEqual((status, error), (0, ""))
+
+        status, _, error = self.run_cli(
+            "inspect", "--root", str(self.output), "--app", "all"
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("source fields do not match", error)
 
 
 if __name__ == "__main__":

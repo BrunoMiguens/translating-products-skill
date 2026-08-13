@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -30,7 +31,7 @@ from .common import (
     sha256_bytes,
     utc_now,
 )
-from .product_review import _parse_automated_csv
+from .product_review import _parse_automated_csv, _verify_sources
 
 
 APPS = ("claude", "codex")
@@ -194,13 +195,115 @@ class ProductRunManifest:
     def sha256(self) -> str:
         return sha256_bytes(canonical_bytes(self.to_dict()))
 
+    @classmethod
+    def from_dict(cls, value: object) -> "ProductRunManifest":
+        if not isinstance(value, dict) or set(value) != {
+            "schema_version",
+            "product",
+            "suites",
+            "context_tree_sha256",
+            "prompt_sha256",
+            "apps",
+            "models",
+            "conditions",
+            "output_columns",
+        }:
+            raise BenchmarkError("product run manifest fields are invalid")
+        if value["schema_version"] != 1:
+            raise BenchmarkError("product run manifest schema_version must be 1")
+        product = value["product"]
+        suites = value["suites"]
+        models = value["models"]
+        if not isinstance(product, dict) or set(product) != {"commit", "tree_sha256"}:
+            raise BenchmarkError("product run manifest product is invalid")
+        if not isinstance(suites, dict) or set(suites) != {"current_suite", "improved"}:
+            raise BenchmarkError("product run manifest suites are invalid")
+        for name in ("current_suite", "improved"):
+            if not isinstance(suites[name], dict) or set(suites[name]) != {
+                "commit",
+                "tree_sha256",
+            }:
+                raise BenchmarkError(f"product run manifest {name} suite is invalid")
+        if not isinstance(models, dict) or set(models) != set(APPS):
+            raise BenchmarkError("product run manifest models are invalid")
+        apps = value["apps"]
+        if (
+            not isinstance(apps, list)
+            or not apps
+            or any(app not in APPS for app in apps)
+            or len(apps) != len(set(apps))
+        ):
+            raise BenchmarkError("product run manifest apps are invalid")
+        if value["conditions"] != list(CONDITIONS):
+            raise BenchmarkError("product run manifest conditions are invalid")
+        expected_columns = [
+            "locale",
+            "key",
+            "english_source",
+            "current_translation",
+            "status",
+            "reason",
+            "recommended_correction",
+        ]
+        if value["output_columns"] != expected_columns:
+            raise BenchmarkError("product run manifest output columns are invalid")
+        hashes = (
+            product.get("tree_sha256"),
+            suites["current_suite"].get("tree_sha256"),
+            suites["improved"].get("tree_sha256"),
+            value["context_tree_sha256"],
+            value["prompt_sha256"],
+        )
+        commits = (
+            product.get("commit"),
+            suites["current_suite"].get("commit"),
+            suites["improved"].get("commit"),
+        )
+        if any(
+            not isinstance(item, str)
+            or len(item) != 64
+            or any(character not in "0123456789abcdef" for character in item)
+            for item in hashes
+        ):
+            raise BenchmarkError("product run manifest hashes are invalid")
+        if any(
+            not isinstance(item, str)
+            or len(item) != 40
+            or any(character not in "0123456789abcdef" for character in item)
+            for item in commits
+        ):
+            raise BenchmarkError("product run manifest commits are invalid")
+        for name in APPS:
+            model = models[name]
+            if model is not None and (not isinstance(model, str) or not model.strip()):
+                raise BenchmarkError("product run manifest model is invalid")
+        return cls(
+            product_commit=product["commit"],
+            product_tree_sha256=product["tree_sha256"],
+            current_suite_commit=suites["current_suite"]["commit"],
+            current_suite_tree_sha256=suites["current_suite"]["tree_sha256"],
+            improved_suite_commit=suites["improved"]["commit"],
+            improved_suite_tree_sha256=suites["improved"]["tree_sha256"],
+            context_tree_sha256=value["context_tree_sha256"],
+            prompt_sha256=value["prompt_sha256"],
+            apps=tuple(apps),
+            claude_model=models["claude"],
+            codex_model=models["codex"],
+        )
+
+
+@dataclass(frozen=True)
+class StoredConfig:
+    output_root: Path
+    apps: frozenset[str]
+
 
 @dataclass(frozen=True)
 class ProductTask:
     app: str
     condition: str
     manifest: ProductRunManifest
-    config: RunnerConfig
+    config: RunnerConfig | StoredConfig
 
     def __post_init__(self) -> None:
         if self.app not in APPS or self.app not in self.config.apps:
@@ -534,7 +637,7 @@ def _manifest_path(config: RunnerConfig) -> Path:
     return config.output_root / "manifest.json"
 
 
-def _evidence_path(config: RunnerConfig) -> Path:
+def _evidence_path(config: RunnerConfig | StoredConfig) -> Path:
     return config.output_root / "evidence.jsonl"
 
 
@@ -597,7 +700,7 @@ def _ensure_manifest(manifest: ProductRunManifest, config: RunnerConfig) -> None
 
 def _tasks(
     manifest: ProductRunManifest,
-    config: RunnerConfig,
+    config: RunnerConfig | StoredConfig,
     task_filter: TaskFilter,
 ) -> tuple[ProductTask, ...]:
     if set(manifest.apps) != set(config.apps):
@@ -611,7 +714,7 @@ def _tasks(
     )
 
 
-def _evidence(config: RunnerConfig) -> tuple[Mapping[str, object], ...]:
+def _evidence(config: RunnerConfig | StoredConfig) -> tuple[Mapping[str, object], ...]:
     path = _evidence_path(config)
     if not path.exists():
         return ()
@@ -636,7 +739,7 @@ def _latest_record(
 
 def task_states(
     manifest: ProductRunManifest,
-    config: RunnerConfig,
+    config: RunnerConfig | StoredConfig,
     task_filter: TaskFilter,
 ) -> list[TaskState]:
     records = _evidence(config)
@@ -952,3 +1055,217 @@ def run_tasks(
         if progress is not None:
             progress(f"[{index}/{len(pending)}] {task.run_id}: saved")
     return RunSummary(succeeded, skipped, 0)
+
+
+def load_manifest(root: Path | str) -> ProductRunManifest:
+    path = _resolved(root) / "manifest.json"
+    if path.is_symlink() or not path.is_file():
+        raise BenchmarkError(f"product run manifest is missing: {path}")
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BenchmarkError(f"invalid product run manifest: {error}") from error
+    manifest = ProductRunManifest.from_dict(value)
+    if raw != canonical_bytes(manifest.to_dict()):
+        raise BenchmarkError("product run manifest is not canonical")
+    return manifest
+
+
+def _apps_argument(value: str, available: tuple[str, ...] = APPS) -> frozenset[str]:
+    selected = frozenset(available if value == "all" else (value,))
+    if not selected <= set(available):
+        raise BenchmarkError("selected app is not present in the product run manifest")
+    return selected
+
+
+def _conditions_argument(values: list[str] | None) -> frozenset[str]:
+    return frozenset(values or CONDITIONS)
+
+
+def _stored_config(root: Path | str, manifest: ProductRunManifest) -> StoredConfig:
+    return StoredConfig(_resolved(root), frozenset(manifest.apps))
+
+
+def _status_lines(
+    manifest: ProductRunManifest,
+    config: StoredConfig,
+    task_filter: TaskFilter,
+) -> tuple[list[str], bool]:
+    states = task_states(manifest, config, task_filter)
+    lines: list[str] = []
+    unhealthy = False
+    for app in APPS:
+        if app not in task_filter.apps:
+            continue
+        selected = [state for state in states if state.task.app == app]
+        counts = {
+            name: sum(state.status == name for state in selected)
+            for name in ("pending", "completed", "failed", "invalid")
+        }
+        unhealthy = unhealthy or bool(counts["failed"] or counts["invalid"])
+        lines.append(
+            f"{app}: pending={counts['pending']} completed={counts['completed']} "
+            f"failed={counts['failed']} invalid={counts['invalid']}"
+        )
+    return lines, unhealthy
+
+
+def inspect_run(
+    manifest: ProductRunManifest,
+    config: StoredConfig,
+    task_filter: TaskFilter,
+) -> tuple[list[str], list[str]]:
+    states = task_states(manifest, config, task_filter)
+    lines: list[str] = []
+    errors: list[str] = []
+    for app in APPS:
+        if app not in task_filter.apps:
+            continue
+        selected = [state for state in states if state.task.app == app]
+        counts = {
+            "passed": sum(state.status == "completed" for state in selected),
+            "failed": sum(state.status == "failed" for state in selected),
+            "pending": sum(state.status == "pending" for state in selected),
+            "invalid": sum(state.status == "invalid" for state in selected),
+        }
+        lines.append(
+            f"{app}: passed={counts['passed']} failed={counts['failed']} "
+            f"pending={counts['pending']} invalid={counts['invalid']}"
+        )
+        for state in selected:
+            if state.status != "completed":
+                errors.append(f"{state.task.run_id}: {state.status}: {state.reason or ''}".rstrip())
+        completed = [state for state in selected if state.status == "completed"]
+        if len(completed) != len(selected):
+            continue
+        reference: list[dict[str, str]] | None = None
+        for state in completed:
+            raw = state.task.response_path.read_bytes()
+            rows = _validate_response(raw, state.task.response_path)
+            if reference is None:
+                reference = rows
+                continue
+            try:
+                _verify_sources(reference, rows, state.task.run_id)
+            except BenchmarkError as error:
+                errors.append(str(error))
+    return lines, errors
+
+
+def _add_filter_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--app", choices=("all",) + APPS, default="all")
+    parser.add_argument(
+        "--condition",
+        action="append",
+        choices=CONDITIONS,
+    )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run isolated normal/current/improved product translation reviews"
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("status", "inspect"):
+        command = commands.add_parser(name)
+        command.add_argument("--root", type=Path, required=True)
+        _add_filter_arguments(command)
+    run = commands.add_parser("run")
+    run.add_argument("--root", type=Path, required=True)
+    run.add_argument("--product-repo", type=Path, required=True)
+    run.add_argument("--product-git-object", required=True)
+    run.add_argument("--translation-context", type=Path, required=True)
+    run.add_argument("--suite-repo", type=Path, default=REPOSITORY_ROOT)
+    run.add_argument("--current-suite-git-object", required=True)
+    run.add_argument("--improved-suite-git-object", required=True)
+    run.add_argument("--timeout-seconds", type=float, default=600)
+    run.add_argument("--claude-executable", default="claude")
+    run.add_argument("--codex-executable", default="codex")
+    run.add_argument("--claude-model")
+    run.add_argument("--codex-model")
+    run.add_argument("--force", action="store_true")
+    run.add_argument("--probe", action="store_true")
+    _add_filter_arguments(run)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    try:
+        if arguments.command in {"status", "inspect"}:
+            manifest = load_manifest(arguments.root)
+            apps = _apps_argument(arguments.app, manifest.apps)
+            task_filter = TaskFilter(apps, _conditions_argument(arguments.condition))
+            stored = _stored_config(arguments.root, manifest)
+            if arguments.command == "status":
+                lines, unhealthy = _status_lines(manifest, stored, task_filter)
+                for line in lines:
+                    print(line)
+                return 1 if unhealthy else 0
+            lines, errors = inspect_run(manifest, stored, task_filter)
+            for line in lines:
+                print(line)
+            for error in errors:
+                print(error, file=sys.stderr)
+            return 1 if errors else 0
+
+        existing: ProductRunManifest | None = None
+        manifest_path = _resolved(arguments.root) / "manifest.json"
+        if manifest_path.exists() or manifest_path.is_symlink():
+            existing = load_manifest(arguments.root)
+        selected_apps = _apps_argument(
+            arguments.app,
+            existing.apps if existing is not None else APPS,
+        )
+        configured_apps = (
+            frozenset(existing.apps) if existing is not None else selected_apps
+        )
+        claude_model = arguments.claude_model
+        codex_model = arguments.codex_model
+        if existing is not None:
+            claude_model = claude_model or existing.claude_model
+            codex_model = codex_model or existing.codex_model
+        config = RunnerConfig(
+            product_repo=arguments.product_repo,
+            product_git_object=arguments.product_git_object,
+            translation_context=arguments.translation_context,
+            suite_repo=arguments.suite_repo,
+            current_suite_git_object=arguments.current_suite_git_object,
+            improved_suite_git_object=arguments.improved_suite_git_object,
+            output_root=arguments.root,
+            apps=configured_apps,
+            claude_model=claude_model,
+            codex_model=codex_model,
+        )
+        manifest = prepare_manifest(config)
+        if existing is not None and manifest.to_dict() != existing.to_dict():
+            raise BenchmarkError("product run manifest does not match requested inputs")
+        summary = run_tasks(
+            manifest,
+            config,
+            RunOptions(
+                apps=selected_apps,
+                conditions=_conditions_argument(arguments.condition),
+                force=arguments.force,
+                probe=arguments.probe,
+                timeout_seconds=arguments.timeout_seconds,
+                claude_executable=arguments.claude_executable,
+                codex_executable=arguments.codex_executable,
+            ),
+            progress=print,
+        )
+        print(
+            f"completed={summary.succeeded} skipped={summary.skipped} failed={summary.failed}"
+        )
+        return 0
+    except ProductRunError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    except BenchmarkError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
