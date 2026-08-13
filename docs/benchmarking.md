@@ -107,6 +107,10 @@ python3 -m scripts.benchmark.product_review prepare \
   --suite-git-object 13cf73e
 ```
 
+On a fresh checkout, preparation creates the ignored `benchmark-private/` root
+when the requested packet is directly beneath it. It does not create arbitrary
+or nested parent directories.
+
 Preparation preserves the input bytes at
 `conditions/current-suite.csv`, records their hash and the suite Git object,
 and creates `human-review.csv`. The curation CSV contains only `locale`, `key`,
@@ -136,7 +140,9 @@ condition, plus the percentage-point differences `improved - normal` and
 correction remains an explicit disagreement with no inferred human preference.
 The scorer refuses incomplete human rows, drifted preserved bytes, mismatched
 product identities or source fields, duplicate or aliased inputs, missing
-conditions, symlinks, and overwrite.
+conditions, symlinks, and overwrite. Packets and candidates stored inside this
+repository must be beneath ignored `benchmark-private/`; external private paths
+remain supported.
 
 This current product run is baseline evidence. Once human decisions are added,
 these reviewed cases form a regression set, not a fresh superiority holdout.

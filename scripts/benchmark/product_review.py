@@ -11,7 +11,7 @@ import re
 import shutil
 import stat
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -134,8 +134,17 @@ class _HeldFile:
             raise BenchmarkError(f"input bytes changed during scoring: {self.path}")
 
     def close(self) -> None:
-        os.close(self.descriptor)
-        os.close(self.parent_fd)
+        _close_quietly(self.descriptor)
+        _close_quietly(self.parent_fd)
+
+
+def _close_quietly(descriptor: int) -> None:
+    if descriptor < 0:
+        return
+    try:
+        os.close(descriptor)
+    except OSError:
+        pass
 
 
 def _hold_regular_file(path: Path, description: str) -> _HeldFile:
@@ -229,25 +238,74 @@ def _same_existing_file(left: Path, right: Path) -> bool:
         return False
 
 
-def _private_output_path(path: Path) -> Path:
+def _repository_private_root() -> tuple[Path, Path]:
+    try:
+        repository_root = _REPOSITORY_ROOT.resolve(strict=True)
+    except OSError as error:
+        raise BenchmarkError(f"cannot resolve repository root: {error}") from error
+    return repository_root, repository_root / "benchmark-private"
+
+
+def _ensure_private_root_for_direct_packet(path: Path) -> None:
+    repository_root, private_root = _repository_private_root()
+    absolute_parent = path.parent.resolve(strict=False)
+    if absolute_parent != private_root or private_root.exists() or private_root.is_symlink():
+        return
+    repository_fd = _open_directory_without_symlinks(repository_root)
+    try:
+        try:
+            os.mkdir("benchmark-private", 0o700, dir_fd=repository_fd)
+            os.fsync(repository_fd)
+        except FileExistsError:
+            pass
+        private_fd = os.open(
+            "benchmark-private", _directory_flags(), dir_fd=repository_fd
+        )
+        _close_quietly(private_fd)
+    except OSError as error:
+        raise BenchmarkError(
+            f"cannot create ignored benchmark-private parent: {error}"
+        ) from error
+    finally:
+        _close_quietly(repository_fd)
+
+
+def _private_output_path(path: Path, *, create_private_root: bool = False) -> Path:
     _named_symlink(path, "output path")
+    if create_private_root:
+        _ensure_private_root_for_direct_packet(path)
     parent_fd = _open_directory_without_symlinks(path.parent)
-    os.close(parent_fd)
+    _close_quietly(parent_fd)
     try:
         resolved = _resolved_future_path(path)
     except OSError as error:
         raise BenchmarkError(f"output parent must be an existing directory: {error}") from error
-    tracked = (_REPOSITORY_ROOT / "benchmarks").resolve(strict=True)
+    repository_root, private_root = _repository_private_root()
+    tracked = repository_root / "benchmarks"
     if resolved == tracked or resolved.is_relative_to(tracked):
         raise BenchmarkError("private product data must not be written under tracked benchmarks/")
-    private_root = (_REPOSITORY_ROOT / "benchmark-private").resolve(strict=False)
-    repository_root = _REPOSITORY_ROOT.resolve(strict=True)
     if (
         resolved == repository_root
         or resolved.is_relative_to(repository_root)
     ) and not (resolved == private_root or resolved.is_relative_to(private_root)):
         raise BenchmarkError(
             "in-repository product data must be written under ignored benchmark-private/"
+        )
+    return resolved
+
+
+def _private_input_path(path: Path, description: str) -> Path:
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise BenchmarkError(f"cannot resolve {description}: {error}") from error
+    repository_root, private_root = _repository_private_root()
+    if (
+        resolved == repository_root
+        or resolved.is_relative_to(repository_root)
+    ) and not (resolved == private_root or resolved.is_relative_to(private_root)):
+        raise BenchmarkError(
+            f"in-repository {description} must be under ignored benchmark-private/"
         )
     return resolved
 
@@ -356,17 +414,20 @@ def prepare_packet(
         raise BenchmarkError("suite Git object must be a 7-64 character hexadecimal object name")
     if _same_existing_file(input_path, output_path):
         raise BenchmarkError("output path must not alias the CSV input")
-    _private_output_path(output_path)
+    resolved_output = _private_output_path(
+        output_path, create_private_root=True
+    )
     if output_path.exists() or output_path.is_symlink():
         raise BenchmarkError(f"output directory already exists: {output_path}")
 
     baseline_bytes, rows = _read_automated_csv(input_path)
-    resolved_output = _private_output_path(output_path)
     parent_fd = _open_directory_without_symlinks(output_path.parent)
     temporary_name = f".{output_path.name}.tmp-{uuid4().hex}"
     temporary = resolved_output.parent / temporary_name
     temporary_fd = -1
     conditions_fd = -1
+    staged_identity: tuple[int, int] | None = None
+    published = False
     try:
         os.mkdir(temporary_name, 0o700, dir_fd=parent_fd)
         temporary_fd = os.open(temporary_name, _directory_flags(), dir_fd=parent_fd)
@@ -391,10 +452,46 @@ def prepare_packet(
         _write_bytes_at(temporary_fd, "packet-manifest.json", canonical_bytes(manifest))
         os.fsync(conditions_fd)
         os.fsync(temporary_fd)
+        staged = os.fstat(temporary_fd)
+        staged_identity = (staged.st_dev, staged.st_ino)
+        _close_quietly(conditions_fd)
+        conditions_fd = -1
+        _close_quietly(temporary_fd)
+        temporary_fd = -1
         os.fsync(parent_fd)
         _rename_noreplace(parent_fd, temporary_name, output_path.name)
+        published = True
+        named = os.stat(output_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(named.st_mode)
+            or (named.st_dev, named.st_ino) != staged_identity
+        ):
+            raise BenchmarkError("published private packet identity changed")
+        os.fsync(parent_fd)
         return manifest
     except (OSError, BenchmarkError) as error:
+        if published and staged_identity is not None:
+            try:
+                named = os.stat(
+                    output_path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if (
+                    stat.S_ISDIR(named.st_mode)
+                    and (named.st_dev, named.st_ino) == staged_identity
+                ):
+                    os.rename(
+                        output_path.name,
+                        temporary_name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    published = False
+                    try:
+                        os.fsync(parent_fd)
+                    except OSError:
+                        pass
+            except OSError:
+                pass
         if isinstance(error, OSError):
             if error.errno in {errno.EEXIST, errno.ENOTEMPTY}:
                 error = BenchmarkError(f"output directory already exists: {output_path}")
@@ -402,11 +499,9 @@ def prepare_packet(
                 error = BenchmarkError(f"cannot publish private packet: {error}")
         raise error
     finally:
-        if conditions_fd >= 0:
-            os.close(conditions_fd)
-        if temporary_fd >= 0:
-            os.close(temporary_fd)
-        os.close(parent_fd)
+        _close_quietly(conditions_fd)
+        _close_quietly(temporary_fd)
+        _close_quietly(parent_fd)
         shutil.rmtree(temporary, ignore_errors=True)
 
 
@@ -648,13 +743,20 @@ def _score_condition(
     }
 
 
-def _publish_exclusive_json(path: Path, value: dict) -> None:
+def _publish_exclusive_json(
+    path: Path,
+    value: dict,
+    *,
+    final_check: Callable[[], None] | None = None,
+) -> None:
     _named_symlink(path, "score output")
     if path.exists():
         raise BenchmarkError(f"score output already exists: {path}")
     parent_fd = _open_directory_without_symlinks(path.parent)
     temporary = f".{path.name}.tmp-{uuid4().hex}"
     descriptor = -1
+    staged_identity: tuple[int, int] | None = None
+    published = False
     try:
         descriptor = os.open(
             temporary,
@@ -667,6 +769,8 @@ def _publish_exclusive_json(path: Path, value: dict) -> None:
             target.write(canonical_bytes(value))
             target.flush()
             os.fsync(target.fileno())
+            metadata = os.fstat(target.fileno())
+            staged_identity = (metadata.st_dev, metadata.st_ino)
         os.fsync(parent_fd)
         os.link(
             temporary,
@@ -675,18 +779,48 @@ def _publish_exclusive_json(path: Path, value: dict) -> None:
             dst_dir_fd=parent_fd,
             follow_symlinks=False,
         )
-    except FileExistsError as error:
-        raise BenchmarkError(f"score output already exists: {path}") from error
-    except OSError as error:
-        raise BenchmarkError(f"cannot publish score output {path}: {error}") from error
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+        published = True
+        named = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(named.st_mode)
+            or (named.st_dev, named.st_ino) != staged_identity
+        ):
+            raise BenchmarkError("published score output identity changed")
         try:
             os.unlink(temporary, dir_fd=parent_fd)
         except OSError:
             pass
-        os.close(parent_fd)
+        os.fsync(parent_fd)
+        if final_check is not None:
+            final_check()
+    except FileExistsError as error:
+        raise BenchmarkError(f"score output already exists: {path}") from error
+    except (OSError, BenchmarkError) as error:
+        if published and staged_identity is not None:
+            try:
+                named = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    stat.S_ISREG(named.st_mode)
+                    and (named.st_dev, named.st_ino) == staged_identity
+                ):
+                    os.unlink(path.name, dir_fd=parent_fd)
+                    published = False
+                    try:
+                        os.fsync(parent_fd)
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+        if isinstance(error, BenchmarkError):
+            raise
+        raise BenchmarkError(f"cannot publish score output {path}: {error}") from error
+    finally:
+        _close_quietly(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=parent_fd)
+        except OSError:
+            pass
+        _close_quietly(parent_fd)
 
 
 def score_packet(
@@ -696,12 +830,15 @@ def score_packet(
 ) -> dict:
     packet_path = Path(packet_dir)
     output_path = Path(output)
+    _private_input_path(packet_path, "product-review packet")
     manifest_path, current_path, human_path = _packet_files(packet_path)
     _private_output_path(output_path)
     _named_symlink(output_path, "score output")
     if output_path.exists():
         raise BenchmarkError(f"score output already exists: {output_path}")
     condition_paths = _condition_paths(candidates)
+    for condition, path in condition_paths.items():
+        _private_input_path(path, f"{condition} candidate")
     if (
         Path(os.path.abspath(condition_paths["current_suite"]))
         != Path(os.path.abspath(current_path))
@@ -781,7 +918,15 @@ def score_packet(
         }
         for value in held.values():
             value.verify()
-        _publish_exclusive_json(output_path, result)
+        def verify_final_inputs() -> None:
+            for value in held.values():
+                value.verify()
+
+        _publish_exclusive_json(
+            output_path,
+            result,
+            final_check=verify_final_inputs,
+        )
         return result
     finally:
         for value in held.values():

@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -186,6 +187,73 @@ class ProductReviewPreparationTests(unittest.TestCase):
                 )
         self.assertTrue(self.output_dir.is_dir())
         self.assertEqual(list(self.output_dir.iterdir()), [])
+
+    def test_prepare_creates_only_the_missing_ignored_private_root(self):
+        """Break: the documented fresh-checkout command could require manual mkdir."""
+        repository = self.root / "repository"
+        repository.mkdir()
+        (repository / "benchmarks").mkdir()
+        output = repository / "benchmark-private" / "packet"
+
+        with mock.patch.object(product_review, "_REPOSITORY_ROOT", repository):
+            prepare_packet(self.input_csv, output, suite_git_object="13cf73e")
+            self.assertTrue(output.is_dir())
+
+            nested = repository / "benchmark-private" / "missing" / "packet"
+            with self.assertRaisesRegex(BenchmarkError, "directory"):
+                prepare_packet(self.input_csv, nested, suite_git_object="13cf73e")
+        self.assertFalse((repository / "benchmark-private" / "missing").exists())
+
+    def test_prepare_rolls_back_if_post_publish_directory_fsync_fails(self):
+        """Break: a visible but non-durable packet could be reported as a failed prepare."""
+        real_fsync = os.fsync
+        real_publish = product_review._rename_noreplace
+        published = False
+
+        def publish(parent_fd, source, destination):
+            nonlocal published
+            real_publish(parent_fd, source, destination)
+            published = True
+
+        def fail_after_publish(descriptor):
+            if published:
+                raise OSError("injected post-publish fsync failure")
+            return real_fsync(descriptor)
+
+        with mock.patch(
+            "scripts.benchmark.product_review._rename_noreplace", side_effect=publish
+        ), mock.patch(
+            "scripts.benchmark.product_review.os.fsync", side_effect=fail_after_publish
+        ):
+            with self.assertRaisesRegex(BenchmarkError, "publish"):
+                prepare_packet(
+                    self.input_csv,
+                    self.output_dir,
+                    suite_git_object="13cf73e",
+                )
+        self.assertFalse(self.output_dir.exists())
+
+    def test_prepare_close_failure_after_publication_does_not_negate_success(self):
+        """Break: descriptor cleanup could raise after a valid packet became visible."""
+        real_close = os.close
+
+        def close_then_fail(descriptor):
+            real_close(descriptor)
+            if self.output_dir.exists():
+                raise OSError("injected close failure")
+
+        with mock.patch(
+            "scripts.benchmark.product_review.os.close", side_effect=close_then_fail
+        ):
+            manifest = prepare_packet(
+                self.input_csv,
+                self.output_dir,
+                suite_git_object="13cf73e",
+            )
+        self.assertEqual(
+            json.loads((self.output_dir / "packet-manifest.json").read_text()),
+            manifest,
+        )
 
     def test_prepare_cli_creates_no_signoff_file(self):
         """Break: the convenience CLI could silently extend preparation authority."""
@@ -400,6 +468,92 @@ class ProductReviewScoringTests(unittest.TestCase):
         self.output.write_text("existing", encoding="utf-8")
         with self.assertRaisesRegex(BenchmarkError, "already exists"):
             product_review.score_packet(self.packet, self.candidate_specs(), self.output)
+
+    def test_score_refuses_repository_packet_and_candidates_outside_private_root(self):
+        """Break: scoring inputs under tracked repository paths could ingest product data."""
+        repository = self.root / "repository"
+        (repository / "benchmarks").mkdir(parents=True)
+        (repository / "docs").mkdir()
+        tracked_packet = repository / "benchmarks" / "packet"
+        shutil.copytree(self.packet, tracked_packet)
+        tracked_specs = [
+            f"normal={self.normal}",
+            f"current_suite={tracked_packet / 'conditions' / 'current-suite.csv'}",
+            f"improved={self.improved}",
+        ]
+        with mock.patch.object(product_review, "_REPOSITORY_ROOT", repository):
+            with self.assertRaisesRegex(BenchmarkError, "benchmark-private"):
+                product_review.score_packet(tracked_packet, tracked_specs, self.output)
+
+            tracked_normal = repository / "docs" / "normal.csv"
+            shutil.copyfile(self.normal, tracked_normal)
+            candidate_specs = self.candidate_specs()
+            candidate_specs[0] = f"normal={tracked_normal}"
+            with self.assertRaisesRegex(BenchmarkError, "benchmark-private"):
+                product_review.score_packet(self.packet, candidate_specs, self.output)
+
+    def test_score_rolls_back_if_post_publish_fsync_or_final_input_check_fails(self):
+        """Break: score publication could accept non-durable output or mutated input bytes."""
+        real_fsync = os.fsync
+        real_link = os.link
+        published = False
+
+        def link_then_mark(*args, **kwargs):
+            nonlocal published
+            real_link(*args, **kwargs)
+            published = True
+
+        def fail_after_publish(descriptor):
+            if published:
+                raise OSError("injected post-publish fsync failure")
+            return real_fsync(descriptor)
+
+        with mock.patch(
+            "scripts.benchmark.product_review.os.link", side_effect=link_then_mark
+        ), mock.patch(
+            "scripts.benchmark.product_review.os.fsync", side_effect=fail_after_publish
+        ):
+            with self.assertRaisesRegex(BenchmarkError, "publish"):
+                product_review.score_packet(
+                    self.packet, self.candidate_specs(), self.output
+                )
+        self.assertFalse(self.output.exists())
+
+        published = False
+
+        def link_then_mutate(*args, **kwargs):
+            nonlocal published
+            real_link(*args, **kwargs)
+            published = True
+            self.human.write_bytes(self.human.read_bytes() + b"\n")
+
+        with mock.patch(
+            "scripts.benchmark.product_review.os.link", side_effect=link_then_mutate
+        ):
+            with self.assertRaisesRegex(BenchmarkError, "changed during scoring"):
+                product_review.score_packet(
+                    self.packet, self.candidate_specs(), self.output
+                )
+        self.assertFalse(self.output.exists())
+
+    def test_score_close_failure_after_publication_does_not_negate_success(self):
+        """Break: descriptor cleanup could raise after a valid score became visible."""
+        real_close = os.close
+
+        def close_then_fail(descriptor):
+            real_close(descriptor)
+            if self.output.exists():
+                raise OSError("injected close failure")
+
+        with mock.patch(
+            "scripts.benchmark.product_review.os.close", side_effect=close_then_fail
+        ):
+            result = product_review.score_packet(
+                self.packet,
+                self.candidate_specs(),
+                self.output,
+            )
+        self.assertEqual(json.loads(self.output.read_text()), result)
 
     def test_score_cli_requires_all_three_named_conditions(self):
         """Break: CLI parsing could bypass the same mandatory-condition boundary."""
