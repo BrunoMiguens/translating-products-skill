@@ -182,6 +182,18 @@ import json
 import os
 import pathlib
 import sys
+if '--version' in sys.argv:
+    print('fake-agent 1.0')
+    raise SystemExit(0)
+if os.environ.get('PRODUCT_REVIEW_CONDITION'):
+    csv = 'locale,key,english_source,current_translation,status,reason,recommended_correction\\npt-PT,welcome,Welcome,Olá,no_issue_detected,,\\n'
+    if '--print' in sys.argv:
+        print(json.dumps({'result': csv, 'modelUsage': {'claude-observed': {}}}))
+    else:
+        output = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])
+        output.write_text(csv, encoding='utf-8')
+        print(json.dumps({'type': 'turn.completed', 'model': 'codex-observed', 'usage': {'tokens': 1}}))
+    raise SystemExit(0)
 mode = os.environ.get("SETUP_MODE", "record-only")
 record = {
     "argv": sys.argv[1:],
@@ -425,6 +437,115 @@ class ProductSetupApprovalTests(ProductSetupAdapterTests):
         self.assertEqual(
             [path.name for path in self.context.iterdir()], ["project-brief.md"]
         )
+
+
+class ProductSetupCliTests(ProductSetupAdapterTests):
+    def run_cli(self, *arguments: str) -> tuple[int, str, str]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        try:
+            with mock.patch("sys.stdout", stdout), mock.patch("sys.stderr", stderr):
+                status = product_runner.main(list(arguments))
+        except SystemExit as error:
+            status = int(error.code)
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def run_arguments(self) -> tuple[str, ...]:
+        return (
+            "run",
+            "--root",
+            str(self.root / "runs"),
+            "--product-repo",
+            str(self.product),
+            "--product-git-object",
+            self.product_commit,
+            "--translation-context",
+            str(self.context),
+            "--suite-repo",
+            str(self.suite),
+            "--current-suite-git-object",
+            self.current_commit,
+            "--improved-suite-git-object",
+            self.improved_commit,
+            "--app",
+            "all",
+            "--claude-executable",
+            str(self.fake_agent),
+            "--codex-executable",
+            str(self.fake_agent),
+            "--setup-app",
+            "codex",
+            "--approved-by",
+            "Example Reviewer",
+            "--setup-model",
+            "setup-test",
+        )
+
+    def test_run_sets_up_context_then_runs_all_conditions(self):
+        environment = {
+            "SETUP_INVOCATION_LOG": str(self.invocation_log),
+            "SETUP_MODE": "proposal",
+        }
+        with mock.patch.dict(os.environ, environment), mock.patch(
+            "builtins.input", return_value="approve"
+        ):
+            status, output, error = self.run_cli(*self.run_arguments())
+
+        self.assertEqual((status, error), (0, ""))
+        self.assertTrue((self.context / "setup-approval.json").is_file())
+        self.assertTrue((self.root / "runs" / "manifest.json").is_file())
+        self.assertIn("completed=6", output)
+        self.assertEqual(len(self.records()), 1)
+
+        with mock.patch.dict(os.environ, {**environment, "SETUP_MODE": "fail"}), mock.patch(
+            "builtins.input", side_effect=AssertionError("ready context asked again")
+        ):
+            status, output, error = self.run_cli(*self.run_arguments())
+        self.assertEqual((status, error), (0, ""))
+        self.assertIn("completed=0 skipped=6", output)
+        self.assertEqual(len(self.records()), 1)
+
+    def test_probe_sets_up_once_then_runs_one_condition_per_host(self):
+        environment = {
+            "SETUP_INVOCATION_LOG": str(self.invocation_log),
+            "SETUP_MODE": "proposal",
+        }
+        with mock.patch.dict(os.environ, environment), mock.patch(
+            "builtins.input", return_value="approve"
+        ):
+            status, output, error = self.run_cli(*self.run_arguments(), "--probe")
+
+        self.assertEqual((status, error), (0, ""))
+        self.assertIn("completed=2", output)
+        self.assertEqual(len(self.records()), 1)
+
+    def test_declined_or_unauthorized_setup_creates_no_run(self):
+        environment = {
+            "SETUP_INVOCATION_LOG": str(self.invocation_log),
+            "SETUP_MODE": "proposal",
+        }
+        with mock.patch.dict(os.environ, environment), mock.patch(
+            "builtins.input", return_value="no"
+        ):
+            status, _, error = self.run_cli(*self.run_arguments())
+        self.assertEqual(status, 2)
+        self.assertIn("approval token", error)
+        self.assertFalse((self.root / "runs" / "manifest.json").exists())
+        self.assertFalse(self.context.exists())
+
+        missing_approver = list(self.run_arguments())
+        index = missing_approver.index("--approved-by")
+        del missing_approver[index : index + 2]
+        status, _, error = self.run_cli(*missing_approver)
+        self.assertEqual(status, 2)
+        self.assertIn("provided together", error)
+
+        without_setup = list(self.run_arguments())
+        del without_setup[without_setup.index("--setup-app") :]
+        status, _, error = self.run_cli(*without_setup)
+        self.assertEqual(status, 2)
+        self.assertIn("--setup-app", error)
+        self.assertFalse((self.root / "runs" / "manifest.json").exists())
 
 
 if __name__ == "__main__":

@@ -284,7 +284,6 @@ def context_requires_setup(options: ProductSetupOptions) -> bool:
         if (
             "missing required files" in message
             or "not ready for suite" in message
-            or "context preflight failed" in message
         ):
             return True
         raise

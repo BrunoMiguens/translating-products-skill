@@ -1192,6 +1192,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--codex-executable", default="codex")
     run.add_argument("--claude-model")
     run.add_argument("--codex-model")
+    run.add_argument("--setup-app", choices=APPS)
+    run.add_argument("--approved-by")
+    run.add_argument("--setup-model")
+    run.add_argument("--replace-context", action="store_true")
     run.add_argument("--force", action="store_true")
     run.add_argument("--probe", action="store_true")
     _add_filter_arguments(run)
@@ -1234,6 +1238,43 @@ def main(argv: list[str] | None = None) -> int:
         if existing is not None:
             claude_model = claude_model or existing.claude_model
             codex_model = codex_model or existing.codex_model
+        setup_requested = arguments.setup_app is not None
+        if setup_requested != (arguments.approved_by is not None):
+            raise BenchmarkError("--setup-app and --approved-by must be provided together")
+        if arguments.setup_model is not None and not setup_requested:
+            raise BenchmarkError("--setup-model requires --setup-app and --approved-by")
+        if arguments.replace_context and not setup_requested:
+            raise BenchmarkError("--replace-context requires --setup-app and --approved-by")
+        context_path = _resolved(arguments.translation_context)
+        if setup_requested:
+            from .product_setup import ProductSetupOptions, ensure_translation_context
+
+            executable = (
+                arguments.claude_executable
+                if arguments.setup_app == "claude"
+                else arguments.codex_executable
+            )
+            ensure_translation_context(
+                ProductSetupOptions(
+                    product_repo=arguments.product_repo,
+                    product_git_object=arguments.product_git_object,
+                    translation_context=arguments.translation_context,
+                    suite_repo=arguments.suite_repo,
+                    current_suite_git_object=arguments.current_suite_git_object,
+                    improved_suite_git_object=arguments.improved_suite_git_object,
+                    app=arguments.setup_app,
+                    approved_by=arguments.approved_by,
+                    replace_context=arguments.replace_context,
+                    executable=executable,
+                    model=arguments.setup_model,
+                ),
+                confirm=input,
+                emit=print,
+            )
+        elif not context_path.exists():
+            raise BenchmarkError(
+                "translation context is missing; provide --setup-app and --approved-by"
+            )
         config = RunnerConfig(
             product_repo=arguments.product_repo,
             product_git_object=arguments.product_git_object,
