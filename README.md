@@ -25,7 +25,10 @@ the exact evidence bytes.
 
 For private real-product regression checks, the runbook also provides a
 resumable Claude/Codex runner that compares no skills, a previous suite Git
-object, and an improved suite Git object without manual prompt copying.
+object, and an improved suite Git object without manual prompt copying. The
+same command can establish missing product context through one interactive
+Claude or Codex session, require explicit terminal approval, and continue into
+the benchmark automatically.
 
 The skills use the open `SKILL.md` format and are designed for Claude Code,
 Codex, Cursor, and universal Agent Skills hosts. They do not depend on a

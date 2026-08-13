@@ -198,6 +198,15 @@ class ValidatorTests(unittest.TestCase):
             "scripts.benchmark.product_review score",
         ):
             self.assertIn(command, operations)
+        for contract in (
+            "--setup-app codex",
+            "--approved-by",
+            "--setup-model",
+            "Type `approve`",
+            "does not modify the product checkout",
+            "rerun the identical command",
+        ):
+            self.assertIn(contract, operations)
         self.assertIn("does not create human labels", operations)
 
     def test_manifest_loader_rejects_identity_schema_and_version_drift(self):

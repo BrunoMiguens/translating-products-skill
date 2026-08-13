@@ -102,10 +102,21 @@ no prompt or response needs to be copied between desktop apps.
 The runner does not create human labels or claim that any output received
 human review.
 
-Before running it, create and approve the product's `.translation` directory
-through `translating-products`. Keep that approved directory outside the exact
-product snapshot. Both declared suite revisions must accept the same context as
-ready before the first model call.
+If the requested `.translation` context does not exist, the same command opens
+one interactive Codex or Claude setup session against the exact product Git
+snapshot. The session inspects the product and asks one focused question at a
+time. It may propose only the five context files; it cannot approve them. The
+runner then prints every complete proposed file. Type `approve` exactly to bind
+your identity and publish the context. Any other input stops without publishing
+a context or creating benchmark evidence.
+
+The setup workspace is disposable and does not modify the product checkout. It
+stages the selected improved-suite Git object instead of trusting globally
+installed skills, and both declared suite revisions must accept the approved
+bytes before the first benchmark model call. An existing ready context skips
+the interactive session. An incomplete or stale existing context requires
+`--replace-context`; replacement preserves the previous directory unless the
+new proposal is approved and passes both suite preflights.
 
 From this repository, start with one probe per host:
 
@@ -118,13 +129,18 @@ From this repository, start with one probe per host:
   --suite-repo /Users/example/Documents/Codex/2026-07-30/find \
   --current-suite-git-object 13cf73e \
   --improved-suite-git-object 8f9b047 \
+  --setup-app codex \
+  --approved-by Bruno \
+  --setup-model SETUP_MODEL \
   --app all \
   --timeout-seconds 600 \
   --probe
 ```
 
-If the probe succeeds, resume the remaining calls with the same command after
-removing only `--probe`. Omit `--force`: evidence-bound successes are skipped.
+Use `--setup-app claude` instead to conduct setup in Claude Code; the matching
+`--codex-executable` or `--claude-executable` is used for that session. If the
+probe succeeds, rerun the identical command after removing only `--probe` to
+resume the remaining calls. Omit `--force`: evidence-bound successes are skipped.
 If one durable model failure or timeout must be deliberately replaced, add its
 `--app` and `--condition` filters plus `--force` while keeping every provenance
 argument unchanged. Pin models on the first command with `--claude-model` and
