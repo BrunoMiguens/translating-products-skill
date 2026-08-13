@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.benchmark.common import BenchmarkError, canonical_bytes, sha256_bytes
 from scripts.benchmark import product_runner
@@ -164,6 +165,155 @@ class ProductRunnerManifestTests(unittest.TestCase):
             product_runner.RunnerConfig(
                 **{**self.config().__dict__, "output_root": repository_output}
             )
+
+
+class ProductRunnerExecutionTests(ProductRunnerManifestTests):
+    CSV = (
+        "locale,key,english_source,current_translation,status,reason,recommended_correction\n"
+        "pt-PT,welcome,Welcome,Olá,no_issue_detected,,\n"
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.invocation_log = self.root / "invocations.jsonl"
+        self.fake_cli = self.root / "fake-agent"
+        script = f"""#!/opt/homebrew/bin/python3
+import json
+import os
+import pathlib
+import sys
+import time
+
+if '--version' in sys.argv:
+    print('fake-agent 1.0')
+    raise SystemExit(0)
+record = {{
+    'argv': sys.argv[1:],
+    'cwd': os.getcwd(),
+    'home': os.environ.get('HOME'),
+    'codex_home': os.environ.get('CODEX_HOME'),
+    'condition': os.environ.get('PRODUCT_REVIEW_CONDITION'),
+}}
+with pathlib.Path(os.environ['FAKE_INVOCATION_LOG']).open('a', encoding='utf-8') as target:
+    target.write(json.dumps(record, sort_keys=True) + '\\n')
+if os.environ.get('FAKE_TIMEOUT_CONDITION') == record['condition']:
+    time.sleep(2)
+csv = {self.CSV!r}
+if '--print' in sys.argv:
+    print(json.dumps({{'result': csv, 'modelUsage': {{'claude-observed': {{}}}}}}))
+else:
+    output = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])
+    output.write_text(csv, encoding='utf-8')
+    print(json.dumps({{'type': 'turn.completed', 'model': 'codex-observed', 'usage': {{'tokens': 1}}}}))
+"""
+        self.fake_cli.write_text(script, encoding="utf-8")
+        self.fake_cli.chmod(0o755)
+        self.source_home = self.root / "source-home"
+        (self.source_home / ".codex").mkdir(parents=True)
+        (self.source_home / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
+
+    def options(self, **overrides) -> product_runner.RunOptions:
+        values = {
+            "apps": frozenset({"claude", "codex"}),
+            "conditions": frozenset(product_runner.CONDITIONS),
+            "timeout_seconds": 10,
+            "claude_executable": str(self.fake_cli),
+            "codex_executable": str(self.fake_cli),
+            "source_home": self.source_home,
+        }
+        values.update(overrides)
+        return product_runner.RunOptions(**values)
+
+    def invocation_records(self) -> list[dict]:
+        if not self.invocation_log.exists():
+            return []
+        return [json.loads(line) for line in self.invocation_log.read_text().splitlines()]
+
+    def test_complete_successes_resume_without_cli_invocation(self):
+        config = self.config()
+        manifest = product_runner.prepare_manifest(config)
+        with mock.patch.dict(os.environ, {"FAKE_INVOCATION_LOG": str(self.invocation_log)}):
+            first = product_runner.run_tasks(manifest, config, self.options())
+            second = product_runner.run_tasks(manifest, config, self.options())
+
+        self.assertEqual(first, product_runner.RunSummary(succeeded=6, skipped=0, failed=0))
+        self.assertEqual(second, product_runner.RunSummary(succeeded=0, skipped=6, failed=0))
+        self.assertEqual(len(self.invocation_records()), 6)
+        for app in ("claude", "codex"):
+            for condition in product_runner.CONDITIONS:
+                path = self.output / app / f"{condition.replace('_', '-')}.csv"
+                self.assertEqual(path.read_text(encoding="utf-8"), self.CSV)
+        records = [
+            json.loads(line)
+            for line in (self.output / "evidence.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(len(records), 6)
+        self.assertTrue(all(record["status"] == "success" for record in records))
+        self.assertTrue(all(record["manifest_sha256"] == manifest.sha256 for record in records))
+
+    def test_corrupt_output_is_invalid_and_force_replaces_only_selected_task(self):
+        config = self.config()
+        manifest = product_runner.prepare_manifest(config)
+        with mock.patch.dict(os.environ, {"FAKE_INVOCATION_LOG": str(self.invocation_log)}):
+            product_runner.run_tasks(manifest, config, self.options())
+            corrupted = self.output / "codex" / "improved.csv"
+            corrupted.write_text("corrupted\n", encoding="utf-8")
+            states = product_runner.task_states(
+                manifest,
+                config,
+                product_runner.TaskFilter(
+                    frozenset({"codex"}), frozenset({"improved"})
+                ),
+            )
+            self.assertEqual(states[0].status, "invalid")
+            with self.assertRaisesRegex(BenchmarkError, "--force"):
+                product_runner.run_tasks(
+                    manifest,
+                    config,
+                    self.options(
+                        apps=frozenset({"codex"}),
+                        conditions=frozenset({"improved"}),
+                    ),
+                )
+            summary = product_runner.run_tasks(
+                manifest,
+                config,
+                self.options(
+                    apps=frozenset({"codex"}),
+                    conditions=frozenset({"improved"}),
+                    force=True,
+                ),
+            )
+        self.assertEqual(summary.succeeded, 1)
+        self.assertEqual(corrupted.read_text(encoding="utf-8"), self.CSV)
+        self.assertEqual(len(self.invocation_records()), 7)
+
+    def test_timeout_is_durable_and_does_not_rerun_completed_work(self):
+        config = self.config()
+        manifest = product_runner.prepare_manifest(config)
+        options = self.options(
+            apps=frozenset({"codex"}),
+            conditions=frozenset({"normal", "current_suite"}),
+            timeout_seconds=0.1,
+        )
+        environment = {
+            "FAKE_INVOCATION_LOG": str(self.invocation_log),
+            "FAKE_TIMEOUT_CONDITION": "current_suite",
+        }
+        with mock.patch.dict(os.environ, environment):
+            with self.assertRaisesRegex(product_runner.ProductRunError, "timed out"):
+                product_runner.run_tasks(manifest, config, options)
+            with self.assertRaisesRegex(BenchmarkError, "--force"):
+                product_runner.run_tasks(manifest, config, options)
+        states = product_runner.task_states(
+            manifest,
+            config,
+            product_runner.TaskFilter(
+                frozenset({"codex"}), frozenset({"normal", "current_suite"})
+            ),
+        )
+        self.assertEqual([state.status for state in states], ["completed", "failed"])
+        self.assertEqual(len(self.invocation_records()), 2)
 
 
 if __name__ == "__main__":

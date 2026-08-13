@@ -7,12 +7,30 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Mapping
+from typing import Callable, Mapping
 
-from .common import BenchmarkError, canonical_bytes, sha256_bytes
+from .cli_calibration import (
+    _claude_command,
+    _cli_version,
+    _codex_command,
+    _parse_claude,
+    _parse_codex,
+    _resolve_executable,
+    _safe_command,
+)
+from .common import (
+    BenchmarkError,
+    append_jsonl_fsync,
+    canonical_bytes,
+    read_jsonl,
+    sha256_bytes,
+    utc_now,
+)
+from .product_review import _parse_automated_csv
 
 
 APPS = ("claude", "codex")
@@ -44,6 +62,17 @@ Use one of these statuses:
 
 For change_recommended, provide the complete recommended translation. For every other status, leave recommended_correction empty. Do not include Markdown, commentary, or a summary.
 """
+EVIDENCE_KIND = "diagnostic_product_review"
+ALLOWED_STATUSES = {
+    "no_issue_detected",
+    "change_recommended",
+    "blocked_by_source",
+    "unresolved",
+}
+
+
+class ProductRunError(RuntimeError):
+    """A product-review host invocation failed after the batch started."""
 
 
 def _resolved(path: Path | str) -> Path:
@@ -186,6 +215,86 @@ class ProductTask:
     @property
     def response_path(self) -> Path:
         return self.config.output_root / self.app / f"{self.condition.replace('_', '-')}.csv"
+
+
+@dataclass(frozen=True)
+class TaskFilter:
+    apps: frozenset[str]
+    conditions: frozenset[str] = frozenset(CONDITIONS)
+
+    def __post_init__(self) -> None:
+        apps = frozenset(self.apps)
+        conditions = frozenset(self.conditions)
+        if not apps or not apps <= set(APPS):
+            raise BenchmarkError(f"apps must be one or more of: {', '.join(APPS)}")
+        if not conditions or not conditions <= set(CONDITIONS):
+            raise BenchmarkError("conditions must contain known product conditions")
+        object.__setattr__(self, "apps", apps)
+        object.__setattr__(self, "conditions", conditions)
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    apps: frozenset[str]
+    conditions: frozenset[str] = frozenset(CONDITIONS)
+    force: bool = False
+    probe: bool = False
+    timeout_seconds: float = 600
+    claude_executable: str = "claude"
+    codex_executable: str = "codex"
+    source_home: Path = field(default_factory=Path.home)
+
+    def __post_init__(self) -> None:
+        task_filter = TaskFilter(frozenset(self.apps), frozenset(self.conditions))
+        if isinstance(self.timeout_seconds, bool) or self.timeout_seconds <= 0:
+            raise BenchmarkError("timeout_seconds must be greater than zero")
+        for name in ("claude_executable", "codex_executable"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise BenchmarkError(f"{name} must be non-empty text")
+        object.__setattr__(self, "apps", task_filter.apps)
+        object.__setattr__(self, "conditions", task_filter.conditions)
+        object.__setattr__(self, "source_home", _resolved(self.source_home))
+
+    @property
+    def task_filter(self) -> TaskFilter:
+        return TaskFilter(self.apps, self.conditions)
+
+
+@dataclass(frozen=True)
+class TaskState:
+    task: ProductTask
+    status: str
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    succeeded: int = 0
+    skipped: int = 0
+    failed: int = 0
+
+
+@dataclass(frozen=True)
+class HostOutcome:
+    process_started: bool
+    started_at: str
+    completed_at: str
+    duration_seconds: float
+    exit_code: int | None
+    timed_out: bool
+    response: str
+    stderr: str
+    command: tuple[str, ...]
+    cli_version: str
+    model_requested: str | None
+    model_observed: str | None
+    usage: object
+    reason: str | None = None
+    stdout: str = ""
+
+
+Progress = Callable[[str], None]
 
 
 def _git(repo: Path, *arguments: str, binary: bool = False) -> str | bytes:
@@ -419,3 +528,427 @@ def stage_project(task: ProductTask, destination: Path | str) -> None:
         host_root = target / (".claude" if task.app == "claude" else ".agents") / "skills"
         host_root.parent.mkdir(parents=True, exist_ok=True)
         _copy_tree(suite_root / "skills", host_root)
+
+
+def _manifest_path(config: RunnerConfig) -> Path:
+    return config.output_root / "manifest.json"
+
+
+def _evidence_path(config: RunnerConfig) -> Path:
+    return config.output_root / "evidence.jsonl"
+
+
+def _atomic_write(path: Path, raw: bytes, *, replace: bool = False) -> None:
+    if path.is_symlink():
+        raise BenchmarkError(f"refusing symlink output path: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{time.monotonic_ns()}")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as target:
+            descriptor = None
+            target.write(raw)
+            target.flush()
+            os.fsync(target.fileno())
+        if not replace and (path.exists() or path.is_symlink()):
+            raise BenchmarkError(f"output already exists: {path}")
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _ensure_manifest(manifest: ProductRunManifest, config: RunnerConfig) -> None:
+    root = config.output_root
+    if root.is_symlink():
+        raise BenchmarkError(f"output root must not be a symlink: {root}")
+    if not root.exists():
+        root.mkdir(parents=True)
+    if not root.is_dir():
+        raise BenchmarkError(f"output root must be a directory: {root}")
+    path = _manifest_path(config)
+    expected = canonical_bytes(manifest.to_dict())
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise BenchmarkError(f"manifest must be a regular file: {path}")
+        try:
+            observed = path.read_bytes()
+        except OSError as error:
+            raise BenchmarkError(f"cannot read product manifest: {error}") from error
+        if observed != expected:
+            raise BenchmarkError("product run manifest does not match requested inputs")
+        return
+    _atomic_write(path, expected)
+
+
+def _tasks(
+    manifest: ProductRunManifest,
+    config: RunnerConfig,
+    task_filter: TaskFilter,
+) -> tuple[ProductTask, ...]:
+    if set(manifest.apps) != set(config.apps):
+        raise BenchmarkError("manifest apps do not match runner configuration")
+    return tuple(
+        ProductTask(app, condition, manifest, config)
+        for app in APPS
+        if app in task_filter.apps and app in config.apps
+        for condition in CONDITIONS
+        if condition in task_filter.conditions
+    )
+
+
+def _evidence(config: RunnerConfig) -> tuple[Mapping[str, object], ...]:
+    path = _evidence_path(config)
+    if not path.exists():
+        return ()
+    if path.is_symlink() or not path.is_file():
+        raise BenchmarkError(f"evidence must be a regular file: {path}")
+    return tuple(read_jsonl(path))
+
+
+def _latest_record(
+    records: tuple[Mapping[str, object], ...], run_id: str, manifest_sha256: str
+) -> Mapping[str, object] | None:
+    matching = [
+        record
+        for record in records
+        if record.get("schema_version") == 1
+        and record.get("evidence_kind") == EVIDENCE_KIND
+        and record.get("run_id") == run_id
+        and record.get("manifest_sha256") == manifest_sha256
+    ]
+    return matching[-1] if matching else None
+
+
+def task_states(
+    manifest: ProductRunManifest,
+    config: RunnerConfig,
+    task_filter: TaskFilter,
+) -> list[TaskState]:
+    records = _evidence(config)
+    states: list[TaskState] = []
+    for task in _tasks(manifest, config, task_filter):
+        path = task.response_path
+        record = _latest_record(records, task.run_id, manifest.sha256)
+        if path.exists() or path.is_symlink():
+            if path.is_symlink() or not path.is_file():
+                states.append(TaskState(task, "invalid", "output is not a regular file"))
+                continue
+            if record is None or record.get("status") != "success":
+                states.append(TaskState(task, "invalid", "output has no matching success evidence"))
+                continue
+            try:
+                raw = path.read_bytes()
+                _validate_response(raw, path)
+            except (OSError, BenchmarkError) as error:
+                states.append(TaskState(task, "invalid", str(error)))
+                continue
+            if record.get("output_sha256") != sha256_bytes(raw):
+                states.append(TaskState(task, "invalid", "output/evidence hash mismatch"))
+                continue
+            states.append(TaskState(task, "completed"))
+            continue
+        if record is None:
+            states.append(TaskState(task, "pending"))
+        elif record.get("status") == "failed" and record.get("process_started") is True:
+            states.append(TaskState(task, "failed", str(record.get("reason") or "host failure")))
+        elif record.get("status") == "failed" and record.get("process_started") is False:
+            states.append(TaskState(task, "pending", str(record.get("reason") or "prestart failure")))
+        else:
+            states.append(TaskState(task, "invalid", "evidence exists without its accepted output"))
+    return states
+
+
+def _isolated_environment(app: str, temporary: Path, options: RunOptions) -> dict[str, str]:
+    environment = dict(os.environ)
+    environment.pop("CLAUDE_CONFIG_DIR", None)
+    if app == "claude":
+        environment["HOME"] = str(options.source_home)
+    else:
+        home = temporary / "home"
+        home.mkdir(mode=0o700)
+        environment["HOME"] = str(home)
+        codex_home = temporary / "codex-home"
+        codex_home.mkdir(mode=0o700)
+        environment["CODEX_HOME"] = str(codex_home)
+        auth = options.source_home / ".codex" / "auth.json"
+        if auth.is_file() and not auth.is_symlink():
+            target = codex_home / "auth.json"
+            shutil.copyfile(auth, target)
+            target.chmod(0o600)
+    return environment
+
+
+def _model(config: RunnerConfig, app: str) -> str | None:
+    return config.claude_model if app == "claude" else config.codex_model
+
+
+def _invoke_task(
+    task: ProductTask,
+    options: RunOptions,
+    executable: str,
+    cli_version: str,
+) -> HostOutcome:
+    with tempfile.TemporaryDirectory(prefix=f"product-review-{task.app}-") as temporary_text:
+        temporary = Path(temporary_text)
+        project = temporary / "project"
+        stage_project(task, project)
+        output_path = temporary / "last-message.txt"
+        model = _model(task.config, task.app)
+        command = (
+            _claude_command(executable, model)
+            if task.app == "claude"
+            else _codex_command(executable, project, output_path, model)
+        )
+        environment = _isolated_environment(task.app, temporary, options)
+        environment["PRODUCT_REVIEW_APP"] = task.app
+        environment["PRODUCT_REVIEW_CONDITION"] = task.condition
+        started_at = utc_now()
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                command,
+                input=PROMPT,
+                text=True,
+                capture_output=True,
+                check=False,
+                cwd=project,
+                env=environment,
+                timeout=options.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            return HostOutcome(
+                True,
+                started_at,
+                utc_now(),
+                time.monotonic() - started,
+                None,
+                True,
+                "",
+                error.stderr if isinstance(error.stderr, str) else "",
+                _safe_command(command, project, output_path),
+                cli_version,
+                model,
+                None,
+                {},
+                f"timed out after {options.timeout_seconds:g} seconds",
+                error.stdout if isinstance(error.stdout, str) else "",
+            )
+        except OSError as error:
+            return HostOutcome(
+                False,
+                started_at,
+                utc_now(),
+                time.monotonic() - started,
+                None,
+                False,
+                "",
+                str(error),
+                _safe_command(command, project, output_path),
+                cli_version,
+                model,
+                None,
+                {},
+                f"could not start process: {error}",
+            )
+        if completed.returncode != 0:
+            return HostOutcome(
+                True,
+                started_at,
+                utc_now(),
+                time.monotonic() - started,
+                completed.returncode,
+                False,
+                "",
+                completed.stderr,
+                _safe_command(command, project, output_path),
+                cli_version,
+                model,
+                None,
+                {},
+                f"host exited with status {completed.returncode}",
+                completed.stdout,
+            )
+        try:
+            response, observed, usage = (
+                _parse_claude(completed.stdout)
+                if task.app == "claude"
+                else _parse_codex(completed.stdout, output_path)
+            )
+            if not response.endswith("\n"):
+                response += "\n"
+            _validate_response(response.encode("utf-8"), task.response_path)
+        except (BenchmarkError, UnicodeEncodeError) as error:
+            return HostOutcome(
+                True,
+                started_at,
+                utc_now(),
+                time.monotonic() - started,
+                completed.returncode,
+                False,
+                "",
+                completed.stderr,
+                _safe_command(command, project, output_path),
+                cli_version,
+                model,
+                None,
+                {},
+                str(error),
+                completed.stdout,
+            )
+        return HostOutcome(
+            True,
+            started_at,
+            utc_now(),
+            time.monotonic() - started,
+            completed.returncode,
+            False,
+            response,
+            completed.stderr,
+            _safe_command(command, project, output_path),
+            cli_version,
+            model,
+            observed,
+            usage,
+        )
+
+
+def _validate_response(raw: bytes, path: Path) -> list[dict[str, str]]:
+    rows = _parse_automated_csv(raw, path)
+    invalid = sorted({row["status"] for row in rows} - ALLOWED_STATUSES)
+    if invalid:
+        raise BenchmarkError(f"product review CSV uses unsupported statuses: {invalid}")
+    return rows
+
+
+def _record(task: ProductTask, outcome: HostOutcome) -> dict[str, object]:
+    success = outcome.reason is None
+    response_raw = outcome.response.encode("utf-8") if success else b""
+    return {
+        "schema_version": 1,
+        "evidence_kind": EVIDENCE_KIND,
+        "claim_bearing": False,
+        "run_id": task.run_id,
+        "app": task.app,
+        "condition": task.condition,
+        "status": "success" if success else "failed",
+        "process_started": outcome.process_started,
+        "started_at": outcome.started_at,
+        "completed_at": outcome.completed_at,
+        "duration_seconds": round(outcome.duration_seconds, 6),
+        "exit_code": outcome.exit_code,
+        "timed_out": outcome.timed_out,
+        "reason": outcome.reason,
+        "stderr": outcome.stderr,
+        "stdout": outcome.stdout[:65536] if not success else "",
+        "manifest_sha256": task.manifest.sha256,
+        "prompt_sha256": task.manifest.prompt_sha256,
+        "raw_response_sha256": sha256_bytes(response_raw) if success else None,
+        "output_sha256": sha256_bytes(response_raw) if success else None,
+        "output_path": task.response_path.relative_to(task.config.output_root).as_posix(),
+        "command": list(outcome.command),
+        "shell": False,
+        "cli_version": outcome.cli_version,
+        "model_requested": outcome.model_requested,
+        "model_observed": outcome.model_observed,
+        "usage": outcome.usage,
+    }
+
+
+def run_tasks(
+    manifest: ProductRunManifest,
+    config: RunnerConfig,
+    options: RunOptions,
+    *,
+    progress: Progress | None = None,
+) -> RunSummary:
+    _ensure_manifest(manifest, config)
+    states = task_states(manifest, config, options.task_filter)
+    blocked = [state for state in states if state.status in {"invalid", "failed"}]
+    if blocked and not options.force:
+        names = ", ".join(state.task.run_id for state in blocked)
+        raise BenchmarkError(f"failed or invalid product output; use --force to replace: {names}")
+    pending = [
+        state.task
+        for state in states
+        if options.force or state.status != "completed"
+    ]
+    skipped = sum(state.status == "completed" and not options.force for state in states)
+    if options.probe:
+        pending = [
+            task
+            for app in APPS
+            for task in pending
+            if task.app == app
+        ][:1] if len(options.apps) == 1 else [
+            next(task for task in pending if task.app == app)
+            for app in APPS
+            if any(task.app == app for task in pending)
+        ]
+    if not pending:
+        return RunSummary(0, skipped, 0)
+
+    executables: dict[str, str] = {}
+    versions: dict[str, str] = {}
+    for app in APPS:
+        if not any(task.app == app for task in pending):
+            continue
+        configured = options.claude_executable if app == "claude" else options.codex_executable
+        first = next(task for task in pending if task.app == app)
+        try:
+            executables[app] = _resolve_executable(configured)
+            versions[app] = _cli_version(executables[app], options.timeout_seconds)
+        except Exception as error:
+            timestamp = utc_now()
+            outcome = HostOutcome(
+                False,
+                timestamp,
+                timestamp,
+                0.0,
+                None,
+                False,
+                "",
+                "",
+                (configured,),
+                "",
+                _model(config, app),
+                None,
+                {},
+                str(error),
+            )
+            append_jsonl_fsync(_evidence_path(config), _record(first, outcome))
+            raise ProductRunError(f"{first.run_id}: {error}") from error
+
+    succeeded = 0
+    for index, task in enumerate(pending, start=1):
+        if progress is not None:
+            progress(f"[{index}/{len(pending)}] {task.run_id}: starting")
+        outcome = _invoke_task(task, options, executables[task.app], versions[task.app])
+        record = _record(task, outcome)
+        if outcome.reason is not None:
+            append_jsonl_fsync(_evidence_path(config), record)
+            raise ProductRunError(f"{task.run_id}: {outcome.reason}")
+        _atomic_write(
+            task.response_path,
+            outcome.response.encode("utf-8"),
+            replace=options.force,
+        )
+        append_jsonl_fsync(_evidence_path(config), record)
+        succeeded += 1
+        if progress is not None:
+            progress(f"[{index}/{len(pending)}] {task.run_id}: saved")
+    return RunSummary(succeeded, skipped, 0)
