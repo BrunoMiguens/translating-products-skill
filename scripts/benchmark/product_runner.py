@@ -900,8 +900,7 @@ def _invoke_task(
                 if task.app == "claude"
                 else _parse_codex(completed.stdout, output_path)
             )
-            if not response.endswith("\n"):
-                response += "\n"
+            response = _normalize_response_envelope(response)
             _validate_response(response.encode("utf-8"), task.response_path)
         except (BenchmarkError, UnicodeEncodeError) as error:
             return HostOutcome(
@@ -936,6 +935,26 @@ def _invoke_task(
             observed,
             usage,
         )
+
+
+def _normalize_response_envelope(response: str) -> str:
+    """Remove a single exact transport wrapper without repairing CSV content."""
+    candidate = response.strip()
+    lines = candidate.splitlines()
+    if (
+        len(lines) >= 3
+        and lines[0].strip().casefold() in {"```", "```csv"}
+        and lines[-1].strip() == "```"
+    ):
+        candidate = "\n".join(lines[1:-1])
+    else:
+        try:
+            decoded = json.loads(candidate)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, str):
+            candidate = decoded
+    return candidate.rstrip("\r\n") + "\n"
 
 
 def _validate_response(raw: bytes, path: Path) -> list[dict[str, str]]:

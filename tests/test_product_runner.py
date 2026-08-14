@@ -216,6 +216,8 @@ if os.environ.get('FAKE_TIMEOUT_CONDITION') == record['condition']:
 csv = {self.CSV!r}
 if os.environ.get('FAKE_MISMATCH_CONDITION') == record['condition']:
     csv = csv.replace(',Welcome,', ',Different source,')
+if os.environ.get('FAKE_FENCE_CONDITION') == record['condition']:
+    csv = '```\\n' + csv + '```\\n'
 if '--print' in sys.argv:
     print(json.dumps({{'result': csv, 'modelUsage': {{'claude-observed': {{}}}}}}))
 else:
@@ -331,6 +333,33 @@ else:
         )
         self.assertEqual([state.status for state in states], ["completed", "failed"])
         self.assertEqual(len(self.invocation_records()), 2)
+
+    def test_markdown_fenced_csv_is_unwrapped_before_validation_and_storage(self):
+        config = self.config()
+        manifest = product_runner.prepare_manifest(config)
+        options = self.options(
+            apps=frozenset({"claude"}),
+            conditions=frozenset({"normal"}),
+        )
+        environment = {
+            "FAKE_INVOCATION_LOG": str(self.invocation_log),
+            "FAKE_FENCE_CONDITION": "normal",
+        }
+
+        with mock.patch.dict(os.environ, environment):
+            summary = product_runner.run_tasks(manifest, config, options)
+
+        self.assertEqual(summary, product_runner.RunSummary(succeeded=1))
+        self.assertEqual(
+            (self.output / "claude" / "normal.csv").read_text(encoding="utf-8"),
+            self.CSV,
+        )
+
+    def test_json_string_wrapped_csv_is_unwrapped(self):
+        self.assertEqual(
+            product_runner._normalize_response_envelope(json.dumps(self.CSV)),
+            self.CSV,
+        )
 
 
 class ProductRunnerCliTests(ProductRunnerExecutionTests):
