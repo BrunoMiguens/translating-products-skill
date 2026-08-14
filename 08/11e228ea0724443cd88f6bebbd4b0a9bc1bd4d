@@ -1,0 +1,19 @@
+docs/superpowers/plans/2026-08-14-autonomous-product-context-setup.md
+  s_51f69c54a42bb0::t_c86c0d376256c0 1-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0811e228ea0724443cd88f6bebbd4b0a9bc1bd4d",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
