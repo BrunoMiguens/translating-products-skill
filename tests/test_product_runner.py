@@ -132,6 +132,20 @@ class ProductRunnerManifestTests(unittest.TestCase):
         self.assertTrue((project / ".translation" / "setup-approval.json").is_file())
         self.assertFalse((project / ".agents").exists())
 
+    def test_prompt_defines_cross_format_field_serialization(self):
+        self.assertIn(
+            "Parse each localization resource according to its format exactly once",
+            product_runner.PROMPT,
+        )
+        self.assertIn("logical field values", product_runner.PROMPT)
+        self.assertIn(
+            "serialize those values as CSV exactly once", product_runner.PROMPT
+        )
+        self.assertIn(
+            "Do not copy the source container's escaping into the CSV",
+            product_runner.PROMPT,
+        )
+
     def test_suite_conditions_stage_only_the_selected_git_snapshot(self):
         config = self.config()
         manifest = product_runner.prepare_manifest(config)

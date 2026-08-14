@@ -163,6 +163,22 @@ The caller-requested output contract outranks every internal phase or QA handoff
 format. After all selected specialists and QA have completed, serialize only the
 requested public artifact.
 
+Use this representation boundary whenever input and output formats differ:
+
+1. Parse the source container exactly once according to its declared format.
+2. Work on the resulting logical field values while tracking which characters
+   and structures belong to those values.
+3. Serialize those logical values exactly once according to the caller's output
+   format.
+
+Preserve escape semantics, protected characters, and runtime behavior, not the
+source container's escape spelling. Escaping introduced by JSON, XML, a source
+literal, a command-line carrier, or another container belongs to that container.
+It must not be copied into CSV, JSON, XML, or another requested output and then
+escaped a second time. When the output format matches the source format, parse
+and reserialize with that format's rules rather than manually adding or removing
+escape characters.
+
 Determine source-owned syntax from the decoded artifact, not from the transport
 used to carry it. A JSON-string-encoded data block does not make its transport
 quotation marks source-owned. A fenced input container does not authorize a

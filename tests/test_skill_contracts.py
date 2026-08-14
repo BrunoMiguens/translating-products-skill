@@ -561,6 +561,18 @@ class SkillContractTests(unittest.TestCase):
         self.assertIn("parse as exactly one JSON value", final_section)
         self.assertIn("discard the presentation layer", final_section)
 
+    def test_orchestrator_defines_decode_translate_serialize_boundary(self):
+        text = (ROOT / "skills/translating-products/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        section = " ".join(markdown_section(text, "Final delivery").split())
+
+        self.assertIn("Parse the source container exactly once", section)
+        self.assertIn("Work on the resulting logical field values", section)
+        self.assertIn("Serialize those logical values exactly once", section)
+        self.assertIn("Preserve escape semantics", section)
+        self.assertIn("not the source container's escape spelling", section)
+
     def test_route_embeds_verified_external_bytes_independent_of_advisory_snapshot(self):
         spec = importlib.util.spec_from_file_location("router_snapshot", ROUTER)
         router = importlib.util.module_from_spec(spec)
