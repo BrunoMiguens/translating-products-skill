@@ -1,0 +1,37 @@
+tests/test_product_runner.py
+  s_51f69c54a42bb0::t_da14488e0b0adf 185-213
+  s_51f69c54a42bb0::t_2ac150d125a942 217
+  s_51f69c54a42bb0::t_7d621abab3479c 244-248,253-261,263,265-267,269-271,273,276
+  s_51f69c54a42bb0::t_21fa1b2c57b3d4 312-314,391
+tests/test_product_setup.py
+  s_51f69c54a42bb0::t_44a8d1d0b0a415 190-198,200,203
+scripts/benchmark/product_runner.py
+  s_51f69c54a42bb0::t_da14488e0b0adf 995,1031
+  s_51f69c54a42bb0::t_657db39b0193d8 4,14,55,57,65,75-108
+  s_51f69c54a42bb0::t_a316783de6d58f 859-862,864-874,902,920,937,951,963,981,990,1009-1030,1032-1083
+  s_0e66cf66b161a0::t_ed0f1d7b938059 1084-1085
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "12753a02c2e22f365380d7f0a0e45b9e42174925",
+  "prompts": {},
+  "sessions": {
+    "s_0e66cf66b161a0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00016-5f27-79e1-9f40-76db5478812f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    },
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
