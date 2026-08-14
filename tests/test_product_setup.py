@@ -187,12 +187,20 @@ if '--version' in sys.argv:
     print('fake-agent 1.0')
     raise SystemExit(0)
 if os.environ.get('PRODUCT_REVIEW_CONDITION'):
-    csv = 'locale,key,english_source,current_translation,status,reason,recommended_correction\\npt-PT,welcome,Welcome,Olá,no_issue_detected,,\\n'
+    response = json.dumps({'rows': [{
+        'locale': 'pt-PT',
+        'key': 'welcome',
+        'english_source': 'Welcome',
+        'current_translation': 'Olá',
+        'status': 'no_issue_detected',
+        'reason': 'Natural and faithful.',
+        'resolved_translation': 'Olá',
+    }]}, ensure_ascii=False)
     if '--print' in sys.argv:
-        print(json.dumps({'result': csv, 'modelUsage': {'claude-observed': {}}}))
+        print(json.dumps({'result': response, 'modelUsage': {'claude-observed': {}}}))
     else:
         output = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])
-        output.write_text(csv, encoding='utf-8')
+        output.write_text(response, encoding='utf-8')
         print(json.dumps({'type': 'turn.completed', 'model': 'codex-observed', 'usage': {'tokens': 1}}))
     raise SystemExit(0)
 mode = os.environ.get("SETUP_MODE", "record-only")

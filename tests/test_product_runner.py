@@ -132,20 +132,6 @@ class ProductRunnerManifestTests(unittest.TestCase):
         self.assertTrue((project / ".translation" / "setup-approval.json").is_file())
         self.assertFalse((project / ".agents").exists())
 
-    def test_prompt_defines_cross_format_field_serialization(self):
-        self.assertIn(
-            "Parse each localization resource according to its format exactly once",
-            product_runner.PROMPT,
-        )
-        self.assertIn("logical field values", product_runner.PROMPT)
-        self.assertIn(
-            "serialize those values as CSV exactly once", product_runner.PROMPT
-        )
-        self.assertIn(
-            "Do not copy the source container's escaping into the CSV",
-            product_runner.PROMPT,
-        )
-
     def test_suite_conditions_stage_only_the_selected_git_snapshot(self):
         config = self.config()
         manifest = product_runner.prepare_manifest(config)
@@ -196,10 +182,39 @@ class ProductRunnerManifestTests(unittest.TestCase):
             )
 
 
+class ProductRunnerStructuredResponseTests(unittest.TestCase):
+    def test_structured_rows_do_not_depend_on_json_field_order(self):
+        response = json.dumps(
+            {
+                "rows": [
+                    {
+                        "status": "change_recommended",
+                        "locale": "pt-PT",
+                        "resolved_translation": "Olá, amiga",
+                        "key": "welcome",
+                        "reason": "Matches the requested familiar tone.",
+                        "current_translation": "Olá",
+                        "english_source": "Welcome, friend",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+        self.assertEqual(
+            product_runner._structured_csv(response),
+            (
+                "locale,key,english_source,current_translation,status,reason,recommended_correction\n"
+                'pt-PT,welcome,"Welcome, friend",Olá,change_recommended,'
+                'Matches the requested familiar tone.,"Olá, amiga"\n'
+            ),
+        )
+
+
 class ProductRunnerExecutionTests(ProductRunnerManifestTests):
     CSV = (
         "locale,key,english_source,current_translation,status,reason,recommended_correction\n"
-        "pt-PT,welcome,Welcome,Olá,no_issue_detected,,\n"
+        'pt-PT,welcome,"Welcome, friend",Olá,no_issue_detected,"Natural, clear.",\n'
     )
 
     def setUp(self):
@@ -226,22 +241,39 @@ record = {{
 log_path = pathlib.Path(os.environ['FAKE_INVOCATION_LOG'])
 prior = [] if not log_path.exists() else [json.loads(line) for line in log_path.read_text(encoding='utf-8').splitlines()]
 record['attempt'] = 1 + sum(item['condition'] == record['condition'] for item in prior)
+if '--json-schema' in sys.argv:
+    record['schema'] = json.loads(sys.argv[sys.argv.index('--json-schema') + 1])
+elif '--output-schema' in sys.argv:
+    schema_path = pathlib.Path(sys.argv[sys.argv.index('--output-schema') + 1])
+    record['schema'] = json.loads(schema_path.read_text(encoding='utf-8'))
 with log_path.open('a', encoding='utf-8') as target:
     target.write(json.dumps(record, sort_keys=True) + '\\n')
 if os.environ.get('FAKE_TIMEOUT_CONDITION') == record['condition']:
     time.sleep(5)
-csv = {self.CSV!r}
+payload = {{'rows': [{{
+    'locale': 'pt-PT',
+    'key': 'welcome',
+    'english_source': 'Welcome, friend',
+    'current_translation': 'Olá',
+    'status': 'no_issue_detected',
+    'reason': 'Natural, clear.',
+    'resolved_translation': 'Olá',
+}}]}}
 if os.environ.get('FAKE_MISMATCH_CONDITION') == record['condition']:
-    csv = csv.replace(',Welcome,', ',Different source,')
+    payload['rows'][0]['english_source'] = 'Different source'
 if os.environ.get('FAKE_FENCE_CONDITION') == record['condition']:
-    csv = '```\\n' + csv + '```\\n'
+    response = '```json\\n' + json.dumps(payload, ensure_ascii=False) + '\\n```\\n'
+else:
+    response = json.dumps(payload, ensure_ascii=False)
 if os.environ.get('FAKE_MALFORMED_ONCE_CONDITION') == record['condition'] and record['attempt'] == 1:
-    csv = csv.replace(',Welcome,', ',Welcome with, comma,')
+    payload['rows'][0]['status'] = 'change_recommended'
+    payload['rows'][0]['reason'] = ''
+    response = json.dumps(payload, ensure_ascii=False)
 if '--print' in sys.argv:
-    print(json.dumps({{'result': csv, 'modelUsage': {{'claude-observed': {{}}}}}}))
+    print(json.dumps({{'result': response, 'modelUsage': {{'claude-observed': {{}}}}}}))
 else:
     output = pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1])
-    output.write_text(csv, encoding='utf-8')
+    output.write_text(response, encoding='utf-8')
     print(json.dumps({{'type': 'turn.completed', 'model': 'codex-observed', 'usage': {{'tokens': 1}}}}))
 """
         self.fake_cli.write_text(script, encoding="utf-8")
@@ -277,6 +309,9 @@ else:
         self.assertEqual(first, product_runner.RunSummary(succeeded=6, skipped=0, failed=0))
         self.assertEqual(second, product_runner.RunSummary(succeeded=0, skipped=6, failed=0))
         self.assertEqual(len(self.invocation_records()), 6)
+        schemas = [record["schema"] for record in self.invocation_records()]
+        self.assertTrue(all(schema == schemas[0] for schema in schemas))
+        self.assertEqual(schemas[0]["required"], ["rows"])
         for app in ("claude", "codex"):
             for condition in product_runner.CONDITIONS:
                 path = self.output / app / f"{condition.replace('_', '-')}.csv"
@@ -353,7 +388,7 @@ else:
         self.assertEqual([state.status for state in states], ["completed", "failed"])
         self.assertEqual(len(self.invocation_records()), 2)
 
-    def test_markdown_fenced_csv_is_unwrapped_before_validation_and_storage(self):
+    def test_markdown_fenced_structured_response_is_unwrapped_before_storage(self):
         config = self.config()
         manifest = product_runner.prepare_manifest(config)
         options = self.options(
@@ -371,12 +406,6 @@ else:
         self.assertEqual(summary, product_runner.RunSummary(succeeded=1))
         self.assertEqual(
             (self.output / "claude" / "normal.csv").read_text(encoding="utf-8"),
-            self.CSV,
-        )
-
-    def test_json_string_wrapped_csv_is_unwrapped(self):
-        self.assertEqual(
-            product_runner._normalize_response_envelope(json.dumps(self.CSV)),
             self.CSV,
         )
 
