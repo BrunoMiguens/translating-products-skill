@@ -72,6 +72,7 @@ ALLOWED_STATUSES = {
     "blocked_by_source",
     "unresolved",
 }
+RESPONSE_ATTEMPTS = 2
 
 
 class ProductRunError(RuntimeError):
@@ -397,6 +398,7 @@ class HostOutcome:
     usage: object
     reason: str | None = None
     stdout: str = ""
+    retryable: bool = False
 
 
 Progress = Callable[[str], None]
@@ -921,6 +923,7 @@ def _invoke_task(
                 {},
                 str(error),
                 completed.stdout,
+                True,
             )
         return HostOutcome(
             True,
@@ -1069,11 +1072,21 @@ def run_tasks(
     for index, task in enumerate(pending, start=1):
         if progress is not None:
             progress(f"[{index}/{len(pending)}] {task.run_id}: starting")
-        outcome = _invoke_task(task, options, executables[task.app], versions[task.app])
-        record = _record(task, outcome)
-        if outcome.reason is not None:
+        for response_attempt in range(1, RESPONSE_ATTEMPTS + 1):
+            outcome = _invoke_task(
+                task, options, executables[task.app], versions[task.app]
+            )
+            record = _record(task, outcome)
+            if outcome.reason is None:
+                break
             append_jsonl_fsync(_evidence_path(config), record)
-            raise ProductRunError(f"{task.run_id}: {outcome.reason}")
+            if not outcome.retryable or response_attempt == RESPONSE_ATTEMPTS:
+                raise ProductRunError(f"{task.run_id}: {outcome.reason}")
+            if progress is not None:
+                progress(
+                    f"[{index}/{len(pending)}] {task.run_id}: invalid response; "
+                    f"retrying ({response_attempt + 1}/{RESPONSE_ATTEMPTS})"
+                )
         _atomic_write(
             task.response_path,
             outcome.response.encode("utf-8"),

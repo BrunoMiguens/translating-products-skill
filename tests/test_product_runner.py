@@ -223,7 +223,10 @@ record = {{
     'codex_home': os.environ.get('CODEX_HOME'),
     'condition': os.environ.get('PRODUCT_REVIEW_CONDITION'),
 }}
-with pathlib.Path(os.environ['FAKE_INVOCATION_LOG']).open('a', encoding='utf-8') as target:
+log_path = pathlib.Path(os.environ['FAKE_INVOCATION_LOG'])
+prior = [] if not log_path.exists() else [json.loads(line) for line in log_path.read_text(encoding='utf-8').splitlines()]
+record['attempt'] = 1 + sum(item['condition'] == record['condition'] for item in prior)
+with log_path.open('a', encoding='utf-8') as target:
     target.write(json.dumps(record, sort_keys=True) + '\\n')
 if os.environ.get('FAKE_TIMEOUT_CONDITION') == record['condition']:
     time.sleep(5)
@@ -232,6 +235,8 @@ if os.environ.get('FAKE_MISMATCH_CONDITION') == record['condition']:
     csv = csv.replace(',Welcome,', ',Different source,')
 if os.environ.get('FAKE_FENCE_CONDITION') == record['condition']:
     csv = '```\\n' + csv + '```\\n'
+if os.environ.get('FAKE_MALFORMED_ONCE_CONDITION') == record['condition'] and record['attempt'] == 1:
+    csv = csv.replace(',Welcome,', ',Welcome with, comma,')
 if '--print' in sys.argv:
     print(json.dumps({{'result': csv, 'modelUsage': {{'claude-observed': {{}}}}}}))
 else:
@@ -372,6 +377,33 @@ else:
     def test_json_string_wrapped_csv_is_unwrapped(self):
         self.assertEqual(
             product_runner._normalize_response_envelope(json.dumps(self.CSV)),
+            self.CSV,
+        )
+
+    def test_invalid_response_is_retried_once_before_task_failure(self):
+        config = self.config()
+        manifest = product_runner.prepare_manifest(config)
+        options = self.options(
+            apps=frozenset({"claude"}),
+            conditions=frozenset({"normal"}),
+        )
+        environment = {
+            "FAKE_INVOCATION_LOG": str(self.invocation_log),
+            "FAKE_MALFORMED_ONCE_CONDITION": "normal",
+        }
+
+        with mock.patch.dict(os.environ, environment):
+            summary = product_runner.run_tasks(manifest, config, options)
+
+        self.assertEqual(summary, product_runner.RunSummary(succeeded=1))
+        self.assertEqual(len(self.invocation_records()), 2)
+        evidence = [
+            json.loads(line)
+            for line in (self.output / "evidence.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual([record["status"] for record in evidence], ["failed", "success"])
+        self.assertEqual(
+            (self.output / "claude" / "normal.csv").read_text(encoding="utf-8"),
             self.CSV,
         )
 
