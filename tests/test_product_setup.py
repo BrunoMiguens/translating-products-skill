@@ -182,6 +182,7 @@ import json
 import os
 import pathlib
 import sys
+import time
 if '--version' in sys.argv:
     print('fake-agent 1.0')
     raise SystemExit(0)
@@ -201,6 +202,8 @@ record = {
     "home": os.environ.get("HOME"),
     "codex_home": os.environ.get("CODEX_HOME"),
     "claude_config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),
+    "stdin_isatty": sys.stdin.isatty(),
+    "stdin_text": sys.stdin.read(),
     "auth_exists": (
         pathlib.Path(os.environ["CODEX_HOME"]) / "auth.json"
     ).is_file() if os.environ.get("CODEX_HOME") else False,
@@ -230,6 +233,8 @@ if mode != "record-only":
         (translation / "setup-approval.json").write_text("{}\\n", encoding="utf-8")
 if mode == "fail":
     raise SystemExit(7)
+if mode == "timeout":
+    time.sleep(1)
 """,
             encoding="utf-8",
         )
@@ -241,38 +246,33 @@ if mode == "fail":
             for line in self.invocation_log.read_text(encoding="utf-8").splitlines()
         ]
 
-    def test_codex_uses_isolated_interactive_workspace(self):
+    def test_codex_runs_noninteractively_in_isolated_workspace(self):
         options = self.options(app="codex", executable=self.fake_agent)
         stage = product_setup.stage_setup_project(options, self.root / "stage")
         with mock.patch.dict(
             os.environ, {"SETUP_INVOCATION_LOG": str(self.invocation_log)}
         ):
-            product_setup.launch_setup_session(stage, options)
+            product_setup.run_setup_agent(stage, options)
 
         record = self.records()[0]
         self.assertEqual(Path(record["cwd"]).resolve(), stage.project.resolve())
-        self.assertEqual(
-            record["argv"],
-            [
-                "-m",
-                "setup-test",
-                "-C",
-                str(stage.project),
-                "--sandbox",
-                "workspace-write",
-                "--ask-for-approval",
-                "on-request",
-                "--no-alt-screen",
-                product_setup.SETUP_PROMPT,
-            ],
-        )
+        self.assertEqual(record["argv"][:8], [
+            "exec", "-m", "setup-test", "-C", str(stage.project),
+            "--sandbox", "workspace-write", "--ephemeral",
+        ])
+        self.assertEqual(record["argv"][8], "--ignore-user-config")
+        self.assertEqual(record["argv"][9], "--output-last-message")
+        self.assertEqual(record["argv"][-1], product_setup.SETUP_PROMPT)
+        self.assertNotIn("--ask-for-approval", record["argv"])
+        self.assertFalse(record["stdin_isatty"])
+        self.assertEqual(record["stdin_text"], "")
         self.assertNotEqual(record["home"], str(self.source_home))
         self.assertNotEqual(record["codex_home"], str(self.source_home / ".codex"))
         self.assertTrue(record["auth_exists"])
         self.assertEqual(record["auth_mode"], "0o600")
         self.assertFalse((Path(record["codex_home"]) / "auth.json").exists())
 
-    def test_claude_uses_project_settings_without_print_mode(self):
+    def test_claude_runs_noninteractively_with_project_settings(self):
         options = self.options(app="claude", executable=self.fake_agent)
         stage = product_setup.stage_setup_project(options, self.root / "stage")
         environment = {
@@ -280,7 +280,7 @@ if mode == "fail":
             "CLAUDE_CONFIG_DIR": "must-be-removed",
         }
         with mock.patch.dict(os.environ, environment):
-            product_setup.launch_setup_session(stage, options)
+            product_setup.run_setup_agent(stage, options)
 
         record = self.records()[0]
         self.assertEqual(Path(record["cwd"]).resolve(), stage.project.resolve())
@@ -289,6 +289,8 @@ if mode == "fail":
             [
                 "--model",
                 "setup-test",
+                "--print",
+                "--no-session-persistence",
                 "--setting-sources",
                 "project",
                 "--permission-mode",
@@ -300,6 +302,22 @@ if mode == "fail":
             ],
         )
         self.assertIsNone(record["claude_config_dir"])
+        self.assertFalse(record["stdin_isatty"])
+        self.assertEqual(record["stdin_text"], "")
+
+    def test_autonomous_setup_timeout_is_bounded(self):
+        options = product_setup.ProductSetupOptions(
+            **{**self.options(app="codex", executable=self.fake_agent).__dict__,
+               "timeout_seconds": 0.01}
+        )
+        stage = product_setup.stage_setup_project(options, self.root / "stage")
+        environment = {
+            "SETUP_INVOCATION_LOG": str(self.invocation_log),
+            "SETUP_MODE": "timeout",
+        }
+        with mock.patch.dict(os.environ, environment):
+            with self.assertRaisesRegex(BenchmarkError, "timed out"):
+                product_setup.run_setup_agent(stage, options)
 
 
 class ProductSetupApprovalTests(ProductSetupAdapterTests):

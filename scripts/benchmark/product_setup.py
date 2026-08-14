@@ -24,9 +24,9 @@ PROPOSAL_FILES = (
     "style-guide.md",
     "protected-terms.txt",
 )
-SETUP_PROMPT = """Set up this exact product snapshot for reviewing every customer-facing email translation from en-US into European Portuguese (pt-PT).
+SETUP_PROMPT = """Autonomously set up this exact product snapshot for reviewing every customer-facing email translation from en-US into European Portuguese (pt-PT).
 
-Use the staged translating-products skill. Inspect the actual product files and ask me one focused setup question at a time. Prepare a formal but natural product-translation configuration. Do not review or change translations.
+Use the staged translating-products skill and inspect the actual product files. Do not ask questions or wait for user input. Make conservative, evidence-based decisions from the repository and prepare a formal but natural product-translation configuration. Record any unresolved assumption in the appropriate context file. Do not review or change translations.
 
 You may create or update only these files under .translation:
 - project-brief.md
@@ -35,7 +35,7 @@ You may create or update only these files under .translation:
 - style-guide.md
 - protected-terms.txt
 
-Show me the complete proposed configuration before ending the session. Never create setup-approval.json and never run the policy approve command. Approval is handled by the outer runner after this session exits.
+Write all five complete files before ending. Do not create or modify any other file. Never create setup-approval.json and never run the policy approve command. Approval is handled by the outer runner after this process exits.
 """
 
 
@@ -61,6 +61,7 @@ class ProductSetupOptions:
     replace_context: bool = False
     executable: str | None = None
     model: str | None = None
+    timeout_seconds: float = 600
     source_home: Path = field(default_factory=Path.home)
 
     def __post_init__(self) -> None:
@@ -81,6 +82,12 @@ class ProductSetupOptions:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise BenchmarkError(f"{name} must be non-empty text when provided")
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or self.timeout_seconds <= 0
+        ):
+            raise BenchmarkError("timeout_seconds must be greater than zero")
         _reject_symlink_path(self.translation_context, "translation context path")
         product_repo = product_runner._resolved(self.product_repo)
         suite_repo = product_runner._resolved(self.suite_repo)
@@ -164,9 +171,10 @@ def stage_setup_project(
     return SetupStage(root, project, policy, product_commit, suite_commit)
 
 
-def interactive_command(
+def noninteractive_command(
     stage: SetupStage,
     options: ProductSetupOptions,
+    output_path: Path,
 ) -> tuple[str, ...]:
     executable = product_runner._resolve_executable(
         options.executable or options.app
@@ -177,6 +185,8 @@ def interactive_command(
             command.extend(("--model", options.model))
         command.extend(
             (
+                "--print",
+                "--no-session-persistence",
                 "--setting-sources",
                 "project",
                 "--permission-mode",
@@ -188,7 +198,7 @@ def interactive_command(
             )
         )
         return tuple(command)
-    command = [executable]
+    command = [executable, "exec"]
     if options.model is not None:
         command.extend(("-m", options.model))
     command.extend(
@@ -197,9 +207,10 @@ def interactive_command(
             str(stage.project),
             "--sandbox",
             "workspace-write",
-            "--ask-for-approval",
-            "on-request",
-            "--no-alt-screen",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--output-last-message",
+            str(output_path),
             SETUP_PROMPT,
         )
     )
@@ -225,13 +236,22 @@ def _codex_environment(
     return environment
 
 
-def launch_setup_session(
+def _host_diagnostic(completed: subprocess.CompletedProcess[str]) -> str:
+    detail = completed.stderr.strip() or completed.stdout.strip()
+    return detail[-4096:]
+
+
+def run_setup_agent(
     stage: SetupStage,
     options: ProductSetupOptions,
 ) -> None:
-    command = interactive_command(stage, options)
     with tempfile.TemporaryDirectory(prefix=f"product-setup-{options.app}-") as text:
         temporary = Path(text)
+        command = noninteractive_command(
+            stage,
+            options,
+            temporary / "last-message.txt",
+        )
         environment = dict(os.environ)
         environment.pop("CLAUDE_CONFIG_DIR", None)
         if options.app == "codex":
@@ -240,18 +260,29 @@ def launch_setup_session(
             completed = subprocess.run(
                 command,
                 check=False,
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
                 cwd=stage.project,
                 env=environment,
+                timeout=options.timeout_seconds,
             )
+        except subprocess.TimeoutExpired as error:
+            raise BenchmarkError(
+                f"autonomous {options.app} setup timed out after "
+                f"{options.timeout_seconds:g} seconds"
+            ) from error
         except OSError as error:
             raise BenchmarkError(
-                f"cannot start interactive {options.app} setup: {error}"
+                f"cannot start autonomous {options.app} setup: {error}"
             ) from error
-    if completed.returncode != 0:
-        raise BenchmarkError(
-            f"interactive {options.app} setup exited with status "
-            f"{completed.returncode}"
-        )
+        if completed.returncode != 0:
+            detail = _host_diagnostic(completed)
+            suffix = f": {detail}" if detail else ""
+            raise BenchmarkError(
+                f"autonomous {options.app} setup exited with status "
+                f"{completed.returncode}{suffix}"
+            )
 
 
 def _resolved_suite_commits(options: ProductSetupOptions) -> tuple[str, str]:
@@ -294,7 +325,7 @@ def _proposal(
     translation: Path,
 ) -> tuple[tuple[str, bytes], ...]:
     if translation.is_symlink() or not translation.is_dir():
-        raise BenchmarkError("interactive setup did not create a translation proposal")
+        raise BenchmarkError("autonomous setup did not create a translation proposal")
     files = product_runner._tree_files(translation)
     names = tuple(path.relative_to(translation).as_posix() for path in files)
     if "setup-approval.json" in names:
@@ -469,7 +500,7 @@ def ensure_translation_context(
         )
     with tempfile.TemporaryDirectory(prefix="product-context-setup-") as text:
         stage = stage_setup_project(options, Path(text) / "workspace")
-        launch_setup_session(stage, options)
+        run_setup_agent(stage, options)
         approve_and_publish(
             stage,
             options,
