@@ -1,0 +1,27 @@
+tests/test_product_runner.py
+  s_51f69c54a42bb0::t_a6bed37f67e50c 136-139,141-147
+  s_51f69c54a42bb0::t_cbca0d906b5eda 135,140,148
+tests/test_skill_contracts.py
+  s_51f69c54a42bb0::t_cbca0d906b5eda 564-567,569-575
+  s_51f69c54a42bb0::t_1c2b3356476928 568
+skills/translating-products/SKILL.md
+  s_51f69c54a42bb0::t_064a3d4f9878cd 166-181
+scripts/benchmark/product_runner.py
+  s_51f69c54a42bb0::t_064a3d4f9878cd 54-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "92a034898143f2c5224d2f43e4b9caf7f0a9b277",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
