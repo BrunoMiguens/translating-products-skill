@@ -205,6 +205,8 @@ class ValidatorTests(unittest.TestCase):
             "Type `approve`",
             "does not modify the product checkout",
             "rerun the identical command",
+            "does not open an interactive agent terminal",
+            "only user input is",
         ):
             self.assertIn(contract, operations)
         self.assertIn("does not create human labels", operations)

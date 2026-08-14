@@ -102,19 +102,20 @@ no prompt or response needs to be copied between desktop apps.
 The runner does not create human labels or claim that any output received
 human review.
 
-If the requested `.translation` context does not exist, the same command opens
-one interactive Codex or Claude setup session against the exact product Git
-snapshot. The session inspects the product and asks one focused question at a
-time. It may propose only the five context files; it cannot approve them. The
-runner then prints every complete proposed file. Type `approve` exactly to bind
-your identity and publish the context. Any other input stops without publishing
-a context or creating benchmark evidence.
+If the requested `.translation` context does not exist, the same command runs
+Codex or Claude non-interactively against the exact product Git snapshot. The
+agent inspects the product, derives conservative configuration from repository
+evidence, and writes only the five context files. It cannot approve them and
+does not open an interactive agent terminal. The runner then prints every
+complete proposed file. The only user input is the final approval gate. Type `approve`
+exactly to bind your identity and publish the context. Any other input stops
+without publishing a context or creating benchmark evidence.
 
 The setup workspace is disposable and does not modify the product checkout. It
 stages the selected improved-suite Git object instead of trusting globally
 installed skills, and both declared suite revisions must accept the approved
 bytes before the first benchmark model call. An existing ready context skips
-the interactive session. An incomplete or stale existing context requires
+autonomous setup. An incomplete or stale existing context requires
 `--replace-context`; replacement preserves the previous directory unless the
 new proposal is approved and passes both suite preflights.
 
@@ -137,8 +138,8 @@ From this repository, start with one probe per host:
   --probe
 ```
 
-Use `--setup-app claude` instead to conduct setup in Claude Code; the matching
-`--codex-executable` or `--claude-executable` is used for that session. If the
+Use `--setup-app claude` instead to run setup through Claude Code; the matching
+`--codex-executable` or `--claude-executable` is used for that process. If the
 probe succeeds, rerun the identical command after removing only `--probe` to
 resume the remaining calls. Omit `--force`: evidence-bound successes are skipped.
 If one durable model failure or timeout must be deliberately replaced, add its
