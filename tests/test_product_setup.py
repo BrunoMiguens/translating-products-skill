@@ -261,7 +261,8 @@ if mode == "timeout":
             "--sandbox", "workspace-write", "--ephemeral",
         ])
         self.assertEqual(record["argv"][8], "--ignore-user-config")
-        self.assertEqual(record["argv"][9], "--output-last-message")
+        self.assertEqual(record["argv"][9], "--skip-git-repo-check")
+        self.assertEqual(record["argv"][10], "--output-last-message")
         self.assertEqual(record["argv"][-1], product_setup.SETUP_PROMPT)
         self.assertNotIn("--ask-for-approval", record["argv"])
         self.assertFalse(record["stdin_isatty"])

@@ -209,6 +209,7 @@ def noninteractive_command(
             "workspace-write",
             "--ephemeral",
             "--ignore-user-config",
+            "--skip-git-repo-check",
             "--output-last-message",
             str(output_path),
             SETUP_PROMPT,
