@@ -1,0 +1,39 @@
+tests/test_product_runner.py
+  s_51f69c54a42bb0::t_b20c28491fd928 40-49,117-120,128,136,143-150,250-254,266,307,310,369-373,516-523,574,582-586
+  s_51f69c54a42bb0::t_154222c6d94cac 135
+  s_51f69c54a42bb0::t_338ff260f45c07 191-214,227-229
+  s_51f69c54a42bb0::t_67b852e403fc97 230,289,359-365
+  s_51f69c54a42bb0::t_b0c18803ca06b1 231
+scripts/benchmark/product_runner.py
+  s_51f69c54a42bb0::t_0e1eefb98a7083 126-127
+  s_51f69c54a42bb0::t_42b58d1723a975 734-737,749,753-756,960,987,1054-1058
+  s_51f69c54a42bb0::t_a3b2096cf6e74a 7,50,56,58
+  s_51f69c54a42bb0::t_5515635c622d9a 1131,1134-1156,1159-1169,1180,1194-1205,1222-1223,1226-1229
+  s_51f69c54a42bb0::t_f36b7dc542d1a2 125,128-131,133,135-150,161-164,188-193,208-220,236-240,243,277-284,292-295,305-308,310-311,348-374,417-421
+  s_51f69c54a42bb0::t_1a2802a6f360d5 52,54,132
+  s_51f69c54a42bb0::t_8f6b10157f6eb3 1497-1500,1602-1605
+  s_51f69c54a42bb0::t_6af17992f5ba4d 1125-1130,1132-1133,1157-1158
+  s_51f69c54a42bb0::t_67b852e403fc97 134
+docs/benchmarking.md
+  s_51f69c54a42bb0::t_ce31f3fb945efe 105-110,135-138
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_ce31f3fb945efe 196-199
+tests/test_product_setup.py
+  s_51f69c54a42bb0::t_c7f45f63c290fb 43-50,494-501
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "fb64961dc98857e9d58380d746b46ecb0a7a4298",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
