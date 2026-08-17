@@ -37,8 +37,16 @@ class ProductRunnerManifestTests(unittest.TestCase):
         self._init_repo(self.product)
         self._init_repo(self.suite)
 
-        self.product_file = self.product / "emails.json"
-        self.product_file.write_text('{"email":"committed"}\n', encoding="utf-8")
+        self.source_resource = Path("locales/en.json")
+        self.target_resource = Path("locales/pt_PT.json")
+        (self.product / "locales").mkdir()
+        self.product_file = self.product / self.source_resource
+        self.product_file.write_text(
+            '{"welcome":"Welcome, friend"}\n', encoding="utf-8"
+        )
+        (self.product / self.target_resource).write_text(
+            '{"welcome":"Olá sobre a Push"}\n', encoding="utf-8"
+        )
         self._commit_all(self.product, "product")
         self.product_commit = run_git(self.product, "rev-parse", "HEAD")
 
@@ -106,6 +114,10 @@ class ProductRunnerManifestTests(unittest.TestCase):
             improved_suite_git_object=self.improved_commit[:12],
             output_root=self.output,
             apps=frozenset({"claude", "codex"}),
+            source_resource=self.source_resource,
+            source_locale="en-US",
+            target_resource=self.target_resource,
+            target_locale="pt-PT",
             claude_model="claude-test",
             codex_model="codex-test",
         )
@@ -113,22 +125,29 @@ class ProductRunnerManifestTests(unittest.TestCase):
     def test_manifest_and_staging_bind_exact_git_objects_not_dirty_trees(self):
         config = self.config()
         manifest = product_runner.prepare_manifest(config)
-        self.product_file.write_text('{"email":"dirty"}\n', encoding="utf-8")
+        self.product_file.write_text('{"welcome":"dirty"}\n', encoding="utf-8")
 
         project = self.root / "staged-normal"
         task = product_runner.ProductTask("codex", "normal", manifest, config)
         product_runner.stage_project(task, project)
 
         self.assertEqual(
-            (project / "emails.json").read_text(encoding="utf-8"),
-            '{"email":"committed"}\n',
+            (project / self.source_resource).read_text(encoding="utf-8"),
+            '{"welcome":"Welcome, friend"}\n',
         )
         self.assertEqual(manifest.product_commit, self.product_commit)
         self.assertEqual(manifest.current_suite_commit, self.old_commit)
         self.assertEqual(manifest.improved_suite_commit, self.improved_commit)
         self.assertRegex(manifest.product_tree_sha256, r"^[0-9a-f]{64}$")
         self.assertRegex(manifest.context_tree_sha256, r"^[0-9a-f]{64}$")
-        self.assertEqual(manifest.prompt_sha256, sha256_bytes(product_runner.PROMPT.encode()))
+        self.assertEqual(
+            manifest.prompt_sha256,
+            sha256_bytes(product_runner._prompt(config).encode()),
+        )
+        self.assertEqual(manifest.source_resource, "locales/en.json")
+        self.assertEqual(manifest.target_resource, "locales/pt_PT.json")
+        self.assertEqual(manifest.source_locale, "en-US")
+        self.assertEqual(manifest.target_locale, "pt-PT")
         self.assertTrue((project / ".translation" / "setup-approval.json").is_file())
         self.assertFalse((project / ".agents").exists())
 
@@ -169,6 +188,30 @@ class ProductRunnerManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(BenchmarkError, "symlink"):
             product_runner.prepare_manifest(config)
 
+    def test_legacy_manifest_remains_canonical_and_readable(self):
+        value = product_runner.prepare_manifest(self.config()).to_dict()
+        value["schema_version"] = 1
+        value.pop("resources")
+
+        manifest = product_runner.ProductRunManifest.from_dict(value)
+
+        self.assertEqual(manifest.schema_version, 1)
+        self.assertIsNone(manifest.source_resource)
+        self.assertEqual(manifest.to_dict(), value)
+
+    def test_manifest_rejects_target_keys_missing_from_committed_source(self):
+        (self.product / self.target_resource).write_text(
+            '{"missing":"Sem origem"}\n', encoding="utf-8"
+        )
+        self._commit_all(self.product, "unpaired target")
+        commit = run_git(self.product, "rev-parse", "HEAD")
+        config = product_runner.RunnerConfig(
+            **{**self.config().__dict__, "product_git_object": commit}
+        )
+
+        with self.assertRaisesRegex(BenchmarkError, "missing from source resource"):
+            product_runner.prepare_manifest(config)
+
     def test_config_rejects_unknown_apps_and_missing_private_output_boundary(self):
         with self.assertRaisesRegex(BenchmarkError, "apps"):
             product_runner.RunnerConfig(
@@ -181,6 +224,11 @@ class ProductRunnerManifestTests(unittest.TestCase):
                 **{**self.config().__dict__, "output_root": repository_output}
             )
 
+        with self.assertRaisesRegex(BenchmarkError, "repository-relative POSIX path"):
+            product_runner.RunnerConfig(
+                **{**self.config().__dict__, "source_resource": "../en.json"}
+            )
+
 
 class ProductRunnerStructuredResponseTests(unittest.TestCase):
     def test_structured_rows_do_not_depend_on_json_field_order(self):
@@ -189,12 +237,9 @@ class ProductRunnerStructuredResponseTests(unittest.TestCase):
                 "rows": [
                     {
                         "status": "change_recommended",
-                        "locale": "pt-PT",
                         "resolved_translation": "Olá, amiga",
                         "key": "welcome",
                         "reason": "Matches the requested familiar tone.",
-                        "current_translation": "Olá",
-                        "english_source": "Welcome, friend",
                     }
                 ]
             },
@@ -202,7 +247,11 @@ class ProductRunnerStructuredResponseTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            product_runner._structured_csv(response),
+            product_runner._structured_csv(
+                response,
+                {"welcome": ("Welcome, friend", "Olá")},
+                "pt-PT",
+            ),
             (
                 "locale,key,english_source,current_translation,status,reason,recommended_correction\n"
                 'pt-PT,welcome,"Welcome, friend",Olá,change_recommended,'
@@ -214,7 +263,7 @@ class ProductRunnerStructuredResponseTests(unittest.TestCase):
 class ProductRunnerExecutionTests(ProductRunnerManifestTests):
     CSV = (
         "locale,key,english_source,current_translation,status,reason,recommended_correction\n"
-        'pt-PT,welcome,"Welcome, friend",Olá,no_issue_detected,"Natural, clear.",\n'
+        'pt-PT,welcome,"Welcome, friend",Olá sobre a Push,no_issue_detected,"Natural, clear.",\n'
     )
 
     def setUp(self):
@@ -237,6 +286,7 @@ record = {{
     'home': os.environ.get('HOME'),
     'codex_home': os.environ.get('CODEX_HOME'),
     'condition': os.environ.get('PRODUCT_REVIEW_CONDITION'),
+    'stdin_text': sys.stdin.read(),
 }}
 log_path = pathlib.Path(os.environ['FAKE_INVOCATION_LOG'])
 prior = [] if not log_path.exists() else [json.loads(line) for line in log_path.read_text(encoding='utf-8').splitlines()]
@@ -251,16 +301,13 @@ with log_path.open('a', encoding='utf-8') as target:
 if os.environ.get('FAKE_TIMEOUT_CONDITION') == record['condition']:
     time.sleep(5)
 payload = {{'rows': [{{
-    'locale': 'pt-PT',
     'key': 'welcome',
-    'english_source': 'Welcome, friend',
-    'current_translation': 'Olá',
     'status': 'no_issue_detected',
     'reason': 'Natural, clear.',
-    'resolved_translation': 'Olá',
+    'resolved_translation': 'Model-authored text must be ignored',
 }}]}}
 if os.environ.get('FAKE_MISMATCH_CONDITION') == record['condition']:
-    payload['rows'][0]['english_source'] = 'Different source'
+    payload['rows'][0]['key'] = 'unexpected.key'
 if os.environ.get('FAKE_FENCE_CONDITION') == record['condition']:
     response = '```json\\n' + json.dumps(payload, ensure_ascii=False) + '\\n```\\n'
 else:
@@ -309,9 +356,21 @@ else:
         self.assertEqual(first, product_runner.RunSummary(succeeded=6, skipped=0, failed=0))
         self.assertEqual(second, product_runner.RunSummary(succeeded=0, skipped=6, failed=0))
         self.assertEqual(len(self.invocation_records()), 6)
+        self.assertTrue(
+            all(
+                "locales/en.json" in record["stdin_text"]
+                and "locales/pt_PT.json" in record["stdin_text"]
+                for record in self.invocation_records()
+            )
+        )
         schemas = [record["schema"] for record in self.invocation_records()]
         self.assertTrue(all(schema == schemas[0] for schema in schemas))
         self.assertEqual(schemas[0]["required"], ["rows"])
+        row_schema = schemas[0]["properties"]["rows"]["items"]
+        self.assertEqual(
+            set(row_schema["properties"]),
+            {"key", "status", "reason", "resolved_translation"},
+        )
         for app in ("claude", "codex"):
             for condition in product_runner.CONDITIONS:
                 path = self.output / app / f"{condition.replace('_', '-')}.csv"
@@ -454,6 +513,14 @@ class ProductRunnerCliTests(ProductRunnerExecutionTests):
             str(self.product),
             "--product-git-object",
             self.product_commit,
+            "--source-resource",
+            str(self.source_resource),
+            "--source-locale",
+            "en-US",
+            "--target-resource",
+            str(self.target_resource),
+            "--target-locale",
+            "pt-PT",
             "--translation-context",
             str(self.context),
             "--suite-repo",
@@ -504,20 +571,19 @@ class ProductRunnerCliTests(ProductRunnerExecutionTests):
             [("normal", False), ("normal", True)],
         )
 
-    def test_inspect_rejects_cross_condition_source_mismatch(self):
+    def test_unexpected_model_key_is_retried_then_rejected(self):
         environment = {
             "FAKE_INVOCATION_LOG": str(self.invocation_log),
             "FAKE_MISMATCH_CONDITION": "improved",
         }
         with mock.patch.dict(os.environ, environment):
             status, _, error = self.run_cli(*self.run_arguments())
-        self.assertEqual((status, error), (0, ""))
-
-        status, _, error = self.run_cli(
-            "inspect", "--root", str(self.output), "--app", "all"
-        )
         self.assertEqual(status, 1)
-        self.assertIn("source fields do not match", error)
+        self.assertIn("structured response keys do not match canonical resources", error)
+        improved = [
+            row for row in self.invocation_records() if row["condition"] == "improved"
+        ]
+        self.assertEqual(len(improved), 2)
 
 
 if __name__ == "__main__":

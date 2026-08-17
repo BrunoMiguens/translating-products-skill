@@ -40,6 +40,14 @@ class ProductSetupStagingTests(unittest.TestCase):
 
         self.product_file = self.product / "emails.json"
         self.product_file.write_text("committed\n", encoding="utf-8")
+        locales = self.product / "locales"
+        locales.mkdir()
+        (locales / "en.json").write_text(
+            '{"welcome":"Welcome"}\n', encoding="utf-8"
+        )
+        (locales / "pt_PT.json").write_text(
+            '{"welcome":"Olá"}\n', encoding="utf-8"
+        )
         run_git(self.product, "add", ".")
         run_git(self.product, "commit", "-m", "product")
         self.product_commit = run_git(self.product, "rev-parse", "HEAD")
@@ -188,10 +196,7 @@ if '--version' in sys.argv:
     raise SystemExit(0)
 if os.environ.get('PRODUCT_REVIEW_CONDITION'):
     response = json.dumps({'rows': [{
-        'locale': 'pt-PT',
         'key': 'welcome',
-        'english_source': 'Welcome',
-        'current_translation': 'Olá',
         'status': 'no_issue_detected',
         'reason': 'Natural and faithful.',
         'resolved_translation': 'Olá',
@@ -486,6 +491,14 @@ class ProductSetupCliTests(ProductSetupAdapterTests):
             str(self.product),
             "--product-git-object",
             self.product_commit,
+            "--source-resource",
+            "locales/en.json",
+            "--source-locale",
+            "en-US",
+            "--target-resource",
+            "locales/pt_PT.json",
+            "--target-locale",
+            "pt-PT",
             "--translation-context",
             str(self.context),
             "--suite-repo",

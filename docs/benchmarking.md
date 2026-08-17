@@ -102,6 +102,12 @@ no prompt or response needs to be copied between desktop apps.
 The runner does not create human labels or claim that any output received
 human review.
 
+The source and target localization resources are explicit, repository-relative
+flat JSON string maps. The runner reads their values from the exact product Git
+object and writes those canonical values into every CSV. Models return only
+keys and review decisions, so a model cannot rewrite source fields. Resource
+paths and locales are bound into the run manifest.
+
 If the requested `.translation` context does not exist, the same command runs
 Codex or Claude non-interactively against the exact product Git snapshot. The
 agent inspects the product, derives conservative configuration from repository
@@ -126,6 +132,10 @@ From this repository, start with one probe per host:
   --root benchmark-private/product-repository-ptpt-v2/runs \
   --product-repo /Users/example/.codex/worktrees/0c7d/product-repository \
   --product-git-object 9e0f2f1a1 \
+  --source-resource apps/backend/src/templates/email/locales/en.json \
+  --source-locale en-US \
+  --target-resource apps/backend/src/templates/email/locales/pt_PT.json \
+  --target-locale pt-PT \
   --translation-context benchmark-private/product-repository-ptpt-context/.translation \
   --suite-repo /Users/example/Documents/Codex/2026-07-30/find \
   --current-suite-git-object 13cf73e \
