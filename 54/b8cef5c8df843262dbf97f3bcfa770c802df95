@@ -1,0 +1,20 @@
+docs/superpowers/plans/2026-08-18-public-release-documentation-privacy.md
+  s_51f69c54a42bb0::t_c7e622c7aacaf3 121-128,148-161,464-470
+  s_51f69c54a42bb0::t_f1ebc235044d2a 1-120,129-147,162-463,471-619
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "54b8cef5c8df843262dbf97f3bcfa770c802df95",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
