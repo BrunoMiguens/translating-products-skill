@@ -1,0 +1,35 @@
+scripts/public_release.py
+  s_51f69c54a42bb0::t_a2bdd201db01b4 520,522-524
+.github/workflows/validate.yml
+  s_51f69c54a42bb0::t_a749528136c294 31-42
+docs/release-checklist.md
+  s_51f69c54a42bb0::t_6c1de257a46631 31-33,40-43
+  s_51f69c54a42bb0::t_a749528136c294 21-28,36-37,51-52
+tests/test_public_release.py
+  s_51f69c54a42bb0::t_919899443c604b 6,9,18-20,415-423,425-426,428-431,438-500
+  s_51f69c54a42bb0::t_fbf21882077336 363-391
+  s_51f69c54a42bb0::t_4b9957b8e2d526 424,427,432-437
+  s_51f69c54a42bb0::t_329ceb29870b59 501-502
+public-release.json
+  s_51f69c54a42bb0::t_e2c6882499170c 12-14,17-21,23,27-28,31-37,53-54
+  s_51f69c54a42bb0::t_7638b3358244aa 38-39,55-58
+docs/benchmarking.md
+  s_51f69c54a42bb0::t_70f6a374e04be5 41-44
+  s_51f69c54a42bb0::t_7638b3358244aa 8,32-40,45-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7ac42384c408eeaff3d72e362875c0834e5c7cba",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
