@@ -1,0 +1,19 @@
+public-release.json
+  s_51f69c54a42bb0::t_4884ef8cd153c7 31-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ac84fc2fcc82ba3125d90f801e4bc0d46a13aa92",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
