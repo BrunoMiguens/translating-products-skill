@@ -1,0 +1,29 @@
+scripts/public_release.py
+  s_51f69c54a42bb0::t_0a89302209be9a 214-217
+  s_51f69c54a42bb0::t_fd1e02c9916063 47-49
+  s_51f69c54a42bb0::t_1bc6090227539f 1-46,50-213,218-509
+public-release.json
+  s_51f69c54a42bb0::t_1bc6090227539f 1-27
+.gitignore
+  s_51f69c54a42bb0::t_1bc6090227539f 7-9
+tests/test_public_release.py
+  s_51f69c54a42bb0::t_540aa56970e30b 1-208,214-269,271-285
+  s_51f69c54a42bb0::t_35ba9a63d4373b 209-213
+  s_51f69c54a42bb0::t_fd1e02c9916063 270
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ed23c6ce45d2951edabbbee81abb2fefad125cf7",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
