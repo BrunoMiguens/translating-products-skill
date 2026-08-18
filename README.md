@@ -45,29 +45,31 @@ npx skills add . --list
 npx skills add . --all
 ```
 
-In the remote examples below, `OWNER/REPOSITORY` means the GitHub `owner/repo`
-slug of this repository's configured remote. It is a placeholder, not a claim
-that a public remote already exists.
+In the remote examples below, use this repository slug:
+
+```bash
+npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent claude-code
+```
 
 Install every repository skill for a specific host:
 
 ```bash
-npx skills add OWNER/REPOSITORY --skill '*' --agent claude-code
-npx skills add OWNER/REPOSITORY --skill '*' --agent codex
-npx skills add OWNER/REPOSITORY --skill '*' --agent cursor
-npx skills add OWNER/REPOSITORY --skill '*' --agent universal
+npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent claude-code
+npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent codex
+npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent cursor
+npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent universal
 ```
 
 Install every skill for all detected agents with `--all`:
 
 ```bash
-npx skills add OWNER/REPOSITORY --all
+npx skills add BrunoMiguens/translating-products-skill --all
 ```
 
 Install one independently discoverable specialist instead:
 
 ```bash
-npx skills add OWNER/REPOSITORY --skill translating-japanese --agent claude-code
+npx skills add BrunoMiguens/translating-products-skill --skill translating-japanese --agent claude-code
 ```
 
 `--skill '*'` selects all skills while `--agent` chooses explicit hosts.
