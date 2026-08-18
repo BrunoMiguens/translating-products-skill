@@ -1,0 +1,70 @@
+tests/test_smoke_install.py
+  s_51f69c54a42bb0::t_2d5172a32644ca 398,402-405
+  s_51f69c54a42bb0::t_1959e2f9fde125 310,320,343-344
+docs/privacy.md
+  s_51f69c54a42bb0::t_93dd666e6e59d1 23-58
+scripts/public_release.py
+  s_51f69c54a42bb0::t_6ad8a169e05d61 47-49,52-54
+tests/test_benchmark_example.py
+  s_51f69c54a42bb0::t_fe87e39275550e 3,145-217,219-227,229-234,236-248,250-254,256-259,263-290
+  s_51f69c54a42bb0::t_ada277b1d8744f 235
+  s_51f69c54a42bb0::t_8117f94c7a7ff5 249,255,260-262
+  s_51f69c54a42bb0::t_324c723ad02ea2 60-74,218,228
+  s_51f69c54a42bb0::t_02f69abfa9ffb5 291
+benchmarks/example-v1/README.md
+  s_51f69c54a42bb0::t_b45797c27e5808 12-15,34-117
+scripts/benchmark/product_review.py
+  s_51f69c54a42bb0::t_d10f077553ee9e 755,757,759,762,764,779,798,807,818,828-841,952-993,996-1036,1048-1050,1067-1068
+  s_51f69c54a42bb0::t_4fca59ba091d5d 994-995
+  s_51f69c54a42bb0::t_570456b2865362 1069
+scripts/benchmark/example.py
+  s_51f69c54a42bb0::t_a810b7fff51f8b 20,426-533,544-558,567-568,570-595,599
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_71d164511dd8d2 195,234
+  s_51f69c54a42bb0::t_c0ffbb1a70618a 223
+  s_51f69c54a42bb0::t_2d5172a32644ca 193,196-202,205,216-219,221,226-232
+tests/test_public_release.py
+  s_51f69c54a42bb0::t_8a1d7c59723bd8 4,21,27-28,31,36,51,55,61,67
+public-release.json
+  s_51f69c54a42bb0::t_8d1580968995b9 35
+scripts/smoke_install.sh
+  s_51f69c54a42bb0::t_054b08490514ea 25,44
+docs/getting-started.md
+  s_51f69c54a42bb0::t_93dd666e6e59d1 6-19
+docs/benchmarking.md
+  s_51f69c54a42bb0::t_b45797c27e5808 5-6,8,10-11,26,30-31,34-49,52-54,56-69,73,75-89,92-98,101-102,106-110,115-117
+tests/test_product_runner.py
+  s_51f69c54a42bb0::t_4ee814b130d6cb 574-630
+tests/test_public_release_public.py
+  s_51f69c54a42bb0::t_3a03ed0fb3da27 304,314-317
+  s_51f69c54a42bb0::t_8d1580968995b9 360,364,366
+  s_51f69c54a42bb0::t_8a1d7c59723bd8 1-303,305-313,318-359,361-363,365,367-503,505-507,509-550
+  s_51f69c54a42bb0::t_324c723ad02ea2 504,508
+scripts/benchmark/product_runner.py
+  s_51f69c54a42bb0::t_7daab10ca168cd 673-679,693-695,732-733
+  s_51f69c54a42bb0::t_401c4187993e77 1389-1488,1594-1607,1618,1631-1637,1661-1700
+  s_51f69c54a42bb0::t_1287193e22ec7a 1701
+README.md
+  s_51f69c54a42bb0::t_93dd666e6e59d1 33-36
+  s_51f69c54a42bb0::t_4c2074d5a43c2a 105
+docs/release-checklist.md
+  s_51f69c54a42bb0::t_93dd666e6e59d1 45-70,79-88
+tests/test_product_review_benchmark.py
+  s_51f69c54a42bb0::t_8bee725745f59f 684-715
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9c01acd99946760b1c46ef2f0654f372c347cc42",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
