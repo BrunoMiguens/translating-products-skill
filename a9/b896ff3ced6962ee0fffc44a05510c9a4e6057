@@ -1,0 +1,43 @@
+README.md
+  s_51f69c54a42bb0::t_16917347818905 3-21,26-27,30-31,41,47,50-58,61-119
+docs/benchmarking.md
+  s_51f69c54a42bb0::t_1a0b6fddbcdd2e 1-26,28,31-35,37,39-41,43,45-47
+docs/architecture.md
+  s_51f69c54a42bb0::t_78632cdefc47d7 3-7,11-16,18-22,26-59
+docs/release-checklist.md
+  s_51f69c54a42bb0::t_78632cdefc47d7 3-6,10,12-14,20-22,25-43
+  s_51f69c54a42bb0::t_978bac72b13062 8
+docs/continuous-improvement.md
+  s_51f69c54a42bb0::t_1a0b6fddbcdd2e 1-32
+CONTRIBUTING.md
+  s_51f69c54a42bb0::t_78632cdefc47d7 3-10,17,21-47,60-61
+  s_51f69c54a42bb0::t_8c6c3e1d79af5a 11-16
+scripts/validate_repo.py
+  s_51f69c54a42bb0::t_753162ce5c5cf3 39-43,1063-1072,1077
+docs/getting-started.md
+  s_51f69c54a42bb0::t_1a0b6fddbcdd2e 1-46
+tests/test_validate_repo.py
+  s_51f69c54a42bb0::t_23b5939e684ee9 1080-1088,1092,1094-1099
+  s_51f69c54a42bb0::t_565fe6e8ca4f97 1056-1060
+  s_51f69c54a42bb0::t_37b887bfb14457 1018-1022,1033-1040,1064-1078
+  s_51f69c54a42bb0::t_2913dffc90210b 1089-1091,1093
+  s_51f69c54a42bb0::t_50a7456880eaa6 1079
+docs/privacy.md
+  s_51f69c54a42bb0::t_1a0b6fddbcdd2e 1-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a9b896ff3ced6962ee0fffc44a05510c9a4e6057",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
