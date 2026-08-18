@@ -1,0 +1,52 @@
+scripts/benchmark/__init__.py
+  s_51f69c54a42bb0::t_05dbd3722f1ec5 1
+tests/test_benchmark_example.py
+  s_51f69c54a42bb0::t_3d2369083cd9c3 4
+  s_51f69c54a42bb0::t_fbcf0c39cf0e44 10,104,106,112-116,118-125,129
+  s_51f69c54a42bb0::t_79431ae9f1ceb6 99-103
+  s_51f69c54a42bb0::t_c67609dcdfea3b 1-3,5-9,11-98,130-185
+  s_51f69c54a42bb0::t_27a5bf22961dc3 105,107-111,117,126-128
+benchmarks/example-v1/context/.translation/style-guide.md
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-14
+benchmarks/example-v1/context/.translation/setup-approval.json
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-4,12-13
+  s_51f69c54a42bb0::t_91700dc7216686 5-11
+benchmarks/example-v1/context/.translation/locales.yaml
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-4
+benchmarks/example-v1/context/.translation/protected-terms.txt
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1
+benchmarks/example-v1/product/locales/en.json
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-8
+benchmarks/example-v1/product/locales/es_419.json
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-8
+benchmarks/example-v1/README.md
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-29
+benchmarks/example-v1/context/.translation/glossary.csv
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-2
+benchmarks/example-v1/expected-review.json
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-44
+public-release.json
+  s_51f69c54a42bb0::t_05dbd3722f1ec5 13-20,24,26
+scripts/benchmark/example.py
+  s_51f69c54a42bb0::t_1bc03842de460c 303-305,314-315,372
+  s_51f69c54a42bb0::t_4a1b47d5a61d01 1-302,306-307,310,313,316-371,373-422
+  s_51f69c54a42bb0::t_22a1d6ac827130 308-309,311-312
+benchmarks/example-v1/context/.translation/project-brief.md
+  s_51f69c54a42bb0::t_503abbe4e55e3d 1-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9e1e1a5d6e73d81ad57fe07edabac4e7d5debe9c",
+  "prompts": {},
+  "sessions": {
+    "s_51f69c54a42bb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb343-4e1e-7283-927c-85ae1b11b3bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Bruno Miguens <brunomiguens@icloud.com>"
+    }
+  }
+}
