@@ -1,57 +1,44 @@
 # Human Translation Skills
 
-Human Translation Skills is a portable Agent Skills suite for producing
-native-sounding, culturally appropriate product translations while preserving
-meaning, terminology, structure, and platform constraints. One orchestrator
-selects the smallest useful combination from the manifest's independently
-discoverable core, quality, surface, platform, writing-system, and language
-skills.
+Human Translation Skills is a portable suite of Agent Skills for translating
+product content so it sounds natural in the target locale while preserving
+meaning, terminology, structure, and platform constraints.
+
+Install the suite once and start with `translating-products`. The orchestrator
+selects only the language, writing-system, product-surface, platform, and
+review skills needed for the request. It works with Claude Code, Codex, Cursor,
+and other hosts that support the open `SKILL.md` format.
 
 > **AI disclosure:** Translations produced with this suite are AI-generated
-> and have not been reviewed by a human translator. If your project adds human
-> review, record that review in your own approval workflow rather than assuming
-> it from use of these skills.
+> and have not been reviewed by a human translator. Record any human review in
+> your own approval workflow.
 
-## Benchmark quality
+## Install
 
-The [PT-PT benchmark runbook](docs/benchmarking.md) defines a frozen, paired
-comparison of the same exact agent/model/configuration under a normal prompt and
-the translation suite. It combines blind human preference and MQM-lite review,
-deterministic product-integrity checks, paired statistics, and diagnostic-only
-learned/operational measures. No result is claimed until all 405 outputs, 198
-blind presentations, the reviewer attestation and annotation lock, post-lock
-adjudication, unblinding, and every predeclared gate are complete and bound to
-the exact evidence bytes.
+Install every skill globally for all detected agents:
 
-For private real-product regression checks, the runbook also provides a
-resumable Claude/Codex runner that compares no skills, a previous suite Git
-object, and an improved suite Git object without manual prompt copying. The
-same command can establish missing product context through a non-interactive
-Claude or Codex process, require only explicit terminal approval, and continue
-into the benchmark automatically.
+```bash
+npx skills add BrunoMiguens/translating-products-skill --all --global
+```
 
-The skills use the open `SKILL.md` format and are designed for Claude Code,
-Codex, Cursor, and universal Agent Skills hosts. They do not depend on a
-host-specific invocation syntax.
+Restart the agent applications after installation. To preview the skills
+without installing them:
 
-## Install and discover
+```bash
+npx skills add BrunoMiguens/translating-products-skill --list
+```
 
-Run these commands from a clone of this repository to preview the exact
-manifest-derived skills that will be installed or install the complete suite
-locally:
+<details>
+<summary>Other installation and discovery commands</summary>
+
+Preview or install from a local checkout:
 
 ```bash
 npx skills add . --list
 npx skills add . --all
 ```
 
-In the remote examples below, use this repository slug:
-
-```bash
-npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent claude-code
-```
-
-Install every repository skill for a specific host:
+Install the complete suite for one host:
 
 ```bash
 npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent claude-code
@@ -60,105 +47,81 @@ npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent curso
 npx skills add BrunoMiguens/translating-products-skill --skill '*' --agent universal
 ```
 
-Install every skill for all detected agents with `--all`:
-
-```bash
-npx skills add BrunoMiguens/translating-products-skill --all
-```
-
-Install one independently discoverable specialist instead:
+Install one independently discoverable specialist:
 
 ```bash
 npx skills add BrunoMiguens/translating-products-skill --skill translating-japanese --agent claude-code
 ```
 
-`--skill '*'` selects all skills while `--agent` chooses explicit hosts.
-`--all` accepts the CLI's all-skills/all-agents defaults. Individual skill
-installation does not provide transitive dependency installation, so use the
-full-suite command when you want automatic orchestration.
+</details>
 
-## How translation is orchestrated
+See the [getting-started guide](docs/getting-started.md) for project-local and
+host-specific installation, updates, verification, setup, and example prompts.
 
-Start with `translating-products`. For each exact target locale, it builds a
-task profile from language, locale range, writing system, surface, platform,
-format, domain, requested capability, audience, purpose, register dimensions,
-and protected structural constraints. Register separates form of address,
-institutional or personal voice, courtesy, directness, and surface convention
-instead of reducing tone to a formal/informal switch. It declaratively matches
-that profile to the catalog's selectors, expands declared dependencies, and runs the smallest
-sufficient route. Routing does not depend on a hardcoded surface-to-skill or
-language-product classification.
+## Use it
 
-Each route executes `inspect → translate → refine → integrate → review`.
-Surface, platform, and format skills inspect and integrate protected product
-structure; core produces the first semantic draft; writing-system, language,
-and locale guidance refines only its owned linguistic dimension; review checks
-the completed result. Locale guidance refines language guidance, which refines
-broader writing-system defaults, without overriding semantic fidelity,
-approved terminology, or protected values.
-
-Before drafting, the suite can derive product-language evidence from approved
-glossary and translation-memory entries plus structurally aligned, verified
-existing target copy. It groups related units—such as an assessment stem and
-its choices, an email's subject and body, or repeated lifecycle events—so
-terminology, participant roles, and truth are checked across the whole concept.
-Existing copy and human suggestions remain evidence rather than automatic
-authority. Recurring or high-impact unresolved terminology receives a focused
-terminology decision; web research remains gated to one concrete unresolved
-question instead of running routinely.
-
-A task can therefore use several skills without loading unrelated guidance.
-Latin, CJK, and RTL are possible coherent writing-system capability modules,
-not an exhaustive taxonomy. A request for Portuguese, Japanese, and Arabic
-creates three independent linguistic branches: Portuguese applies its locale
-guidance, Japanese applies its language guidance, and Arabic can add the RTL
-module. Shared artifact inspection and approved context are reused, but drafts
-and QA stay isolated until reintegration so one locale cannot leak vocabulary
-or register into another.
-
-If the project has no translation context, the orchestrator pauses before
-translation and asks one setup question at a time. After approval it creates:
+Ask for the product outcome in ordinary language. You do not need to choose
+the specialist skills yourself:
 
 ```text
-.translation/
-├── project-brief.md
-├── locales.yaml
-├── glossary.csv
-├── style-guide.md
-├── protected-terms.txt
-├── setup-approval.json
-├── decisions.md
-├── translation-memory.csv
-└── research-sources.md
+Review all Polish translations of the questions and emails in this project.
+Preserve placeholders and formatting, use the product's existing terminology,
+and report anything that sounds unnatural or changes the meaning.
 ```
 
-The orchestrator inspects semantic values, not filenames. The approval record
-contains the explicit approver and timestamp plus SHA-256 hashes of the five
-context files above it; the approval file does not hash itself. Empty glossary
-or protected-term collections must be explicitly approved. Changing any
-context byte, including line endings, requires approval again, while optional
-project-memory files do not invalidate the hashes. A source-locale mismatch or
-an unconfigured requested target pauses translation for one focused question.
+You can name the orchestrator when a host needs an explicit skill reference:
 
-Existing approved configuration is reused. Research is capability-adaptive:
-the agent browses only for a concrete unresolved current, market, or
-terminology question, never for routine wording. Sub-agents are used only when
-independent locales, scale, terminology work, or review provides a material
-benefit; unsupported hosts run the same stages sequentially.
+```text
+Use translating-products to translate this iOS onboarding flow into Japanese
+and Arabic for Japan and Saudi Arabia.
+```
 
-Reviewed external skills can be integrated through the documented adapter
-contract when they are already installed and authorized by the user, project,
-or compatibility registry. The orchestrator discovers their selectors,
-dependencies, phases, specificity, context, conflicts, and authority metadata
-through the same public contract it uses for bundled skills. It never downloads
-an unknown skill during a translation task.
+If the repository has no approved translation context, the agent first helps
+you create `.translation/` configuration and asks for approval before it
+translates anything.
 
-## Skill inventory
+## What the suite handles
 
-This section is rendered from [`skills-manifest.json`](skills-manifest.json)
-by [`scripts/render_catalog.py`](scripts/render_catalog.py). The generated
-[capability catalog](skills/translating-products/references/capability-catalog.md)
-is the machine-oriented routing view of the same manifest records.
+| Need | Selected guidance |
+| --- | --- |
+| Meaning, naturalness, tone, and terminology | Core translation and review |
+| Web, documentation, marketing, or store listings | Product-surface specialist |
+| iOS, Android, Flutter, or localization resource files | Platform and format specialist |
+| Arabic or Hebrew interfaces | Language specialist plus RTL guidance |
+| Portuguese, Japanese, Polish, and other covered locales | Matching language and locale specialist |
+| Several target locales | Isolated per-locale routes, optionally using sub-agents when beneficial |
+
+The workflow is always:
+
+```text
+inspect → translate → refine → integrate → review
+```
+
+Project evidence comes first: approved glossary and style guidance, translation
+memory, verified existing copy, related strings, and protected values. Web
+research is used only for a concrete unresolved question. Unknown skills are
+never downloaded during a translation task.
+
+## Documentation
+
+- [Getting started](docs/getting-started.md) — install, update, verify, and run
+  your first translation.
+- [Architecture](docs/architecture.md) — routing, authority, project context,
+  research, sub-agents, external skills, and review.
+- [Benchmarking](docs/benchmarking.md) — choose between the controlled PT-PT
+  benchmark and private product-review regression workflows.
+- [Contributing](CONTRIBUTING.md) — add a language, surface, platform, adapter,
+  source, or evaluation.
+- [Release checklist](docs/release-checklist.md) — prerelease gates and evidence.
+
+## Included skills
+
+The inventory below is generated from [`skills-manifest.json`](skills-manifest.json).
+The [capability catalog](skills/translating-products/references/capability-catalog.md)
+contains the machine-oriented routing metadata.
+
+<details>
+<summary>Show all bundled skills</summary>
 
 <!-- skill-inventory:start -->
 Suite version: `0.4.0`
@@ -190,19 +153,12 @@ Suite version: `0.4.0`
 | [`translating-polish`](skills/translating-polish/) | `language` | Use when refining Polish translations for Poland, including address strategy, register, aspect, case government, collocations, agreement, and natural product or financial wording. |
 <!-- skill-inventory:end -->
 
-## Sources and reproducibility
+</details>
 
-The manifest records every adapted source with its upstream repository,
-immutable commit, path, license, SHA-256 checksum, capabilities, and local
-adapter. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) preserves
-attribution and license terms. The scheduled source verifier downloads only
-those immutable files and checks their contents; ordinary pull requests remain
-offline and deterministic.
+## Provenance and reproducibility
 
-External sources do not update releases automatically. A source change needs
-a reviewed diff, a compatible license, a new immutable pin and checksum,
-updated adapter evidence, and passing evaluations.
-
-See [the architecture](docs/architecture.md) for trust and routing boundaries
-and [the contribution guide](CONTRIBUTING.md) for adding or updating a
-specialist.
+Adapted sources are pinned in the manifest by repository, commit, path,
+license, and SHA-256 checksum. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
+contains their attribution and license terms. Source updates require a reviewed
+diff, compatible license, new immutable pin and checksum, updated adapter
+evidence, and passing evaluations.

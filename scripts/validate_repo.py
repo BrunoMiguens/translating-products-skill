@@ -39,7 +39,13 @@ PUBLICATION_FILES = (
     ".github/workflows/validate.yml",
     "CONTRIBUTING.md",
     "README.md",
+    "docs/README.md",
     "docs/architecture.md",
+    "docs/benchmarking.md",
+    "docs/benchmarks/product-review.md",
+    "docs/benchmarks/pt-pt.md",
+    "docs/getting-started.md",
+    "docs/release-checklist.md",
 )
 SHELL_FENCE = re.compile(r"```(?:bash|sh|shell)\s*\n(.*?)```", re.DOTALL)
 SKILL_LINK = re.compile(r"\]\(skills/([a-z0-9]+(?:-[a-z0-9]+)*)/?\)")
@@ -1073,7 +1079,9 @@ def validate_distribution(root: Path, manifest: Manifest) -> list[str]:
             f"README.md: {error}" for error in _validate_install_commands(text)
         )
 
-    for relative in ("README.md", "CONTRIBUTING.md", "docs/architecture.md"):
+    for relative in PUBLICATION_FILES:
+        if not relative.endswith(".md"):
+            continue
         path = root / relative
         if path.is_file():
             errors.extend(_validate_markdown_links(root, path))

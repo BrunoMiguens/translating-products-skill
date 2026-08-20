@@ -1,20 +1,36 @@
 # Release checklist
 
-## Current decision
+## Current state
 
-The suite remains a prerelease at `<!-- suite-version:start -->0.4.0<!-- suite-version:end -->`. Do not promote
-`skills-manifest.json` or its manifest test to `1.0.0` until every gate below
-is complete and its evidence is recorded.
+The suite remains a prerelease at
+`<!-- suite-version:start -->0.4.0<!-- suite-version:end -->` with 23 manifest
+skills and 7 pinned adapted sources. The public repository is
+[`BrunoMiguens/translating-products-skill`](https://github.com/BrunoMiguens/translating-products-skill).
 
-Automated repository, installation, source, and discovery checks pass. The
-first stable release is still blocked by the missing public remote,
-host-evaluation record, and proficient bilingual reviews. No human translator
-review is claimed.
+Do not promote to `1.0.0` until every gate below is complete for the exact
+release commit. Automated checks validate packaging, routing, schemas, and
+structural behavior; they do not replace proficient bilingual review or imply
+that runtime translations were reviewed by a human.
 
-## Task 7 verification — 2026-08-07
+## Release gates
 
-The schema `2` manifest declared 22 skills on this date. The following commands
-were run from the repository worktree and exited `0`:
+| Gate | Status | Required evidence |
+| --- | --- | --- |
+| Public repository configured | Complete | `origin` points to `BrunoMiguens/translating-products-skill`. |
+| Manifest and generated catalog agree | Repeat for release | `render_catalog.py --check` passes and reports the release version and exact skill set. |
+| Repository validation passes | Repeat for release | `validate_repo.py` passes on the exact release commit. |
+| Unit and evaluation tests pass | Repeat for release | Full offline test suite passes on the exact release commit. |
+| Source checksums verified | Repeat for release | Networked source verification confirms all immutable source bytes. |
+| Licenses and notices reviewed | Repeat for release | Every adapted source has compatible licensing and matching notice text. |
+| Cross-agent installation passes | Repeat for release | Disposable Claude Code, Codex, Cursor, and universal targets match the exact manifest inventory. |
+| Host-level fixtures recorded | Blocked | Record all translation-quality and structural-fidelity fixtures on supported hosts. |
+| Bilingual review recorded | Blocked | Record reviewer, locales, fixture revision, date, and findings for every language specialist proposed as stable. |
+| Remote skills preview reviewed | Repeat for release | The public repository listing contains the exact release inventory. |
+| Release worktree clean | Repeat for release | No tracked or untracked release artifacts remain after the final commit. |
+
+## Verification commands
+
+Run from the repository root:
 
 ```bash
 python3 scripts/render_catalog.py
@@ -22,37 +38,45 @@ python3 scripts/render_catalog.py --check
 python3 scripts/validate_repo.py
 python3 -m unittest discover -s tests -v
 npx skills add . --list
-git diff --check
 bash scripts/smoke_install.sh
+git diff --check
+git status --short
 ```
 
-The validator reported `validated 22 skills and 7 sources`; the full unittest
-suite passed; the discovery preview listed the 22 manifest skills; and the
-smoke installer copied and compared the exact 22-skill inventory for
-`claude-code`, `codex`, `cursor`, and `universal` in disposable marked
-temporary directories before removing them. This installation evidence checks
-suite packaging, discovery, and host portability. It does not pass or claim the
-separate PT-PT human-curated benchmark or any human translator review.
+Run the networked immutable-source check separately:
 
-## Gates
+```bash
+python3 scripts/verify_sources.py
+```
 
-| Gate | Status | Current evidence or required record |
-| --- | --- | --- |
-| Clean Git status | Complete for this checkpoint | `git status --short` must produce no output after the Task 12 commit; repeat this check for the eventual release commit. |
-| Rendered catalog current | Complete | `python3 -B scripts/render_catalog.py --check` passed on 2026-08-03. |
-| Repository validator passing | Complete | `python3 -B scripts/validate_repo.py` reported 22 skills and 7 sources on 2026-08-03. |
-| Unit and evaluation tests passing | Complete | `python3 -B -m unittest discover -s tests -v` passed 74 tests on 2026-08-03. Automated checks validate schemas and mechanics; they do not replace linguistic review. |
-| Source checksums verified | Complete | An approved-network run of `python3 scripts/verify_sources.py` reported `verified 7 pinned sources` on 2026-08-03. The restricted-network attempt failed closed before that run. |
-| License and notices reviewed | Complete | Task 9 reviewed every pinned license and attribution; `THIRD_PARTY_NOTICES.md` contains all seven records and the applicable license texts. |
-| Cross-agent smoke tests passing | Complete | An approved-network run of `bash scripts/smoke_install.sh` copied and verified exactly 22 skills for `claude-code`, `codex`, `cursor`, and `universal`, then removed its scratch directory on 2026-08-03. |
-| Host-level runs recorded for all fixtures | Blocked | Record results for all 22 translation-quality and all 12 structural-fidelity fixtures on supported hosts. Schema-only Python checks are insufficient. |
-| Proficient bilingual review for every stable language skill | Blocked | Record reviewer, locales, fixture revision, date, and findings for every language specialist proposed as stable. No such review is currently recorded. |
-| Git remote owner/repository confirmed | Blocked | `git remote -v` produced no output on 2026-08-03. Configure and confirm the intended public GitHub owner/repository before release. |
-| skills.sh list preview reviewed | Complete | The approved-network Task 11 run of `npx skills add . --list` found all 22 skills and returned successfully. Repeat against the configured public remote before publishing. |
+Before publication, preview the public repository rather than only the local
+checkout:
+
+```bash
+npx skills add BrunoMiguens/translating-products-skill --list
+```
+
+## Evidence rules
+
+- Bind results to the exact release commit and record the command, date, host,
+  and relevant versions.
+- Keep private product strings and review packets outside tracked files.
+- Do not reuse a regression set as a fresh comparative holdout.
+- Do not create reviewer attestations, linguistic sign-offs, or human labels on
+  someone else's behalf.
+- Treat a prior checkpoint as historical evidence only; repeat every mutable
+  check for the release candidate.
+
+## Historical checkpoint
+
+On 2026-08-07, schema `2` declared 22 skills. Catalog rendering, repository
+validation, the then-current unittest suite, local discovery, source
+verification, and disposable cross-agent installation passed for that snapshot.
+That evidence predates the 23-skill suite and cannot release the current tree.
 
 ## Promotion rule
 
-Promote to `1.0.0` only when every row is Complete, the evidence applies to
-the exact release commit, and a final clean-status check passes. Then update
-the suite version and its manifest assertion, render the catalog again, rerun
-the full checklist, and review the skills.sh listing for the public remote.
+Promote to `1.0.0` only when every release-gate row is Complete for the same
+commit. Update the suite version and manifest assertions, render generated
+files, rerun the complete checklist, review the remote listing, and preserve the
+evidence with the release.

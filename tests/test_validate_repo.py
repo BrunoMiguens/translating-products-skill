@@ -184,10 +184,10 @@ def write_skill(root: Path, name: str, body: str = "# Demo\n") -> Path:
 
 class ValidatorTests(unittest.TestCase):
     def test_product_review_runner_operations_are_documented_without_human_claims(self):
-        documentation = (ROOT / "docs/benchmarking.md").read_text(encoding="utf-8")
-        section = documentation.split("## Automated product review runner", 1)
-        self.assertEqual(len(section), 2)
-        operations = section[1]
+        operations = (ROOT / "docs/benchmarks/product-review.md").read_text(
+            encoding="utf-8"
+        )
+        normalized_operations = " ".join(operations.split())
         for command in (
             "scripts.benchmark.product_runner run",
             "scripts.benchmark.product_runner status",
@@ -212,7 +212,7 @@ class ValidatorTests(unittest.TestCase):
             "does not open an interactive agent terminal",
             "only user input is",
         ):
-            self.assertIn(contract, operations)
+            self.assertIn(contract, normalized_operations)
         self.assertIn("does not create human labels", operations)
 
     def test_manifest_loader_rejects_identity_schema_and_version_drift(self):
@@ -1025,6 +1025,18 @@ npx skills add OWNER/REPOSITORY --all
         (root / "docs" / "architecture.md").write_text(
             "[README](../README.md)\n", encoding="utf-8"
         )
+        documentation = {
+            "docs/README.md": "[Getting started](getting-started.md)\n",
+            "docs/benchmarking.md": "[Product review](benchmarks/product-review.md)\n",
+            "docs/benchmarks/product-review.md": "[Benchmarking](../benchmarking.md)\n",
+            "docs/benchmarks/pt-pt.md": "[Benchmarking](../benchmarking.md)\n",
+            "docs/getting-started.md": "[README](../README.md)\n",
+            "docs/release-checklist.md": "[README](../README.md)\n",
+        }
+        for relative, content in documentation.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
         (root / ".github" / "workflows" / "validate.yml").write_text(
             VALID_WORKFLOW, encoding="utf-8"
         )
@@ -1039,7 +1051,13 @@ npx skills add OWNER/REPOSITORY --all
                 ".github/workflows/validate.yml: file is missing",
                 "CONTRIBUTING.md: file is missing",
                 "README.md: file is missing",
+                "docs/README.md: file is missing",
                 "docs/architecture.md: file is missing",
+                "docs/benchmarking.md: file is missing",
+                "docs/benchmarks/product-review.md: file is missing",
+                "docs/benchmarks/pt-pt.md: file is missing",
+                "docs/getting-started.md: file is missing",
+                "docs/release-checklist.md: file is missing",
             ],
         )
 

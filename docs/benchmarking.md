@@ -1,264 +1,67 @@
-# PT-PT benchmark operations
+# Benchmarking
 
-The PT-PT v1 comparison is not claim-bearing until a proficient PT-PT reviewer
-has curated and explicitly approved the exact dataset bytes. Never create the
-reference sign-off, dataset manifest, review attestation, or a PASS report on a
-reviewer's behalf.
+Use benchmarks to compare the translation suite against the same agent and
+model working from a normal translation prompt. Choose the workflow that
+matches the evidence you need.
 
-## Preflight and curation gate
+## Choose a workflow
 
-1. Run `python3 -m unittest discover -s tests -v`,
-   `python3 scripts/validate_repo.py`, `python3 scripts/render_catalog.py --check`,
-   and `bash -n scripts/smoke_install.sh`.
-2. Generate the curation packet and stop for the fluent PT-PT reviewer. The
-   reviewer must complete every case and use the interactive exact approval
-   phrase before `reference-signoff.json` and `dataset-manifest.json` are made.
-3. Copy `benchmarks/pt-pt-v1/runner-config.example.json` to the ignored
-   `benchmark-private/runner-config.json`. Record the exact agent, host and host
-   version, provider/model revision, command, exposed settings, timeout, tool
-   policy, research policy, suite Git object, and any hashed dirty diff.
+| Goal | Workflow |
+| --- | --- |
+| Make a controlled, public quality claim on the frozen PT-PT dataset | [Controlled PT-PT benchmark](benchmarks/pt-pt.md) |
+| Test the suite against private strings from a real product | [Private product review](benchmarks/product-review.md) |
+| Check that routing, schemas, structure, and commands still work | Repository tests in [Contributing](../CONTRIBUTING.md#run-the-checks) |
 
-## Calibration and primary run
+The controlled benchmark is deliberately expensive: it requires a frozen
+schedule, complete evidence, blind human review, and predeclared gates. The
+private product workflow is the practical regression loop for ongoing skill
+development.
 
-Prepare the immutable run manifest with schedule seed `20260803`, bootstrap seed
-`20260804`, and blinding seed `20260806`. Run the five calibration cases
-`ui-t-s01`, `web-t-a01`, `marketing-r-c01`, `store-t-c01`, and `docs-r-a01`
-through each applicable condition. Inspect transport only, record the discarded
-calibration evidence hash, and never merge those outputs into the primary run.
+## What to compare
 
-For the prepared Claude/Codex diagnostic pack, validate and run all 26 calls
-without desktop copy/paste:
+Keep the host, model, settings, source material, and output contract fixed.
+Change only the translation guidance:
 
-```bash
-python3 -m scripts.benchmark.cli_calibration status
-python3 -m scripts.benchmark.cli_calibration run --app all --probe
-python3 -m scripts.benchmark.cli_calibration run --app all
-```
+1. `normal` — the agent receives an ordinary product translation or review
+   request with no translation skills;
+2. `current_suite` — the same request uses a pinned baseline suite Git object;
+3. `improved` — the same request uses a pinned candidate suite Git object.
 
-The probe makes one ordinary calibration call per selected CLI to verify login
-and transport. After it succeeds, the full command skips those two completed
-tasks and runs the remaining 24. The runner uses the existing CLI logins, starts
-one non-persistent process per prompt, saves final answers in each task's
-`RESPONSE.txt`, and appends ignored diagnostic evidence to
-`benchmark-private/desktop-calibration/evidence.jsonl`.
-It resumes only responses with matching success evidence and stops after the
-first host or infrastructure failure. Pin a provider model with
-`--claude-model MODEL` and `--codex-model MODEL`; use `--force` only when an
-existing calibration response must be deliberately replaced. These convenience
-runs remain diagnostic because they do not provide the sandbox-policy
-attestation required by canonical CLI evidence.
+Comparisons are within one host. Do not combine Claude and Codex scores as if
+they were one model.
 
-Before a primary run, refresh only the ten suite-condition calibration tasks and
-apply the deterministic output gate:
+## Measures
 
-```bash
-python3 -m scripts.benchmark.cli_calibration run \
-  --app all --condition suite --force
-python3 -m scripts.benchmark.cli_calibration inspect \
-  --app all --condition suite
-python3 -m scripts.benchmark.cli_calibration inspect --app all
-```
+Deterministic validation checks observable integrity such as placeholders,
+resource keys, markup, required fields, and exact input identity. Human review
+measures linguistic quality that structural checks cannot determine.
 
-The runner stages the repository's current `skills/` tree and binds its hash to
-each suite response. The suite-only inspection must exit `0` before preparing
-the primary run. The all-condition inspection is diagnostic: failures in normal
-or context-only outputs are expected comparison outcomes and do not block the
-primary run. `--condition` and `--case-id` are repeatable on `status`, `run`, and
-`inspect`; a filter that names an unknown case or selects no task fails before a
-CLI is invoked. Inspection never edits a response or evidence record.
+The private product scorer reports:
 
-Create a fresh ignored `benchmark-evidence/` directory and execute the exact
-405-run schedule without changing prompts, provider/model/configuration, suite
-snapshot, condition plan, or schedule. Ordinary model failures are outcomes,
-not retry opportunities; only authenticated pre-start infrastructure failures
-may be retried. Manual imports are diagnostic only and cannot enter canonical
-blinding or a claim-bearing report.
+- required-error recall;
+- reported-error precision;
+- false-positive correction rate; and
+- exact correction success rate.
 
-## Blind review, score, and publication
+An automated candidate never creates its own human labels. A reviewer completes
+the blinded review file separately, and the tools refuse incomplete, drifted,
+aliased, or mismatched inputs.
 
-1. Validate deterministic invariants. Keep optional learned metrics hidden and
-   diagnostic.
-2. Build the 198-presentation blind bundle and keep the condition key outside
-   the reviewer directory.
-3. Start the loopback reviewer, complete every presentation, resolve any
-   three-way comparison cycle, and lock with the required PT-PT proficiency,
-   independence/conflicts, continued-blindness, key-separation, no-automated-
-   findings, and rubric-completion attestation.
-4. Only after lock, adjudicate every review mapping. Any unresolved mapping makes
-   the review gate and overall verdict unavailable.
-5. Score once, render once, verify every dataset/run/prompt/config/suite/review/
-   raw-output binding, and archive the immutable evidence bundle. A PASS needs
-   exact coverage of all 405 frozen runs.
+## Privacy and relearning boundary
 
-After unblinding, PT-PT v1 is a regression set. A new comparative claim requires
-a fresh holdout. The benchmark says nothing about other locales or future product
-outputs, and it never implies those outputs received human translation review.
+Real product resources, model outputs, human decisions, and score packets stay
+under the ignored `benchmark-private/` directory or another private path. The
+tracked repository contains only synthetic fixtures and generic commands.
 
-## Automated product review runner
+Production skills never read private packets. Human-reviewed cases may become a
+private regression set, but their strings and answers must not be copied into
+skill instructions, tracked fixtures, documentation, or public benchmark data.
+Improvements should encode transferable translation mechanisms rather than a
+reviewer's specific correction.
 
-The product runner invokes Claude Code and Codex itself. It creates isolated
-normal, previous-suite, and improved-suite reviews from exact Git objects, so
-no prompt or response needs to be copied between desktop apps.
-The runner does not create human labels or claim that any output received
-human review.
+## Claims
 
-The source and target localization resources are explicit, repository-relative
-flat JSON string maps. The runner reads their values from the exact product Git
-object and writes those canonical values into every CSV. Models return only
-keys and review decisions, so a model cannot rewrite source fields. Resource
-paths and locales are bound into the run manifest.
-
-If the requested `.translation` context does not exist, the same command runs
-Codex or Claude non-interactively against the exact product Git snapshot. The
-agent inspects the product, derives conservative configuration from repository
-evidence, and writes only the five context files. It cannot approve them and
-does not open an interactive agent terminal. The runner then prints every
-complete proposed file. The only user input is the final approval gate. Type `approve`
-exactly to bind your identity and publish the context. Any other input stops
-without publishing a context or creating benchmark evidence.
-
-The setup workspace is disposable and does not modify the product checkout. It
-stages the selected improved-suite Git object instead of trusting globally
-installed skills, and both declared suite revisions must accept the approved
-bytes before the first benchmark model call. An existing ready context skips
-autonomous setup. An incomplete or stale existing context requires
-`--replace-context`; replacement preserves the previous directory unless the
-new proposal is approved and passes both suite preflights.
-
-From this repository, start with one probe per host:
-
-```bash
-/opt/homebrew/bin/python3 -m scripts.benchmark.product_runner run \
-  --root benchmark-private/product-repository-ptpt-v2/runs \
-  --product-repo /Users/example/.codex/worktrees/0c7d/product-repository \
-  --product-git-object 9e0f2f1a1 \
-  --source-resource apps/backend/src/templates/email/locales/en.json \
-  --source-locale en-US \
-  --target-resource apps/backend/src/templates/email/locales/pt_PT.json \
-  --target-locale pt-PT \
-  --translation-context benchmark-private/product-repository-ptpt-context/.translation \
-  --suite-repo /Users/example/Documents/Codex/2026-07-30/find \
-  --current-suite-git-object 13cf73e \
-  --improved-suite-git-object 8f9b047 \
-  --setup-app codex \
-  --approved-by Bruno \
-  --setup-model SETUP_MODEL \
-  --app all \
-  --timeout-seconds 600 \
-  --probe
-```
-
-Use `--setup-app claude` instead to run setup through Claude Code; the matching
-`--codex-executable` or `--claude-executable` is used for that process. If the
-probe succeeds, rerun the identical command after removing only `--probe` to
-resume the remaining calls. Omit `--force`: evidence-bound successes are skipped.
-If one durable model failure or timeout must be deliberately replaced, add its
-`--app` and `--condition` filters plus `--force` while keeping every provenance
-argument unchanged. Pin models on the first command with `--claude-model` and
-`--codex-model` when the host aliases are not immutable.
-
-Check progress or validate all completed outputs without invoking a model:
-
-```bash
-/opt/homebrew/bin/python3 -m scripts.benchmark.product_runner status \
-  --root benchmark-private/product-repository-ptpt-v2/runs \
-  --app all
-
-/opt/homebrew/bin/python3 -m scripts.benchmark.product_runner inspect \
-  --root benchmark-private/product-repository-ptpt-v2/runs \
-  --app all
-```
-
-`inspect` must report three passes for each selected host. It also verifies
-that every condition has the same locale/key/source/current-translation rows.
-The candidates are then ready for the existing human workflow. For Codex:
-
-```bash
-/opt/homebrew/bin/python3 -m scripts.benchmark.product_review prepare \
-  --input-csv benchmark-private/product-repository-ptpt-v2/runs/codex/current-suite.csv \
-  --output-dir benchmark-private/product-repository-ptpt-v2/codex-packet \
-  --suite-git-object 13cf73e
-```
-
-Complete every row in
-`benchmark-private/product-repository-ptpt-v2/codex-packet/human-review.csv`, then
-score the three conditions:
-
-```bash
-/opt/homebrew/bin/python3 -m scripts.benchmark.product_review score \
-  --packet-dir benchmark-private/product-repository-ptpt-v2/codex-packet \
-  --candidate normal=benchmark-private/product-repository-ptpt-v2/runs/codex/normal.csv \
-  --candidate current_suite=benchmark-private/product-repository-ptpt-v2/codex-packet/conditions/current-suite.csv \
-  --candidate improved=benchmark-private/product-repository-ptpt-v2/runs/codex/improved.csv \
-  --output benchmark-private/product-repository-ptpt-v2/codex-packet/score.json
-```
-
-Repeat packet preparation and scoring with `claude` paths to measure that host
-separately. Do not compare Claude and Codex scores as if they were one model;
-the controlled comparisons are within each host.
-
-## Private product-review regression packets
-
-Real product review output must stay in ignored private storage. Prepare a
-packet from an exact current-suite CSV without copying product strings into the
-tracked `benchmarks/` tree:
-
-```bash
-python3 -m scripts.benchmark.product_review prepare \
-  --input-csv /absolute/path/automated-review.csv \
-  --output-dir benchmark-private/product-review-baseline \
-  --suite-git-object 13cf73e
-```
-
-On a fresh checkout, preparation creates the ignored `benchmark-private/` root
-when the requested packet is directly beneath it. It does not create arbitrary
-or nested parent directories.
-
-Preparation preserves the input bytes at
-`conditions/current-suite.csv`, records their hash and the suite Git object,
-and creates `human-review.csv`. The curation CSV contains only `locale`, `key`,
-`english_source`, and `current_translation`, followed by blank
-`human_decision`, `human_correction`, `human_notes`, and `human_severity`
-fields. It never contains the automated status, reason, or recommendation and
-never creates a human sign-off. A qualified human completes those fields
-separately; the tool does not infer a decision, correction, severity, or
-preference.
-
-After human completion, score all three mandatory conditions against the same
-completed human-review bytes:
-
-```bash
-python3 -m scripts.benchmark.product_review score \
-  --packet-dir benchmark-private/product-review-baseline \
-  --candidate normal=/absolute/path/normal-review.csv \
-  --candidate current_suite=benchmark-private/product-review-baseline/conditions/current-suite.csv \
-  --candidate improved=/absolute/path/improved-review.csv \
-  --output benchmark-private/product-review-baseline/score.json
-```
-
-The scorer reports `required_error_recall`, `reported_error_precision`,
-`false_positive_correction_rate`, and exact `correction_success_rate` for each
-condition, plus the percentage-point differences `improved - normal` and
-`improved - current_suite`. A candidate correction that differs from the human
-correction remains an explicit disagreement with no inferred human preference.
-The scorer refuses incomplete human rows, drifted preserved bytes, mismatched
-product identities or source fields, duplicate or aliased inputs, missing
-conditions, symlinks, and overwrite. Packets and candidates stored inside this
-repository must be beneath ignored `benchmark-private/`; external private paths
-remain supported.
-
-If a parent-directory durability check or final held-input verification fails
-after publication, the command returns an error and never removes or moves the
-public pathname: standard pathname APIs cannot atomically condition cleanup on
-the inode previously observed. Inspect and explicitly remove the failed output
-before retrying. This fail-closed behavior prevents automatic cleanup from
-deleting a concurrently installed replacement.
-
-This current product run is baseline evidence. Once human decisions are added,
-these reviewed cases form a regression set, not a fresh superiority holdout.
-The three conditions provide a holistic diagnostic comparison only. Production
-skills never read these packets, and product data never enters the tracked
-benchmark dataset. Any comparative public claim requires a fresh, signed
-holdout. When canonical run evidence supplies latency, token usage, or cost,
-use the existing benchmark scorer's `latency_seconds`, `usage`, and `cost_usd`
-diagnostics rather than deriving them from the product-review CSVs.
+A passing private regression run is useful engineering evidence, not a public
+superiority claim. Once reviewed cases guide an improvement, they are no longer
+a fresh holdout. Public comparative claims require a new, signed holdout and
+the complete controlled workflow.

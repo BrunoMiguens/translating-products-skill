@@ -1,26 +1,44 @@
 # Translation suite architecture
 
-The repository separates orchestration, translation, product constraints,
-locale mechanics, and review so an agent can load the smallest sufficient set
-of instructions. [`skills-manifest.json`](../skills-manifest.json) is the
-public inventory; its generated
-[capability catalog](../skills/translating-products/references/capability-catalog.md)
-is the orchestrator's local routing input.
+The suite separates orchestration, translation, product constraints, locale
+mechanics, and review. An agent can therefore load the smallest useful set of
+instructions instead of treating every translation as the same task.
 
-## Components and authority
+[`skills-manifest.json`](../skills-manifest.json) is the public source of truth.
+The generated [capability catalog](../skills/translating-products/references/capability-catalog.md)
+is the orchestrator's local routing view.
 
-`translating-products` owns bootstrap, classification, routing, sequencing,
-optional sub-agent decisions, conflict resolution, and failure recovery. It
-does not duplicate detailed linguistic or platform rules.
+## At a glance
 
-`translating-core` owns semantic fidelity, source context, audience, register
-dimensions, product-language evidence, semantic groups, glossaries, protected
-terms, style, and structural preservation. Surface and
-platform skills own their file formats and product constraints. Script and
-language skills own writing-system, locale, and linguistic decisions.
-`reviewing-translations` owns final structural and linguistic QA.
+```mermaid
+flowchart LR
+    R["Product request"] --> O["translating-products"]
+    O --> P["Task profile per target locale"]
+    P --> S["Smallest sufficient skill route"]
+    S --> I["Inspect"]
+    I --> T["Translate"]
+    T --> F["Refine"]
+    F --> N["Integrate"]
+    N --> Q["Review"]
+    Q --> A["Validated artifact"]
+```
 
-Conflicts resolve from highest to lowest authority:
+The orchestrator coordinates the route; it does not duplicate the specialist
+instructions. Multiple target locales share approved project evidence but keep
+their linguistic decisions and QA isolated.
+
+## Responsibilities
+
+| Component | Owns |
+| --- | --- |
+| `translating-products` | Setup, task classification, routing, sequencing, optional sub-agents, conflict resolution, and recovery |
+| `translating-core` | Meaning, source context, audience, register, product-language evidence, semantic groups, terminology, style, and protected structure |
+| Surface skills | Web, software, mobile, marketing, documentation, and store constraints |
+| Platform skills | iOS, Android, Flutter, and platform-specific formats and behavior |
+| Script and language skills | Writing-system, language, locale, and linguistic refinement |
+| `reviewing-translations` | Final structural and linguistic QA |
+
+When guidance conflicts, authority is resolved in this order:
 
 1. explicit user requirements;
 2. approved project configuration;
@@ -30,240 +48,247 @@ Conflicts resolve from highest to lowest authority:
 6. product and platform formatting; and
 7. stylistic preferences.
 
-A lower stage may refine wording, but it cannot silently change facts, names,
-numbers, links, code, or approved terminology.
+A later or narrower stage may refine wording. It cannot silently change facts,
+names, numbers, links, code, protected values, or approved terminology.
 
-## Routing and minimal order
+## Routing
 
-For every exact target locale, the orchestrator builds a task profile with
-source and target locale, language, explicit or observed writing system,
-surface, platform, format, domain, requested capability, audience, purpose,
-register dimensions, and protected constraints. It also maps related units by
-artifact structure and meaning and derives product-language evidence from
-approved memory plus verified existing target copy. It matches declarative
-catalog selectors on those axes, adds the mandatory core and review capabilities, expands
-dependencies, resolves conflicts and explicit supersession, then orders the
-result by phase, ownership, specificity, and stable manifest order. The router
-enumerates generic axes; it contains no surface-to-skill table or
-language-product combination rule.
+The orchestrator builds one task profile for every exact target locale. A
+profile can include:
 
-Every selected route executes `inspect → translate → refine → integrate →
-review`. Inspection produces a translation contract without inventing target
-wording. Core translates against that contract. Writing-system, language, and
-locale skills refine only their owned dimension. Integration restores approved
-wording to the artifact without changing protected structure, and review checks
-the completed output. The orchestrator coordinates this sequence and is not
-inserted into its own route.
+- source and target locale;
+- language and observed or requested writing system;
+- surface, platform, format, and domain;
+- requested capability;
+- audience, purpose, and register dimensions; and
+- protected structural constraints.
+
+Register is multidimensional: form of address, institutional or personal
+voice, courtesy, directness, and surface convention are kept separate rather
+than compressed into a formal/informal switch.
+
+The router matches those axes against declarative catalog selectors, adds the
+mandatory core and review capabilities, expands dependencies, resolves
+conflicts and explicit supersession, then orders the route by phase, ownership,
+specificity, and stable manifest order. It has no hardcoded surface-to-skill or
+language/product lookup table.
+
+Every selected route runs:
+
+```text
+inspect → translate → refine → integrate → review
+```
+
+| Phase | Result |
+| --- | --- |
+| Inspect | A translation contract and protected invariants, without invented target wording |
+| Translate | A meaning-faithful draft produced by core guidance |
+| Refine | Script, language, and locale specialists adjust only their owned dimension |
+| Integrate | Approved wording returns to the artifact without changing protected structure |
+| Review | Structural and linguistic QA checks the completed result |
 
 Locale guidance refines language guidance, which refines broader
-writing-system defaults; no narrower skill may override semantic fidelity,
-approved terminology, or protected values. Latin, CJK, and RTL are examples of
-coherent capability modules, not an exhaustive taxonomy. A Portuguese,
-Japanese, and Arabic request shares artifact inspection and approved context,
-then produces independent per-locale profiles, routes, drafts, and QA before
-reintegration. This prevents linguistic decisions from one branch leaking into
-another.
+writing-system guidance. Latin, CJK, and RTL are examples of coherent
+capability modules, not an exhaustive taxonomy.
 
-Each route also returns `verification_requirements`, including whether an
-independent review is required and which selected capabilities require it. The
-orchestrator combines that route metadata with the caller's requested review
-depth and approved project policy; language or locale identity does not alter
-whether a request is an ordinary translation or an audit of every requested
-language/string.
+For a Portuguese, Japanese, and Arabic request, artifact inspection and
+approved context can be shared. The profiles, routes, drafts, and QA remain
+separate until reintegration, preventing vocabulary or register from leaking
+between locales.
 
-Unknown languages can use core when it can cover the task coherently. Missing
-essential capabilities are reported rather than invented, and no route
-downloads a skill.
+Unknown languages can use core when it can cover the request coherently.
+Missing essential capabilities are reported rather than invented, and routing
+never downloads a skill.
 
-## Project bootstrap
+## Product evidence and semantic groups
 
-Before translating, the orchestrator checks `.translation/` for an approved
-project brief, locales, glossary, style guide, and protected terms. Missing
-context pauses translation and starts a one-question-at-a-time dialogue. The
-agent presents the complete proposed configuration and waits for approval
-before creating the project files or translating.
+Before drafting, the suite can derive evidence from:
 
-Readiness comes from `scripts/policy.py` inspecting the files, not from their
-names. The project brief and style guide require approved statuses and complete
-labeled values. The locales file uses four deterministic top-level fields:
-`source_locale`, `target_locales`, `fallback_locale`, and the boolean
-`neutral_variants_allowed`. Glossary rows must use the supplied header and be
-usable and approved; protected terms contain one non-comment term per line.
-An empty glossary or protected-term collection is valid only when explicitly
+- approved glossary and style guidance;
+- approved translation-memory entries;
+- structurally aligned, verified existing target copy; and
+- related units in the same product flow.
+
+Related units are grouped when meaning crosses string boundaries—for example,
+an assessment stem and its choices, an email subject and body, or repeated
+lifecycle events. The group is checked for consistent terminology, participant
+roles, agency, and truth. Existing copy and human suggestions remain evidence,
+not automatic authority.
+
+Recurring or high-impact unresolved terminology receives a focused terminology
+decision. Inferred terminology is recorded only as `draft`; it cannot satisfy
+an approved-glossary requirement until the project's normal approval process
+accepts it.
+
+## Project context and approval
+
+Before translating, the orchestrator checks `.translation/` for:
+
+```text
+.translation/
+├── project-brief.md
+├── locales.yaml
+├── glossary.csv
+├── style-guide.md
+├── protected-terms.txt
+├── setup-approval.json
+├── decisions.md
+├── translation-memory.csv
+└── research-sources.md
+```
+
+If the required context is missing or invalid, translation pauses. The agent
+asks one setup question at a time, presents the complete configuration, and
+waits for approval before writing context or translating.
+
+Readiness is determined by `scripts/policy.py` from semantic values, not
+filenames:
+
+- project brief and style guide require approved statuses and complete labeled
+  values;
+- locales use `source_locale`, `target_locales`, `fallback_locale`, and
+  `neutral_variants_allowed`;
+- glossary rows use the required schema and must be usable and approved; and
+- protected terms contain one non-comment term per line.
+
+An empty glossary or protected-term file is valid only when explicitly
 approved as empty.
 
-`.translation/setup-approval.json` stores an approved status, nonblank
-approver and timestamp, the explicitly approved empty collections, and an exact
-SHA-256 map for `project-brief.md`, `locales.yaml`, `glossary.csv`,
-`style-guide.md`, and `protected-terms.txt`. It does not hash itself. Any byte
-change to those five files, including a line-ending change, invalidates the
-approval; changes to optional memory files do not. Missing, malformed, draft,
-or stale context returns the first deterministic setup issue, which becomes one
-focused question.
+`setup-approval.json` records the approver, timestamp, explicitly approved
+empty collections, and SHA-256 hashes of the five required context files. It
+does not hash itself. Any byte change to those files—including line endings—
+invalidates approval. Optional decision, memory, and research files do not.
 
-Approved context is reused. New decisions and source-target pairs begin as
-`draft`; only explicit acceptance or the project's declared review process can
-promote them. The policy compares real `source_locale`, `target_locale`, and
-`target_locales` request fields with configured locales. A mismatch becomes one
-focused question and affected copy remains withheld instead of being silently
-overridden.
+A source-locale mismatch or unconfigured target produces one focused question.
+Affected copy remains withheld until the mismatch is resolved.
 
-## Research gate
+## Research
 
-Bundled and project knowledge is the default. Runtime browsing is allowed only
-for one concrete unresolved current product requirement, time-sensitive term,
-regional expression, market convention, or usage claim. Research stops when
-that question is resolved and records its source and decision under
-`.translation/`. Routine words, grammar, and precautionary background do not
-trigger research.
+Bundled and approved project knowledge is the default. Browsing is allowed
+only for one concrete unresolved question involving a current product
+requirement, time-sensitive term, regional expression, market convention, or
+usage claim. Research stops when that question is resolved and records its
+source and decision in `.translation/`.
 
-If research tools are unavailable, bundled knowledge remains the fallback.
-The agent stops only when the unresolved point prevents a coherent result.
+Routine wording, grammar, and precautionary background research do not trigger
+browsing. If research tools are unavailable, bundled guidance remains the
+fallback unless the open question prevents a coherent result.
 
-## Sub-agents and sequential fallback
+## Sub-agents
 
-Sub-agents are optional and beneficial-only. They are appropriate for multiple
-independent locales of meaningful size, a large separable source, an
-independent terminology pass, or materially useful independent review. Short,
-single-locale work stays in one agent.
+Sub-agents are optional and beneficial-only. They fit:
 
-Every sub-agent receives the same brief, glossary, protected terms, style
-guide, and structural constraints. The orchestrator composes and reviews the
-result. Hosts without sub-agent support execute the same specialist stages
-sequentially with the same explicit evidence and deterministic gates.
+- multiple independent locales of meaningful size;
+- a large source that separates cleanly;
+- an independent terminology pass; or
+- a materially useful independent review.
 
-For review, a sub-agent runs the challenge in a fresh agent context and can be
-an independently blinded reviewer. Sequential mode runs a challenge pass in
-the same agent context: its explicit input still excludes every primary
-conclusion, but prior context cannot be erased, so it does not provide
-equivalent epistemic independence. `execution_mode: sequential` records that
-context isolation was unavailable.
+Short, single-locale work stays in one agent. Every sub-agent receives the same
+brief, glossary, protected terms, style guide, evidence, and structural
+constraints. The orchestrator remains responsible for composition and review.
 
-Both modes use identical sanitized challenge input, coverage, adjudication,
-changed-unit correction QA, canonical artifact schema, and deterministic
-validator. This is evidence, coverage, and validation equivalence rather than
-equivalent independence. Caller-selected output paths are preserved. Otherwise
-each run uses a collision-resistant identifier containing a UTC timestamp and
-a random or content-derived suffix, and an existing review artifact is never
-silently overwritten.
+Hosts without sub-agents execute the same stages sequentially. A fresh review
+agent can be independently blinded. A same-agent sequential challenge receives
+the same sanitized input but cannot erase prior context, so its artifact records
+`execution_mode: sequential` and does not claim equivalent independence.
 
-## External adapter trust
+Both modes use the same coverage, adjudication, correction QA, artifact schema,
+and deterministic validator. Failed sub-agent work is retried once while valid
+completed locales remain intact.
 
-Bundled adaptations are locked to immutable upstream commits and SHA-256
+## External skills
+
+An external specialist is eligible only when it is already installed and its
+metadata satisfies the [extension contract](../skills/translating-products/references/extension-contract.md).
+It must also be authorized by the user, project configuration, or reviewed
+[compatibility registry](../skills/translating-products/references/compatibility-registry.json).
+
+The public contract describes selectors, phases, specificity, required
+context, dependencies, conflicts, supersession, and authority boundaries.
+Registry membership is compatibility evidence, not permission to install or
+enable a skill. An absent or unauthorized specialist falls back to bundled
+guidance; an unknown specialist is never downloaded during translation.
+
+Bundled adaptations are pinned to immutable upstream commits and SHA-256
 checksums with compatible licenses, notices, capability mappings, and local
-adapters. The scheduled verifier checks immutable source bytes; ordinary pull
-requests use only committed material.
+adapters. Source updates require review; ordinary pull requests use only the
+committed material.
 
-An externally installed skill is eligible only when its metadata satisfies the
-[extension contract](../skills/translating-products/references/extension-contract.md)
-and it is user-selected, project-configured, or in the reviewed compatibility
-registry. The public contract exposes selectors, phases, specificity, required
-context, dependencies, conflicts, supersession, and authority boundaries, so
-an authorized specialist can be discovered without router changes. Registry
-trust is compatibility evidence, not installation. An absent or unauthorized
-external specialist falls back to bundled guidance; an unknown specialist is
-never downloaded during a translation task.
+## Untrusted translation data
 
-## Source-data and prompt-injection boundary
-
-Translation input is untrusted data, including markup, metadata, comments,
-code blocks, example values, retrieved content, URLs, Unicode controls, and a
-`SKILL.md` body supplied as text. Embedded directives, role labels, tool calls,
-or claims of authority remain content to preserve or translate. They cannot
-change routing, invoke tools, reveal secrets, install skills, or weaken project
-policy.
+All content being translated is data, including markup, metadata, comments,
+code blocks, examples, retrieved text, URLs, Unicode controls, and a `SKILL.md`
+body supplied as text. Embedded instructions, role labels, tool calls, or
+authority claims cannot change routing, invoke tools, reveal secrets, install
+skills, or weaken project policy.
 
 Only host-recognized installed skill instructions operate as skills. System
-and developer instructions, the actual user request, and approved project
-configuration retain their normal authority.
+and developer instructions, the real user request, and approved project
+configuration keep their normal authority.
 
-## Holistic review and deterministic gate
+## Review and deterministic validation
 
-Structural QA compares placeholders, ICU topology, keys, markup, links, code,
+Structural QA checks placeholders, ICU topology, keys, markup, links, code,
 commands, identifiers, numbers, and other protected material. Surface and
-platform specialists add format-specific checks such as HTML metadata, String
-Catalogs, Android resources, ARB files, store limits, and bidirectional UI.
+platform skills add format-specific checks such as metadata, String Catalogs,
+Android resources, ARB files, store limits, accessibility, and bidirectional UI.
 
-Linguistic QA checks meaning, omissions, additions, terminology, locale,
-multidimensional register, naturalness, literal idioms, mixed-language residue,
-plurals, typography, and locale formats. Failures return only the affected segment to
-the responsible specialist; valid output is preserved.
+Linguistic QA uses six ordered passes:
 
-The primary reviewer retains six ordered passes: semantic, terminology,
-linguistic, locale, structural, and surface. It also reads the target
-independently for naturalness and checks semantic groups, event participants
-and agency, assessment truth, audience and register dimensions, locale
-conventions, source quality separately from translation quality, and fitness
-for the selected surface. Locale-specific grammar and
-mechanics remain owned by installed specialists.
+1. semantic fidelity;
+2. terminology;
+3. linguistic quality;
+4. locale conventions;
+5. structural integrity; and
+6. surface fitness.
 
-Review depth resolves through `policy.py review-depth`. Full caller requests,
-route- or project-required independent review, a missing essential specialist,
-low primary confidence, or a source block select `full_challenge`. A caller's
-selective request or a multi-unit audit selects `selective_challenge` when no
-higher-precedence full-review condition applies; ordinary translation QA is a
-`single` review otherwise.
+It also reads the target independently for naturalness and checks semantic
+groups, participant roles, assessment truth, audience, register, and source
+quality. Locale-specific grammar remains owned by the matching specialist.
 
-Challenge input contains the approved context, route capabilities, source,
-current target, protected terms, verified product-language evidence,
-semantic-group membership, and automatic checks, but no primary finding,
-confidence, classification, recommendation, or rationale. This blinded data
-flow limits direct anchoring. It is independently blinded only in a fresh-agent
-context; a same-agent sequential challenge retains the limitation recorded by
-its execution mode. Disagreements resolve through ownership and the normal
-authority order. Human suggestions are retained as separate provenance and
-adjudicated against the same semantic and structural authority rather than
-being accepted automatically. Accepted defects are corrected by their owner,
-checked against related unchanged units, and only changed units repeat ordinary
-QA.
+Review depth is resolved by `scripts/policy.py review-depth`:
 
-The canonical schema and validator define request/result records. Unit status
-is one of `no_issue_detected`, `change_recommended`, `blocked_by_source`, or
-`unresolved`; automated status is not approval. Human-review status, decision,
-correction, severity, notes, and reviewer provenance are explicit separate
-fields. The complete artifact must pass `validate_review_artifact.py` before
-completion, with optional draft terminology validated in the same gate.
+| Depth | Selected when |
+| --- | --- |
+| `single` | Ordinary translation QA needs no independent challenge |
+| `selective_challenge` | The caller requests selective review or a multi-unit audit and no stronger condition applies |
+| `full_challenge` | The caller requests it, policy or route requires it, an essential specialist is missing, confidence is low, or the source is blocked |
 
-Inferred terminology is recorded only as `draft`. It remains non-authoritative,
-cannot satisfy approved glossary requirements, and requires the project's
-normal human or declared approval process before use as policy.
+Challenge input includes approved context, selected capabilities, source,
+current target, protected values, verified evidence, semantic groups, and
+automatic checks. It excludes every primary finding, classification,
+recommendation, confidence, and rationale to limit direct anchoring.
 
-An unapproved term receives a standalone terminology decision before drafting
-when it recurs or materially affects domain or legal meaning, participant
-roles, or answer validity. Approved project context, translation memory, and
-verified corpus evidence are tried before the existing one-question research
-gate; low-impact choices may remain explicit drafts.
+Accepted defects are corrected by their owning specialist, checked against
+related unchanged units, and only changed units repeat ordinary QA. The final
+artifact must pass `validate_review_artifact.py`.
+
+Automated status is not human approval. The canonical schema keeps unit status,
+human decision, correction, severity, notes, and reviewer provenance separate.
 
 ## Failure recovery
 
-- Missing configuration starts bootstrap.
-- An ambiguous locale produces one focused question.
-- A missing external specialist falls back to the bundled specialist.
-- A missing required capability is reported when core cannot cover it.
-- Structural corruption retries only the affected segment.
-- A failed sub-agent is retried once; completed locales remain intact.
-- Failed QA returns the affected section to its responsible specialist.
-- Unavailable research uses bundled knowledge unless the open question blocks
-  coherent translation.
+| Failure | Response |
+| --- | --- |
+| Missing or stale configuration | Start or resume project setup |
+| Ambiguous locale | Ask one focused question |
+| Missing external specialist | Fall back to bundled guidance |
+| Missing essential capability | Report it when core cannot cover the task |
+| Structural corruption | Retry only the affected segment |
+| Failed sub-agent | Retry once and preserve completed locales |
+| Failed QA | Return the affected section to its owning specialist |
+| Unavailable research | Use bundled knowledge unless the unresolved question blocks coherent translation |
 
 ## Host portability
 
-Every discoverable skill lives under `skills/<name>/SKILL.md` with only `name`
-and `description` frontmatter. Skill bodies avoid host-specific invocation
-tokens and undocumented paths outside their own directories. This keeps the
-same suite discoverable by Claude Code, Codex, Cursor, and universal Agent
-Skills hosts. Capability routing and policy scripts use Python's standard
-library and do not depend on a host SDK. `npx skills add . --list` previews
-the manifest-backed inventory, `npx skills add . --all` installs the unified
-suite, and `npx skills add . --skill translating-japanese --agent claude-code`
-illustrates separate specialist installation. `--skill '*' --agent HOST`
-selects the complete suite for an explicit host. The smoke installer verifies
-the exact manifest inventory in disposable targets for Claude Code, Codex,
-Cursor, and universal hosts; it never writes a developer's global skill
-directory. Individual installation remains discoverable but does not install
-transitive dependencies, so orchestration uses the full-suite command.
+Every discoverable skill lives at `skills/<name>/SKILL.md` with only `name` and
+`description` frontmatter. Skill bodies avoid host-specific invocation syntax
+and undocumented dependencies outside their own directories.
 
-The public catalog and README disclose that translations are AI-generated and
-have not been reviewed by a human translator. This is publication and
-installation information; generated translation output does not repeat a
-generic runtime warning or claim human review.
+Routing and policy scripts use Python's standard library and no host SDK. The
+same suite is discoverable by Claude Code, Codex, Cursor, and universal Agent
+Skills hosts. The smoke installer verifies the exact manifest inventory in
+disposable targets and never writes to a developer's global skill directory.
+
+See [Getting started](getting-started.md) for installation commands and the
+[benchmarking overview](benchmarking.md) for evaluation workflows.
