@@ -25,15 +25,16 @@ class ManifestTests(unittest.TestCase):
         manifest = load_manifest(ROOT / "skills-manifest.json")
         by_name = {skill.name: skill for skill in manifest.skills}
         self.assertEqual(manifest.schema_version, 2)
-        self.assertEqual(manifest.suite_version, "0.3.0")
+        self.assertEqual(manifest.suite_version, "0.4.0")
         self.assertEqual(manifest.orchestrator, "translating-products")
-        self.assertEqual(by_name["translating-products"].version, "0.3.0")
-        self.assertEqual(by_name["reviewing-translations"].version, "0.2.0")
+        self.assertEqual(by_name["translating-products"].version, "0.4.0")
+        self.assertEqual(by_name["translating-core"].version, "0.2.0")
+        self.assertEqual(by_name["reviewing-translations"].version, "0.3.0")
         self.assertEqual(
             manifest.minimum_skill_versions["reviewing-translations"],
-            "0.2.0",
+            "0.3.0",
         )
-        self.assertEqual(len(manifest.skills), 22)
+        self.assertEqual(len(manifest.skills), 23)
         self.assertEqual(
             set(manifest.minimum_skill_versions),
             {skill.name for skill in manifest.skills if skill.name != manifest.orchestrator},
@@ -51,7 +52,7 @@ class ManifestTests(unittest.TestCase):
     def test_manifest_exposes_declarative_routing_metadata(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")
         self.assertEqual(manifest.schema_version, 2)
-        self.assertEqual(manifest.suite_version, "0.3.0")
+        self.assertEqual(manifest.suite_version, "0.4.0")
 
         web = skill_by_name(manifest, "translating-web")
         self.assertEqual(
@@ -111,6 +112,22 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(portuguese.specificity, "language")
         self.assertEqual(review.phases, ("review",))
         self.assertEqual(review.specificity, "quality")
+
+    def test_polish_declares_language_refinement_scope(self):
+        """Break: pl-PL could silently fall back to core without Polish guidance."""
+        manifest = load_manifest(ROOT / "skills-manifest.json")
+        polish = skill_by_name(manifest, "translating-polish")
+
+        self.assertEqual(
+            tuple(selector.as_dict() for selector in polish.selectors),
+            ({"languages": ("pl",)},),
+        )
+        self.assertEqual(polish.phases, ("refine",))
+        self.assertEqual(polish.specificity, "language")
+        self.assertEqual(
+            polish.depends_on,
+            ("translating-core", "reviewing-translations"),
+        )
 
     def test_manifest_rejects_invalid_routing_phases(self):
         self.assert_manifest_rejected(

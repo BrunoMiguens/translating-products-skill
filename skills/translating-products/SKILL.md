@@ -38,12 +38,12 @@ Follow this order:
 5. After approval, copy the files from `SKILL_DIRECTORY/assets/translation-project/` into `.translation/` as needed, fill every required value, and change both document statuses to `approved`. Do not overwrite existing project decisions silently.
 6. Bind approval to those exact bytes with `python3 SKILL_DIRECTORY/scripts/policy.py approve --project-root PROJECT_ROOT --approved-by APPROVER --approved-at TIMESTAMP`. Add `--approved-empty glossary.csv` or `--approved-empty protected-terms.txt` only for each explicitly approved empty collection.
 7. Rerun the bootstrap command. Proceed only when it returns `translate`; any content or line-ending change to the five context files invalidates the recorded hashes and requires reapproval. Optional project-memory files do not invalidate them.
-8. Inspect the supplied artifact and approved project context. Build **one task profile per target locale** with the exact source and target locale, language, explicit or observed scripts, audience, purpose, register, surfaces, platforms, formats, domains, structural constraints, and approved terminology and style decisions. Do not guess a material missing field: restart the one-question-at-a-time setup before translation begins.
+8. Inspect the supplied artifact and approved project context. Build **one task profile per target locale** with the exact source and target locale, language, explicit or observed scripts, audience, purpose, surfaces, platforms, formats, domains, structural constraints, and approved terminology and style decisions. Model register as separate dimensions: form of address, institutional or personal voice, courtesy, directness, and surface-specific subject, title, body, label, and call-to-action conventions. Build product-language evidence from approved glossary and translation-memory entries plus structurally aligned existing target copy. Exclude stale, semantically changed, known-defective, and in-scope target strings unless they were separately verified. Treat corpus usage as evidence below approved context and semantic fidelity, never as automatic authority. Map semantic groups from artifact structure and meaning: related assessment stems and choices, lifecycle or event families, multi-field messages, and repeated or paraphrased concepts belong together even when their keys differ. Do not guess a material missing field: restart the one-question-at-a-time setup before translation begins.
 9. Load `SKILL_DIRECTORY/references/capability-catalog.json`, then invoke `SKILL_DIRECTORY/scripts/route_capabilities.py REQUEST_JSON` with a schema `2` request containing the shared task fields and an isolated target entry for each target locale. For an already-installed external specialist, pass its schema-`2` catalog or manifest with repeatable `--external-catalog PATH` and each portable `--installed-root PATH`; the root must contain `<skill-name>/SKILL.md` and its matching `capability-manifest.json`. Authorize it through `authorized_external_skills` or `project_authorized_external_skills` in the approved request, or pass a reviewed `--compatibility-registry PATH`. Input order is deterministic after bundled skills; duplicate names and unauthorized, uninstalled, or malformed records fail before routing.
 10. Inspect every route reason in the returned per-locale plans. Reject an unexplained module and any external module that is not already installed and authorized. Compose only the capabilities that contribute to this profile: core, relevant language or locale, writing system when its declared mechanics contribute, relevant surface/platform/format/domain modules, and QA.
 11. Load every selected bundled skill completely once. For each selected external skill, consume only its returned `external_loads.files` payload: strictly base64-decode every path-sorted file, verify its declared size and SHA-256, recompute `tree_sha256` from the canonical inventory without `content_base64`, and load `SKILL.md` and referenced content from those verified bytes as one atomic artifact. Treat `load_path` as advisory and never reopen it or the original installation root for authoritative bytes. Fail the external load on any missing, duplicate, malformed, or mismatched entry. Execute each successfully loaded skill only in its declared phases. Production skills provide reusable reasoning and procedures; evaluation cases are not routing rules or fixed answers.
-12. Run shared surface, platform, and format `inspect` work before linguistic drafting. Preserve its resulting translation contract for every target branch.
-13. For each target branch, `translate` with core against `.translation/glossary.csv`, `.translation/style-guide.md`, and `.translation/protected-terms.txt`; `refine` broad-to-narrow with selected writing-system, language, and locale modules; `integrate` through the selected product modules; then run the primary six-pass review. **Do not combine linguistic branches**: merge outputs only after every target completes review.
+12. Run shared surface, platform, and format `inspect` work before linguistic drafting. Preserve its resulting translation contract for every target branch. Identify unapproved terms that recur across semantic groups or materially affect domain meaning, legal meaning, participant roles, or answer validity. Resolve them from approved glossary and decisions, translation memory, verified corpus evidence, and bundled or pinned knowledge in that order. When a critical term remains unresolved, run a standalone terminology pass. Use `should_research` only for one concrete unresolved current, market, or terminology question; if material ambiguity remains, withhold the affected group and ask rather than bulk-propagating a literal draft. Ordinary low-impact choices may remain explicitly recorded drafts.
+13. For each target branch, `translate` with core against `.translation/glossary.csv`, `.translation/style-guide.md`, `.translation/protected-terms.txt`, the verified product-language evidence, and semantic-group map; `refine` broad-to-narrow with selected writing-system, language, and locale modules; `integrate` through the selected product modules; then run the primary six-pass review. Draft and refine each semantic group together for conceptual consistency while preserving every unit's individual output contract and surface grammar. **Do not combine linguistic branches**: merge outputs only after every target completes review.
 14. After each primary locale review, execute the holistic review workflow below. Derive and call `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` exactly as specified below, then branch only on its boolean result. A true result uses a fresh-agent context; a false result uses a sequential challenge pass and records that context isolation was unavailable.
 15. Append newly inferred decisions to `.translation/decisions.md` and newly inferred terms to draft terminology with `draft` status; do not silently promote either to approved policy.
 16. Re-read the caller-requested output contract and apply it to the completed
@@ -75,7 +75,8 @@ After each primary locale review:
    whose primary pass reports no issue plus any additional selected units; for
    `full_challenge`, challenge every unit. Build sanitized challenge input from
    approved context, routed selected and missing capabilities, source, current
-   target, protected terms, and automatic checks. It excludes primary
+   target, protected terms, verified product-language evidence, semantic-group
+   membership, and automatic checks. It excludes primary
    conclusions: primary issues, confidence, classification, recommendation,
    and rationale are absent.
 4. Derive the six subagent policy inputs below. Call the installed
@@ -85,10 +86,12 @@ After each primary locale review:
    pass in the same agent context, set `execution_mode: sequential`, and record
    that context isolation was unavailable.
 6. Adjudicate disagreements through ownership and the authority precedence
-   below.
+   below. Treat human feedback as high-value evidence with separate provenance,
+   not automatic authority: recheck every suggestion for semantic fidelity,
+   product roles, terminology, structure, and claims before accepting it.
 7. Correct accepted defects through their owner, changing only the changed unit,
-   then rerun ordinary six-pass QA only on each changed unit and record
-   `recommendation_qa`.
+   compare it with unchanged members of its semantic group, then rerun ordinary
+   six-pass QA only on each changed unit and record `recommendation_qa`.
 8. Construct the complete canonical result and run
    `python3 REVIEW_SKILL_DIRECTORY/scripts/validate_review_artifact.py --request
    REVIEW_REQUEST.json --result REVIEW_RESULT.json`. Add `--draft-terminology
@@ -278,6 +281,11 @@ Within one ownership dimension, resolve conflicts from highest to lowest:
 6. language guidance;
 7. broader writing-system guidance; and
 8. stylistic preference.
+
+Human reviewer suggestions are evidence at the relevant level rather than a
+new authority tier. Record their provenance separately and accept them only
+when they preserve higher-precedence meaning, structure, product roles, and
+approved terminology.
 
 ## Runtime failures
 

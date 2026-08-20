@@ -81,9 +81,11 @@ full-suite command when you want automatic orchestration.
 
 Start with `translating-products`. For each exact target locale, it builds a
 task profile from language, locale range, writing system, surface, platform,
-format, domain, requested capability, audience, purpose, register, and
-protected structural constraints. It declaratively matches that profile to the
-catalog's selectors, expands declared dependencies, and runs the smallest
+format, domain, requested capability, audience, purpose, register dimensions,
+and protected structural constraints. Register separates form of address,
+institutional or personal voice, courtesy, directness, and surface convention
+instead of reducing tone to a formal/informal switch. It declaratively matches
+that profile to the catalog's selectors, expands declared dependencies, and runs the smallest
 sufficient route. Routing does not depend on a hardcoded surface-to-skill or
 language-product classification.
 
@@ -94,6 +96,16 @@ and locale guidance refines only its owned linguistic dimension; review checks
 the completed result. Locale guidance refines language guidance, which refines
 broader writing-system defaults, without overriding semantic fidelity,
 approved terminology, or protected values.
+
+Before drafting, the suite can derive product-language evidence from approved
+glossary and translation-memory entries plus structurally aligned, verified
+existing target copy. It groups related units—such as an assessment stem and
+its choices, an email's subject and body, or repeated lifecycle events—so
+terminology, participant roles, and truth are checked across the whole concept.
+Existing copy and human suggestions remain evidence rather than automatic
+authority. Recurring or high-impact unresolved terminology receives a focused
+terminology decision; web research remains gated to one concrete unresolved
+question instead of running routinely.
 
 A task can therefore use several skills without loading unrelated guidance.
 Latin, CJK, and RTL are possible coherent writing-system capability modules,
@@ -149,7 +161,7 @@ by [`scripts/render_catalog.py`](scripts/render_catalog.py). The generated
 is the machine-oriented routing view of the same manifest records.
 
 <!-- skill-inventory:start -->
-Suite version: `0.3.0`
+Suite version: `0.4.0`
 
 | Skill | Category | When to use |
 | --- | --- | --- |
@@ -175,6 +187,7 @@ Suite version: `0.3.0`
 | [`translating-spanish`](skills/translating-spanish/) | `language` | Use when refining Spanish translations for Spain, Latin America, or a named region, including regional vocabulary, pronouns, formality, and product register. |
 | [`translating-french`](skills/translating-french/) | `language` | Use when refining French translations for France or Canada, including regional vocabulary, formality, typography, spacing, anglicisms, and product register. |
 | [`translating-german`](skills/translating-german/) | `language` | Use when refining German translations for Germany, Austria, or Switzerland, including formality, terminology, compounds, capitalization, expansion, and UI constraints. |
+| [`translating-polish`](skills/translating-polish/) | `language` | Use when refining Polish translations for Poland, including address strategy, register, aspect, case government, collocations, agreement, and natural product or financial wording. |
 <!-- skill-inventory:end -->
 
 ## Sources and reproducibility

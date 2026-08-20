@@ -25,6 +25,10 @@ from scripts.render_catalog import InventoryMarkerError, split_readme_inventory
 
 NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+REPOSITORY_SLUG = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?/"
+    r"[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$"
+)
 HOST_TOKENS = (
     re.compile(r"\$[a-z0-9-]+", re.I),
     re.compile(r"@[a-z0-9-]+", re.I),
@@ -703,6 +707,16 @@ def _validate_install_commands(markdown: str) -> list[str]:
     if not records:
         return ["no fenced npx skills add commands found"]
 
+    remote_sources = {
+        record["source"] for record in records if record["source"] != "."
+    }
+    remote_source = next(iter(remote_sources)) if len(remote_sources) == 1 else None
+    if len(remote_sources) > 1:
+        errors.append("remote install examples must use one repository source")
+    if remote_source is not None and REPOSITORY_SLUG.fullmatch(remote_source) is None:
+        errors.append("remote install source must be an OWNER/REPOSITORY slug")
+        remote_source = None
+
     coverage = {
         "local preview": any(
             record["source"] == "." and record["list"] for record in records
@@ -711,18 +725,18 @@ def _validate_install_commands(markdown: str) -> list[str]:
             record["source"] == "." and record["all"] for record in records
         ),
         "remote full-suite install": any(
-            record["source"] == "OWNER/REPOSITORY" and record["all"]
+            record["source"] == remote_source and record["all"]
             for record in records
         ),
         "individual specialist install": any(
-            record["source"] == "OWNER/REPOSITORY"
+            record["source"] == remote_source
             and "translating-japanese" in record["skills"]
             for record in records
         ),
     }
     for agent in sorted(SUPPORTED_AGENTS):
         coverage[f"remote wildcard install for {agent}"] = any(
-            record["source"] == "OWNER/REPOSITORY"
+            record["source"] == remote_source
             and "*" in record["skills"]
             and agent in record["agents"]
             for record in records

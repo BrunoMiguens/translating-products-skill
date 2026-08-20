@@ -26,9 +26,15 @@ wrappers to the public response.
 
 ## Review Inputs
 
-Read the complete source, complete target, source and target locales, project brief, glossary, protected terms, style guide, structural constraints, installed specialist responsibilities, and retry history. Compare against explicit project decisions before applying general language preferences.
+Read the complete source, complete target, source and target locales, project brief, glossary, protected terms, style guide, structural constraints, installed specialist responsibilities, retry history, verified target-product evidence, and semantic-group map. Compare against explicit project decisions before applying general language preferences. Treat existing target copy as evidence only within its verified scope; it never outranks approved context or semantic fidelity.
 
 Run all six passes in order. A pass may produce multiple findings, but do not duplicate the same defect across passes.
+
+Before the passes, confirm or construct semantic groups from artifact structure
+and meaning: question stems and choices, subjects and message fields,
+lifecycle or event families, and repeated or paraphrased concepts. Review every
+unit individually and against each relevant group. Do not require identical
+wording where surface grammar differs.
 
 Across those passes, reason about target-only naturalness, semantic relationships,
 register and audience, locale conventions, source-quality separation, and surface
@@ -40,19 +46,34 @@ installed language or locale specialist.
 
 ## Semantic QA
 
-Compare meaning unit by unit. Find omissions, additions, mistranslations, changed factual polarity, weakened or strengthened claims, altered relationships, and drift in names, numbers, dates, units, or uncertainty. Check that idioms, humor, and calls to action preserve their intended effect.
+Compare meaning unit by unit and across each semantic group. Find omissions, additions, mistranslations, changed factual polarity, weakened or strengthened claims, altered relationships, and drift in names, numbers, dates, units, or uncertainty. Check that idioms, humor, and calls to action preserve their intended effect.
+
+For each event or state, map the participants and roles: initiator, affected
+object, recipient or owner, result, and responsible actor. Reject wording that
+changes agency merely because the source and target prefer different
+grammatical subjects. For assessments, review the stem and all answer choices
+together; verify that translation has not changed which options are true,
+false, plausible, exclusive, or responsive to the stem.
 
 Route meaning and factual-parity defects to `translating-core` unless a more specific installed domain specialist owns the source concept.
 
 ## Terminology QA
 
-Check every approved glossary entry, protected term, name, number, identifier, and intentionally untranslated span. Detect inconsistent terms, unapproved substitutions, accidental mixed language, and draft terminology presented as approved.
+Check every approved glossary entry, protected term, name, number, identifier, and intentionally untranslated span. Detect inconsistent terms, unapproved substitutions, accidental mixed language, and draft terminology presented as approved. Compare recurring concepts across semantic groups and surfaces, allowing grammar and surface convention to change their realization without changing the concept.
+
+For unapproved terminology, rank evidence as approved project decisions,
+translation memory, then structurally aligned verified target copy. Existing
+copy is not authoritative when it is stale, semantically different, or known
+to be defective. A recurring or high-impact unresolved term that affects
+domain meaning, legal meaning, participant roles, or answer validity requires a
+terminology decision; do not approve bulk repetition merely because it is
+consistent.
 
 Route glossary and protected-span defects to the installed terminology or domain owner; otherwise use `translating-core`. Route language-specific inflection around an otherwise correct approved term to the installed language specialist.
 
 ## Linguistic QA
 
-Read the target independently for natural target-language order, grammar, agreement, cohesion, register, rhythm, idioms, and unintended source-language calques. Check that deliberate mixed language remains deliberate.
+Read the target independently for natural target-language order, grammar, agreement, cohesion, register, rhythm, idioms, and unintended source-language calques. Check that deliberate mixed language remains deliberate. Review form of address, institutional or personal voice, courtesy, directness, and surface conventions separately; a single formal/informal label is not sufficient evidence of register fit.
 
 Route language and register defects to the installed target-language specialist, or to `translating-core` when none is installed.
 
@@ -104,8 +125,9 @@ The primary reviewer applies all six passes and records issues, confidence, and
 whether human review is required. For `selective_challenge`, challenge only the
 units whose primary pass found no issue, plus any additional selected units; for
 `full_challenge`, challenge every unit. Construct challenge input from approved
-context, route capabilities, source, current target, protected terms, and
-automatic checks. Challenge input excludes primary conclusions: omit primary
+context, route capabilities, source, current target, protected terms, verified
+target-product evidence, semantic-group membership, and automatic checks.
+Challenge input excludes primary conclusions: omit primary
 findings, confidence, classification, recommendation, and rationale so the
 challenge pass receives the same sanitized evidence in every execution mode.
 A fresh-agent context can supply an independently blinded reviewer. A
@@ -122,8 +144,17 @@ defects become `change_recommended`; an empty accepted issue set becomes
 classification. Source defects that prevent a sound decision use
 `blocked_by_source` with `blocks_decision: true`; unresolved evidence or
 ownership conflicts remain `unresolved`. The correction owner changes only the
-smallest affected target segment, then an ordinary six-pass QA runs on that
-changed unit and is recorded in `recommendation_qa`.
+changed unit, compares it against unchanged members of its semantic group,
+then an ordinary six-pass QA runs on that changed unit and is recorded in
+`recommendation_qa`.
+
+Treat a human review suggestion as high-value evidence with separate
+provenance, not as an automatic correction. Recheck its meaning, participant
+roles, terminology, structure, factual claims, and group effects. Accept,
+adapt, or reject it through the same authority precedence; never introduce an
+addition, omission, or changed claim merely because the suggestion is native
+sounding. Preserve `human_review.status` independently from the machine
+classification and adjudication outcome.
 
 After constructing the complete request and result, run:
 

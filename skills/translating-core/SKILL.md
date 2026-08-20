@@ -22,8 +22,12 @@ Read the complete source and neighboring context before drafting. Establish:
 
 - audience, purpose, medium, and desired action
 - source and target language plus full locale when known
-- register, formality, voice, and relationship to the reader
+- form of address, institutional or personal voice, courtesy, directness, and
+  surface-specific register conventions
 - glossary, style guide, protected terms, and project decisions
+- verified existing target-product evidence and its approved scope
+- semantic groups such as related assessment items, event families,
+  multi-field messages, and repeated concepts
 - required structure and non-translatable spans
 
 Resolve a missing choice from context when the evidence is strong. Ask one focused question when locale, audience, or register ambiguity would materially change the translation; otherwise state the narrow assumption in decision notes.
@@ -45,13 +49,51 @@ Keep protected terms exactly unchanged, including capitalization. Keep non-trans
 
 Apply approved glossary entries consistently, using any grammatical treatment the glossary permits. Resolve conflicts by following explicit user requirements, then the approved project brief, glossary, and style guide.
 
-Choose a coherent target term when no approved entry exists. Record only newly inferred choices as `draft`; never present them as approved or silently add them to the glossary. Include the source term, chosen target, scope, and a short rationale when the choice is not self-evident. Do not repeat approved glossary entries as new decisions.
+When no approved entry exists, consult translation memory and structurally
+aligned, verified target-product copy before inventing a term. Treat existing
+copy as usage evidence, not automatic authority: reject stale, semantically
+different, known-defective, and unverified in-scope targets. Prefer the term
+that preserves the source concept and product event across related units, then
+adapt its grammatical realization to each surface.
+
+Before drafting a recurring or high-impact unapproved term, determine whether
+it materially affects domain meaning, legal meaning, participant roles, or the
+truth of an answer. Return such an unresolved term to the orchestrator for a
+standalone terminology decision rather than propagating a literal draft.
+Ordinary low-impact choices may proceed as explicit drafts.
+
+Record only newly inferred choices as `draft`; never present them as approved
+or silently add them to the glossary. Include the source term, chosen target,
+scope, and a short rationale when the choice is not self-evident. Do not repeat
+approved glossary entries as new decisions.
 
 ## Naturalness
 
 Write idiomatic target-language sentences with natural information order, rhythm, cohesion, and register. Recreate idioms, humor, metaphors, and calls to action by their intended effect rather than word-for-word form. Adapt cultural references only as far as needed to preserve that effect, without changing facts or brand intent.
 
 Use the requested locale's vocabulary, grammar, spelling, punctuation, and conventions. Avoid source-language calques and accidental mixed language unless a span is protected or the locale normally retains it.
+
+For each event or state, identify the participants and roles before choosing
+the target construction: who initiated the action, what changed, who received
+or owns the result, and whether the source describes an action, outcome, or
+state. The target may use active, passive, impersonal, reflexive, or nominal
+wording differently from the source, but it must not transfer agency or
+responsibility to another participant.
+
+Treat register as several coordinated choices rather than one formal/informal
+switch. Keep form of address, institutional or personal voice, courtesy,
+directness, and surface convention consistent with the approved context. A
+formal product does not automatically need frequent direct address, and a
+friendly product does not authorize added familiarity.
+
+## Related Units
+
+Translate semantic groups together when units jointly express one concept:
+question stems with their answer choices, email subjects with previews and
+bodies, lifecycle or transaction families, and repeated or paraphrased product
+events. Preserve the truth, role, and conceptual terminology of the group while
+allowing each unit to use grammar and wording natural for its surface. Do not
+force identical target strings merely because the source repeats a word.
 
 ## Structure Preservation
 

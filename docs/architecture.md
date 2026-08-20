@@ -13,8 +13,9 @@ is the orchestrator's local routing input.
 optional sub-agent decisions, conflict resolution, and failure recovery. It
 does not duplicate detailed linguistic or platform rules.
 
-`translating-core` owns semantic fidelity, source context, audience, register,
-glossaries, protected terms, style, and structural preservation. Surface and
+`translating-core` owns semantic fidelity, source context, audience, register
+dimensions, product-language evidence, semantic groups, glossaries, protected
+terms, style, and structural preservation. Surface and
 platform skills own their file formats and product constraints. Script and
 language skills own writing-system, locale, and linguistic decisions.
 `reviewing-translations` owns final structural and linguistic QA.
@@ -37,8 +38,10 @@ numbers, links, code, or approved terminology.
 For every exact target locale, the orchestrator builds a task profile with
 source and target locale, language, explicit or observed writing system,
 surface, platform, format, domain, requested capability, audience, purpose,
-register, and protected constraints. It matches declarative catalog selectors
-on those axes, adds the mandatory core and review capabilities, expands
+register dimensions, and protected constraints. It also maps related units by
+artifact structure and meaning and derives product-language evidence from
+approved memory plus verified existing target copy. It matches declarative
+catalog selectors on those axes, adds the mandatory core and review capabilities, expands
 dependencies, resolves conflicts and explicit supersession, then orders the
 result by phase, ownership, specificity, and stable manifest order. The router
 enumerates generic axes; it contains no surface-to-skill table or
@@ -182,15 +185,16 @@ platform specialists add format-specific checks such as HTML metadata, String
 Catalogs, Android resources, ARB files, store limits, and bidirectional UI.
 
 Linguistic QA checks meaning, omissions, additions, terminology, locale,
-register, naturalness, literal idioms, mixed-language residue, plurals,
-typography, and locale formats. Failures return only the affected segment to
+multidimensional register, naturalness, literal idioms, mixed-language residue,
+plurals, typography, and locale formats. Failures return only the affected segment to
 the responsible specialist; valid output is preserved.
 
 The primary reviewer retains six ordered passes: semantic, terminology,
 linguistic, locale, structural, and surface. It also reads the target
-independently for naturalness and checks semantic relationships, audience and
-register, locale conventions, source quality separately from translation
-quality, and fitness for the selected surface. Locale-specific grammar and
+independently for naturalness and checks semantic groups, event participants
+and agency, assessment truth, audience and register dimensions, locale
+conventions, source quality separately from translation quality, and fitness
+for the selected surface. Locale-specific grammar and
 mechanics remain owned by installed specialists.
 
 Review depth resolves through `policy.py review-depth`. Full caller requests,
@@ -201,13 +205,17 @@ higher-precedence full-review condition applies; ordinary translation QA is a
 `single` review otherwise.
 
 Challenge input contains the approved context, route capabilities, source,
-current target, protected terms, and automatic checks, but no primary finding,
+current target, protected terms, verified product-language evidence,
+semantic-group membership, and automatic checks, but no primary finding,
 confidence, classification, recommendation, or rationale. This blinded data
 flow limits direct anchoring. It is independently blinded only in a fresh-agent
 context; a same-agent sequential challenge retains the limitation recorded by
 its execution mode. Disagreements resolve through ownership and the normal
-authority order. Accepted defects are corrected by their owner, and only
-changed units repeat ordinary QA.
+authority order. Human suggestions are retained as separate provenance and
+adjudicated against the same semantic and structural authority rather than
+being accepted automatically. Accepted defects are corrected by their owner,
+checked against related unchanged units, and only changed units repeat ordinary
+QA.
 
 The canonical schema and validator define request/result records. Unit status
 is one of `no_issue_detected`, `change_recommended`, `blocked_by_source`, or
@@ -219,6 +227,12 @@ completion, with optional draft terminology validated in the same gate.
 Inferred terminology is recorded only as `draft`. It remains non-authoritative,
 cannot satisfy approved glossary requirements, and requires the project's
 normal human or declared approval process before use as policy.
+
+An unapproved term receives a standalone terminology decision before drafting
+when it recurs or materially affects domain or legal meaning, participant
+roles, or answer validity. Approved project context, translation memory, and
+verified corpus evidence are tried before the existing one-question research
+gate; low-impact choices may remain explicit drafts.
 
 ## Failure recovery
 

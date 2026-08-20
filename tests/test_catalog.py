@@ -89,7 +89,7 @@ class CatalogTests(unittest.TestCase):
                 render_readme_inventory(ROOT / "skills-manifest.json", readme)
             )
             text = readme.read_text(encoding="utf-8")
-            self.assertIn("Suite version: `0.3.0`", text)
+            self.assertIn("Suite version: `0.4.0`", text)
             linked = [
                 line.split("(skills/", 1)[1].split("/)", 1)[0]
                 for line in text.splitlines()

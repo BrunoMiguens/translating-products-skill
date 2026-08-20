@@ -37,7 +37,9 @@ Use this sequence for every specialist change:
    specialist is selectable without changing router code.
 6. Add representative language, script, platform, or product-surface fixtures.
    Preserve placeholders, links, code, markup, keys, and other protected
-   structure in expected decisions.
+   structure in expected decisions. Include semantic groups when units jointly
+   determine terminology, participant roles, or truth. Use synthetic examples
+   rather than private product strings or benchmark answers.
 7. Verify every adapted source's compatible license, immutable commit, path,
    checksum, attribution, and local adapter.
 8. Render the manifest-derived catalog and README inventory.
@@ -58,6 +60,12 @@ classes, and QA evidence or handoff. Examples are representative and
 non-exhaustive; direct benchmark prompt or expected-answer reuse fails
 validation. Keep production skills to reusable reasoning rather than fixed
 answers or case-by-case routing prose.
+
+Language guidance should describe transferable mechanisms such as event
+framing, collocation, agreement, register dimensions, and surface realization.
+Do not hardcode a reviewed correction. Existing target copy and human reviewer
+suggestions are evidence: contributors must still verify meaning, structure,
+participant roles, and approved terminology before accepting them.
 
 An external specialist must already be installed and use the same schema-`2`
 catalog fields and selector semantics as bundled skills. Its catalog metadata

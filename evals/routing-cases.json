@@ -90,6 +90,16 @@
     "expected_routes": [{"target_locale": "de-AT", "selected": ["reviewing-translations", "translating-core", "translating-web", "translating-german"]}]
   },
   {
+    "id": "pl-software",
+    "request": {"schema_version": 2, "source_locale": "en-GB", "targets": [{"locale": "pl-PL"}], "surfaces": ["software"], "platforms": [], "formats": [], "domains": ["finance"], "capabilities": [], "audience": "Retail customers", "purpose": "Transactional account copy", "register": "institutional direct"},
+    "expected_routes": [{"target_locale": "pl-PL", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-polish"]}]
+  },
+  {
+    "id": "cs-software-no-polish",
+    "request": {"schema_version": 2, "source_locale": "en-GB", "targets": [{"locale": "cs-CZ"}], "surfaces": ["software"], "platforms": [], "formats": [], "domains": ["finance"], "capabilities": [], "audience": "Retail customers", "purpose": "Transactional account copy", "register": "institutional direct"},
+    "expected_routes": [{"target_locale": "cs-CZ", "selected": ["reviewing-translations", "translating-core", "localizing-software"]}]
+  },
+  {
     "id": "mobile-only",
     "request": {"schema_version": 2, "source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": ["mobile"], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
     "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core", "translating-mobile"]}]

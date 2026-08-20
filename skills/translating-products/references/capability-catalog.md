@@ -1,6 +1,6 @@
 # Capability catalog
 
-Suite version: `0.3.0`
+Suite version: `0.4.0`
 
 ## Disclosure
 
@@ -20,7 +20,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 
 ### translating-products
 
-- Version: `0.3.0`
+- Version: `0.4.0`
 - Description: Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.
 - Capabilities: `orchestrator`, `project-bootstrap`, `skill-routing`, `subagent-routing`
 - Depends on: `translating-core`, `reviewing-translations`
@@ -37,7 +37,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 
 ### translating-core
 
-- Version: `0.1.0`
+- Version: `0.2.0`
 - Description: Use when producing meaning-faithful, natural, culturally appropriate translations for any language translation before applying product or language specialists.
 - Capabilities: `core-translation`, `terminology`, `cultural-adaptation`, `structural-fidelity`
 - Depends on: `reviewing-translations`
@@ -54,7 +54,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 
 ### reviewing-translations
 
-- Version: `0.2.0`
+- Version: `0.3.0`
 - Description: Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.
 - Capabilities: `translation-qa`, `terminology-qa`, `structural-qa`
 - Depends on: none
@@ -360,4 +360,19 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Conflicts: none
 - Supersedes: none
 - Ownership: `language:german`: `refine`; `locale:de-DE`: `refine`; `locale:de-AT`: `refine`; `locale:de-CH`: `refine`
+- Independent review required: `false`
+
+### translating-polish
+
+- Version: `0.1.0`
+- Description: Use when refining Polish translations for Poland, including address strategy, register, aspect, case government, collocations, agreement, and natural product or financial wording.
+- Capabilities: `language:polish`, `locale:pl-PL`
+- Depends on: `translating-core`, `reviewing-translations`
+- Selectors: `languages`: `pl`
+- Phases: `refine`
+- Specificity: `language`
+- Required context: `target_locale`, `register`
+- Conflicts: none
+- Supersedes: none
+- Ownership: `language:polish`: `refine`; `locale:pl-PL`: `refine`
 - Independent review required: `false`

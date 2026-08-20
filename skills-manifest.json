@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "suite_version": "0.3.0",
+  "suite_version": "0.4.0",
   "orchestrator": "translating-products",
   "minimum_skill_versions": {
-    "translating-core": "0.1.0",
-    "reviewing-translations": "0.2.0",
+    "translating-core": "0.2.0",
+    "reviewing-translations": "0.3.0",
     "translating-web": "0.1.0",
     "localizing-software": "0.1.0",
     "translating-mobile": "0.1.0",
@@ -23,12 +23,13 @@
     "translating-portuguese": "0.1.0",
     "translating-spanish": "0.1.0",
     "translating-french": "0.1.0",
-    "translating-german": "0.1.0"
+    "translating-german": "0.1.0",
+    "translating-polish": "0.1.0"
   },
   "skills": [
     {
       "name": "translating-products",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "category": "orchestrator",
       "description": "Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.",
       "capabilities": [
@@ -61,7 +62,7 @@
     },
     {
       "name": "translating-core",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "core",
       "description": "Use when producing meaning-faithful, natural, culturally appropriate translations for any language translation before applying product or language specialists.",
       "capabilities": [
@@ -96,7 +97,7 @@
     },
     {
       "name": "reviewing-translations",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "quality",
       "description": "Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.",
       "capabilities": [
@@ -820,6 +821,40 @@
         {
           "languages": [
             "de"
+          ]
+        }
+      ],
+      "phases": [
+        "refine"
+      ],
+      "specificity": "language",
+      "required_context": [
+        "target_locale",
+        "register"
+      ],
+      "conflicts": [],
+      "supersedes": [],
+      "verification": {
+        "independent_review_required": false
+      }
+    },
+    {
+      "name": "translating-polish",
+      "version": "0.1.0",
+      "category": "language",
+      "description": "Use when refining Polish translations for Poland, including address strategy, register, aspect, case government, collocations, agreement, and natural product or financial wording.",
+      "capabilities": [
+        "language:polish",
+        "locale:pl-PL"
+      ],
+      "depends_on": [
+        "translating-core",
+        "reviewing-translations"
+      ],
+      "selectors": [
+        {
+          "languages": [
+            "pl"
           ]
         }
       ],

@@ -1050,6 +1050,21 @@ npx skills add OWNER/REPOSITORY --all
 
             self.assertEqual(validate_distribution(root, self.manifest), [])
 
+    def test_distribution_accepts_a_published_repository_slug(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_valid_distribution(root)
+            readme = (root / "README.md").read_text(encoding="utf-8")
+            (root / "README.md").write_text(
+                readme.replace(
+                    "OWNER/REPOSITORY",
+                    "BrunoMiguens/translating-products-skill",
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(validate_distribution(root, self.manifest), [])
+
     def test_distribution_rejects_inventory_drift_bad_commands_and_broken_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

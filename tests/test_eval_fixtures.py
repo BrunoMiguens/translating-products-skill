@@ -53,12 +53,12 @@ SCHEMAS = {
 }
 
 EXPECTED_COUNTS = {
-    "routing-cases.json": 40,
+    "routing-cases.json": 42,
     "bootstrap-cases.json": 14,
     "orchestration-cases.json": 17,
     "research-cases.json": 15,
     "prompt-injection-cases.json": 10,
-    "translation-quality-cases.json": 22,
+    "translation-quality-cases.json": 27,
     "structural-fidelity-cases.json": 12,
 }
 
@@ -197,6 +197,7 @@ class EvaluationFixtureTests(unittest.TestCase):
             "de-DE",
             "de-AT",
             "de-CH",
+            "pl-PL",
         }
         self.assertTrue(required_locales.issubset(target_locales))
         for case in cases:

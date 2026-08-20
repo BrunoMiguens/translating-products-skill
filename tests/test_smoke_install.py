@@ -409,7 +409,25 @@ class SmokeInstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 9)
         self.assertEqual(len(run["entries"]), 1)
         self.assertEqual(len(run["individual_entries"]), 1)
-        self.assertEqual(len(run["all_individual_entries"]), 7)
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        expected_individual = {manifest["orchestrator"]}
+        seen_categories = set()
+        for item in manifest["skills"]:
+            category = item.get("category", "uncategorized")
+            if category not in seen_categories:
+                seen_categories.add(category)
+                expected_individual.add(item["name"])
+            source_files = [
+                path for path in (ROOT / "skills" / item["name"]).rglob("*")
+                if path.is_file()
+                and "__pycache__" not in path.parts
+                and path.suffix != ".pyc"
+            ]
+            if len(source_files) > 1:
+                expected_individual.add(item["name"])
+        self.assertEqual(
+            len(run["all_individual_entries"]), len(expected_individual)
+        )
         self.assertFalse(run["scratch_exists"])
         self.assertEqual(run["protected"], "sentinel\n")
 
