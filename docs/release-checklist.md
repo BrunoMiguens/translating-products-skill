@@ -4,7 +4,7 @@
 
 The suite remains a prerelease at
 `<!-- suite-version:start -->0.4.0<!-- suite-version:end -->` with 23 manifest
-skills and 7 pinned adapted sources. The public repository is
+skills and 7 pinned adapted sources. The canonical repository is
 [`BrunoMiguens/translating-products-skill`](https://github.com/BrunoMiguens/translating-products-skill).
 
 Do not promote to `1.0.0` until every gate below is complete for the exact
@@ -16,7 +16,7 @@ that runtime translations were reviewed by a human.
 
 | Gate | Status | Required evidence |
 | --- | --- | --- |
-| Public repository configured | Complete | `origin` points to `BrunoMiguens/translating-products-skill`. |
+| Canonical repository configured | Complete | `origin` points to `BrunoMiguens/translating-products-skill`. |
 | Manifest and generated catalog agree | Repeat for release | `render_catalog.py --check` passes and reports the release version and exact skill set. |
 | Repository validation passes | Repeat for release | `validate_repo.py` passes on the exact release commit. |
 | Unit and evaluation tests pass | Repeat for release | Full offline test suite passes on the exact release commit. |
@@ -25,7 +25,7 @@ that runtime translations were reviewed by a human.
 | Cross-agent installation passes | Repeat for release | Disposable Claude Code, Codex, Cursor, and universal targets match the exact manifest inventory. |
 | Host-level fixtures recorded | Blocked | Record all translation-quality and structural-fidelity fixtures on supported hosts. |
 | Bilingual review recorded | Blocked | Record reviewer, locales, fixture revision, date, and findings for every language specialist proposed as stable. |
-| Remote skills preview reviewed | Repeat for release | The public repository listing contains the exact release inventory. |
+| Remote skills preview reviewed | Repeat for release | The canonical repository listing contains the exact release inventory. |
 | Release worktree clean | Repeat for release | No tracked or untracked release artifacts remain after the final commit. |
 
 ## Verification commands
@@ -49,7 +49,7 @@ Run the networked immutable-source check separately:
 python3 scripts/verify_sources.py
 ```
 
-Before publication, preview the public repository rather than only the local
+Before publication, preview the canonical repository rather than only the local
 checkout:
 
 ```bash
