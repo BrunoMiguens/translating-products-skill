@@ -4,6 +4,7 @@ import json
 import io
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -185,8 +186,8 @@ class ProductSetupAdapterTests(ProductSetupStagingTests):
         self.invocation_log = self.root / "setup-invocations.jsonl"
         self.fake_agent = self.root / "fake-agent"
         self.fake_agent.write_text(
-            """#!/opt/homebrew/bin/python3
-import json
+            f"#!{sys.executable}\n"
+            """import json
 import os
 import pathlib
 import sys

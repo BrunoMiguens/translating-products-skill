@@ -5,6 +5,7 @@ import json
 import io
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -270,7 +271,7 @@ class ProductRunnerExecutionTests(ProductRunnerManifestTests):
         super().setUp()
         self.invocation_log = self.root / "invocations.jsonl"
         self.fake_cli = self.root / "fake-agent"
-        script = f"""#!/opt/homebrew/bin/python3
+        script = f"""#!{sys.executable}
 import json
 import os
 import pathlib
