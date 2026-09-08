@@ -29,7 +29,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(manifest.orchestrator, "translating-products")
         self.assertEqual(by_name["translating-products"].version, "0.4.0")
         self.assertEqual(by_name["translating-core"].version, "0.2.0")
-        self.assertEqual(by_name["reviewing-translations"].version, "0.3.0")
+        self.assertEqual(by_name["reviewing-translations"].version, "0.3.1")
         self.assertEqual(
             manifest.minimum_skill_versions["reviewing-translations"],
             "0.3.0",

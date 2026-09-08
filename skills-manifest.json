@@ -97,7 +97,7 @@
     },
     {
       "name": "reviewing-translations",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "quality",
       "description": "Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.",
       "capabilities": [

@@ -117,7 +117,10 @@ For `number_multiset`, prefer the locale-neutral explicit declaration fields
 together; grouping may be null. Omit them only for numeric forms whose meaning
 is unambiguous without locale-specific assumptions. A nonempty request
 `protected_terms` list is always enforced even when the producer omitted a
-`protected_term_multiset` declaration. A recommendation equal to source is
+`protected_term_multiset` declaration. The validator checks `current_target`
+for `no_issue_detected` and the proposed text for `change_recommended`;
+reviewer agreement does not bypass these invariants. Protected multiword names
+are checked as complete literals, not just their brand stem. A recommendation equal to source is
 invalid unless that request unit explicitly sets the exact boolean
 `source_invariant: true`; omission defaults to false.
 

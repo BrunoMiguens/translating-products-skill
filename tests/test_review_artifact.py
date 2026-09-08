@@ -432,6 +432,87 @@ class ReviewArtifactTests(unittest.TestCase):
         result["locales"][0]["units"][1]["recommendation"]["text"] = "Payer maintenant"
         self.assert_invalid(result, "placeholder_multiset")
 
+    def test_no_issue_detected_enforces_full_protected_names(self):
+        """Break: clean QA could accept a partial brand even with approved terms."""
+        for target in ("Ouvrez l’application Cedar", "Ouvrez Cedar app", ""):
+            for declared_values in (None, ["Cedar"]):
+                with self.subTest(target=target, declared_values=declared_values):
+                    request = request_fixture()
+                    result = result_fixture()
+                    request_unit = request["targets"][0]["units"][0]
+                    result_unit = result["locales"][0]["units"][0]
+                    for unit in (request_unit, result_unit):
+                        unit["source"] = "Open Cedar App"
+                        unit["current_target"] = target
+                    request_unit["protected_terms"] = ["Cedar", "Cedar App"]
+                    request_unit["automatic_checks"] = []
+                    if declared_values is not None:
+                        request_unit["automatic_checks"] = [{
+                            "type": "protected_term_multiset",
+                            "severity": "critical",
+                            "values": declared_values,
+                        }]
+                    errors = self.validate(request, result)
+                    protected_errors = [
+                        error for error in errors
+                        if "current_target failed protected_term_multiset" in error
+                    ]
+                    self.assertEqual(len(protected_errors), 1, errors)
+
+    def test_no_issue_detected_checks_declared_structure_and_term_counts(self):
+        """Break: reviewer agreement could bypass placeholders or repeated names."""
+        cases = (
+            ("Hello {name}", "Bonjour {person}", [],
+             [{"type": "placeholder_multiset", "severity": "critical"}],
+             "placeholder_multiset"),
+            ("Open Cedar App, then return to Cedar App.", "Ouvrez Cedar App.",
+             ["Cedar App"], [], "protected_term_multiset"),
+        )
+        for source, target, terms, checks, expected_check in cases:
+            with self.subTest(check=expected_check):
+                request = request_fixture()
+                result = result_fixture()
+                request_unit = request["targets"][0]["units"][0]
+                for unit in (request_unit, result["locales"][0]["units"][0]):
+                    unit["source"] = source
+                    unit["current_target"] = target
+                request_unit["protected_terms"] = terms
+                request_unit["automatic_checks"] = checks
+                self.assert_invalid(result, f"current_target failed {expected_check}", request)
+
+    def test_no_issue_detected_accepts_preserved_terms_and_generic_app_word(self):
+        """Break: protection must preserve names without freezing surrounding prose."""
+        for source, target, terms in (
+            ("Open Cedar App", "Ouvrez Cedar App", ["Cedar", "Cedar App"]),
+            ("Open Cedar in your app", "Ouvrez Cedar dans votre application", ["Cedar"]),
+        ):
+            with self.subTest(source=source):
+                request = request_fixture()
+                result = result_fixture()
+                request_unit = request["targets"][0]["units"][0]
+                for unit in (request_unit, result["locales"][0]["units"][0]):
+                    unit["source"] = source
+                    unit["current_target"] = target
+                request_unit["protected_terms"] = terms
+                request_unit["automatic_checks"] = []
+                self.assertEqual(self.validate(request, result), ())
+
+    def test_unresolved_review_can_report_target_with_broken_protected_term(self):
+        """Break: an incomplete review must remain recordable without pretending it passed."""
+        request = request_fixture()
+        result = result_fixture()
+        request_unit = request["targets"][0]["units"][0]
+        result_unit = result["locales"][0]["units"][0]
+        for unit in (request_unit, result_unit):
+            unit["source"] = "Open Cedar App"
+            unit["current_target"] = "Ouvrez Cedar"
+        request_unit["protected_terms"] = ["Cedar App"]
+        request_unit["automatic_checks"] = []
+        result_unit["classification"] = "unresolved"
+        result["summary"]["counts"]["no_issue_detected"] = 0
+        result["summary"]["counts"]["unresolved"] = 1
+        self.assertEqual(self.validate(request, result), ())
+
     def test_recommendation_checks_embedded_approved_protected_terms(self):
         """Break: approved request terms could be ignored when validating a recommendation."""
         request = request_fixture()
