@@ -54,7 +54,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 
 ### reviewing-translations
 
-- Version: `0.3.0`
+- Version: `0.3.1`
 - Description: Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.
 - Capabilities: `translation-qa`, `terminology-qa`, `structural-qa`
 - Depends on: none

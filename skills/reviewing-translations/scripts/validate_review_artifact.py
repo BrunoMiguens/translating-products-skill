@@ -521,6 +521,87 @@ def _accepted_issue_signatures(
     return None
 
 
+def _validate_completed_candidate(
+    candidate: object,
+    path: str,
+    request_unit: Mapping[str, object] | None,
+    *,
+    source: object,
+    source_locale: object,
+    target_locale: str,
+    errors: list[str],
+) -> None:
+    if request_unit is None or type(candidate) is not str:
+        return
+    checks = request_unit.get("automatic_checks")
+    protected_terms = request_unit.get("protected_terms")
+    if (
+        type(source_locale) is str
+        and type(source) is str
+        and type(checks) is list
+        and type(protected_terms) is list
+        and all(isinstance(check, Mapping) for check in checks)
+        and all(type(term) is str for term in protected_terms)
+    ):
+        effective_checks = list(checks)
+        protected_check_index = next(
+            (
+                index
+                for index, check in enumerate(effective_checks)
+                if check.get("type") == "protected_term_multiset"
+            ),
+            None,
+        )
+        if protected_terms and protected_check_index is None:
+            effective_checks.append({
+                "type": "protected_term_multiset",
+                "severity": "critical",
+            })
+        elif protected_terms and protected_check_index is not None:
+            declared = effective_checks[protected_check_index]
+            configured_key = next(
+                (key for key in ("values", "terms") if key in declared),
+                None,
+            )
+            if configured_key is not None:
+                configured_value = declared[configured_key]
+                if (
+                    not isinstance(configured_value, str)
+                    and isinstance(configured_value, Sequence)
+                    and all(type(term) is str for term in configured_value)
+                ):
+                    configured = list(configured_value)
+                    configured.extend(
+                        term for term in protected_terms if term not in configured
+                    )
+                    augmented = dict(declared)
+                    augmented[configured_key] = configured
+                    effective_checks[protected_check_index] = augmented
+        try:
+            findings = validate_invariants(
+                source=source,
+                candidate=candidate,
+                source_locale=source_locale,
+                target_locale=target_locale,
+                protected_terms=protected_terms,
+                checks=effective_checks,
+            )
+        except (TypeError, ValueError) as error:
+            errors.append(f"{path} automatic checks could not run: {error}")
+        else:
+            reported_protected_errors: set[str] = set()
+            for finding in findings:
+                rendered = (
+                    f"{path} failed {finding.check} "
+                    f"({finding.severity}): {finding.message}"
+                )
+                if finding.check == "protected_term_multiset":
+                    if rendered in reported_protected_errors:
+                        continue
+                    reported_protected_errors.add(rendered)
+                errors.append(rendered)
+
+
 def _validate_result_unit(
     unit_value: object,
     path: str,
@@ -617,6 +698,11 @@ def _validate_result_unit(
             errors.append(
                 f"{path}.source_issue.blocks_decision must be false for no_issue_detected"
             )
+        _validate_completed_candidate(
+            current, f"{path}.current_target", request_unit,
+            source=source, source_locale=source_locale,
+            target_locale=target_locale, errors=errors,
+        )
     elif classification == "change_recommended":
         if recommendation is None:
             errors.append(f"{path}.classification change_recommended requires recommendation")
@@ -650,74 +736,11 @@ def _validate_result_unit(
                     errors.append(
                         f"{path}.recommendation.owner must match an owner in the accepted issue set"
                     )
-            if request_unit is not None and type(text) is str and text.strip():
-                checks = request_unit.get("automatic_checks")
-                protected_terms = request_unit.get("protected_terms")
-                if (
-                    type(source_locale) is str
-                    and type(source) is str
-                    and type(checks) is list
-                    and type(protected_terms) is list
-                    and all(isinstance(check, Mapping) for check in checks)
-                    and all(type(term) is str for term in protected_terms)
-                ):
-                    effective_checks = list(checks)
-                    protected_check_index = next(
-                        (
-                            index
-                            for index, check in enumerate(effective_checks)
-                            if check.get("type") == "protected_term_multiset"
-                        ),
-                        None,
-                    )
-                    if protected_terms and protected_check_index is None:
-                        effective_checks.append({
-                            "type": "protected_term_multiset",
-                            "severity": "critical",
-                        })
-                    elif protected_terms and protected_check_index is not None:
-                        declared = effective_checks[protected_check_index]
-                        configured_key = next(
-                            (key for key in ("values", "terms") if key in declared),
-                            None,
-                        )
-                        if configured_key is not None:
-                            configured_value = declared[configured_key]
-                            if (
-                                not isinstance(configured_value, str)
-                                and isinstance(configured_value, Sequence)
-                                and all(type(term) is str for term in configured_value)
-                            ):
-                                configured = list(configured_value)
-                                configured.extend(
-                                    term for term in protected_terms if term not in configured
-                                )
-                                augmented = dict(declared)
-                                augmented[configured_key] = configured
-                                effective_checks[protected_check_index] = augmented
-                    try:
-                        findings = validate_invariants(
-                            source=source,
-                            candidate=text,
-                            source_locale=source_locale,
-                            target_locale=target_locale,
-                            protected_terms=protected_terms,
-                            checks=effective_checks,
-                        )
-                    except (TypeError, ValueError) as error:
-                        errors.append(f"{path}.recommendation automatic checks could not run: {error}")
-                    else:
-                        reported_protected_errors: set[str] = set()
-                        for finding in findings:
-                            rendered = (
-                                f"{path}.recommendation failed {finding.check} "
-                                f"({finding.severity}): {finding.message}"
-                            )
-                            if finding.check == "protected_term_multiset":
-                                if rendered in reported_protected_errors:
-                                    continue
-                                reported_protected_errors.add(rendered)
-                            errors.append(rendered)
+            _validate_completed_candidate(
+                text, f"{path}.recommendation", request_unit,
+                source=source, source_locale=source_locale,
+                target_locale=target_locale, errors=errors,
+            )
     elif classification == "blocked_by_source":
         if source_issue is None:
             errors.append(f"{path}.classification blocked_by_source requires source_issue")
