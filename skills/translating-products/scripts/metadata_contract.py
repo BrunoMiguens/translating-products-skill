@@ -145,12 +145,12 @@ def validate_verification(value: object, label: str) -> dict[str, object]:
             "independent_review_required": False,
             "runtime_ui_review": "none",
         }
-    if not isinstance(value, dict) or set(value) != VERIFICATION_FIELDS:
+    if not isinstance(value, dict) or not set(value).issubset(VERIFICATION_FIELDS):
         raise ValueError(f"{label} has invalid verification")
-    required = value["independent_review_required"]
+    required = value.get("independent_review_required", False)
     if type(required) is not bool:
         raise ValueError(f"{label} verification must use a boolean")
-    runtime_ui_review = value["runtime_ui_review"]
+    runtime_ui_review = value.get("runtime_ui_review", "none")
     if runtime_ui_review not in {"required", "recommended", "none"}:
         raise ValueError(f"{label} verification has invalid runtime_ui_review")
     return {

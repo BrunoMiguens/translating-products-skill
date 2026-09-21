@@ -79,6 +79,11 @@ This skill owns Apple resource classification, catalog/extraction state, formatt
 
 ## QA Handoff and Release Gates
 
+Perform these checks only after the orchestrator supplies a resolved `run`
+decision. Use the smallest relevant runtime scope for the affected resources and
+states; do not independently choose the runtime-review budget or expand it to
+the whole application.
+
 Pass catalogs, source and target resources, target/build matrix, call-site inventory, screenshots, accessibility intent, and these checks to `reviewing-translations` and CI:
 
 - build and extract every shipped target; reconcile missing, duplicate, stale, untranslated, and review-needed entries under the approved policy

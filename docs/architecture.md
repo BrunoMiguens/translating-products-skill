@@ -254,6 +254,24 @@ Review depth is resolved by `scripts/policy.py review-depth`:
 | `selective_challenge` | The caller requests selective review or a multi-unit audit and no stronger condition applies |
 | `full_challenge` | The caller requests it, policy or route requires it, an essential specialist is missing, confidence is low, or the source is blocked |
 
+Runtime UI review is a separate cross-platform decision. The caller may set
+`required`, `auto`, or `disabled`; an approved project brief may set the same
+optional `Runtime UI review` value. Caller intent takes precedence over project
+configuration, which takes precedence over the selected skills' `required`,
+`recommended`, or `none` capability declaration. Older briefs behave as
+`auto`, and older capability records behave as `none`.
+
+The `runtime-ui-review` policy command resolves `run`, `skip`, or `ask` after
+routing. Under `auto`, a recommendation runs only when the repository provides
+a bounded path to the affected state, such as an existing UI test, fixture,
+deep link, preview, or deterministic navigation. Otherwise the orchestrator
+asks one focused question. The policy and target-level record are portable;
+actual execution depends on the host and project tooling.
+
+Runtime evidence stays compact: the canonical result references screenshots,
+logs, or test artifacts instead of embedding them or repeating them per string.
+Linguistic classifications never imply that runtime review completed.
+
 Challenge input includes approved context, selected capabilities, source,
 current target, protected values, verified evidence, semantic groups, and
 automatic checks. It excludes every primary finding, classification,

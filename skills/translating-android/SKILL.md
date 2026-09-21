@@ -78,6 +78,11 @@ This skill owns Android resource classification, syntax, formatting, layout, and
 
 ## QA Handoff and Release Gates
 
+Perform these checks only after the orchestrator supplies a resolved `run`
+decision. Use the smallest relevant runtime scope for the affected resources and
+states; do not independently choose the runtime-review budget or expand it to
+the whole application.
+
 Pass base and target resources, call-site inventory, locale/build/device matrix, screenshots, accessibility intent, and these checks to `reviewing-translations` and CI:
 
 - compile resources and lint all shipped variants; compare resource names/types, placeholders, plural schemas, markup, escapes, protected values, and `translatable="false"` policy

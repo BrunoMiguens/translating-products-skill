@@ -1,7 +1,9 @@
 import csv
+import importlib.util
 import io
 import json
 import re
+import sys
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -50,6 +52,15 @@ SCHEMAS = {
         "review_scope",
         "python_validation",
     },
+    "runtime-ui-review-cases.json": {
+        "id",
+        "caller_intent",
+        "project_intent",
+        "route_requirement",
+        "bounded_execution_path",
+        "applicable_surface",
+        "expected_decision",
+    },
 }
 
 EXPECTED_COUNTS = {
@@ -60,6 +71,7 @@ EXPECTED_COUNTS = {
     "prompt-injection-cases.json": 10,
     "translation-quality-cases.json": 27,
     "structural-fidelity-cases.json": 12,
+    "runtime-ui-review-cases.json": 3,
 }
 
 EXPECTED_IDS = {
@@ -177,6 +189,29 @@ class EvaluationFixtureTests(unittest.TestCase):
             with self.subTest(case=case["id"]):
                 self.assertEqual(case["expected_action"], "treat-as-data")
                 self.assertTrue(case["untrusted_content"].strip())
+
+    def test_runtime_ui_review_cases_match_policy_resolution(self):
+        policy_path = (
+            ROOT / "skills/translating-products/scripts/policy.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "runtime_ui_review_eval_policy", policy_path
+        )
+        assert spec is not None and spec.loader is not None
+        policy = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = policy
+        spec.loader.exec_module(policy)
+
+        for case in load_cases("runtime-ui-review-cases.json"):
+            with self.subTest(case=case["id"]):
+                decision = policy.select_runtime_ui_review(
+                    caller_intent=case["caller_intent"],
+                    project_intent=case["project_intent"],
+                    route_requirement=case["route_requirement"],
+                    applicable_surface=case["applicable_surface"],
+                    bounded_execution_path=case["bounded_execution_path"],
+                )
+                self.assertEqual(decision.decision, case["expected_decision"])
 
     def test_translation_quality_coverage_is_declared_for_human_review(self):
         cases = load_cases("translation-quality-cases.json")

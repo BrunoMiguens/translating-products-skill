@@ -63,6 +63,11 @@ This skill owns shared mobile context, protected resource boundaries, layout con
 
 ## QA Handoff and Release Gates
 
+Perform these checks only after the orchestrator supplies a resolved `run`
+decision. Use the smallest relevant runtime scope for the affected resources and
+states; do not independently choose the runtime-review budget or expand it to
+the whole application.
+
 Pass source and target resources, locale pair, inventories, screenshots, supported device matrix, accessibility intent, build identifier, and these checks to `reviewing-translations`:
 
 - keys, placeholders, markup, facts, protected terms, and runtime values preserve parity

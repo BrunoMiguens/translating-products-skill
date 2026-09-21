@@ -656,8 +656,27 @@ def _authority_matches(scope: dict, skill: dict) -> bool:
 
 
 def _review_attestation_digest(
-    skill: dict, entry: dict, installed_skill: dict
+    skill: dict,
+    entry: dict,
+    installed_skill: dict,
+    *,
+    legacy_runtime_default: bool = False,
 ) -> str:
+    admitted_skill = skill
+    verification = skill.get("verification")
+    if (
+        legacy_runtime_default
+        and isinstance(verification, dict)
+        and verification.get("runtime_ui_review") == "none"
+    ):
+        admitted_skill = {
+            **skill,
+            "verification": {
+                key: value
+                for key, value in verification.items()
+                if key != "runtime_ui_review"
+            },
+        }
     claims = {
         field: value
         for field, value in entry.items()
@@ -666,7 +685,7 @@ def _review_attestation_digest(
     claims["reviewer"] = _validate_reviewer(entry["reviewer"], skill["name"])
     canonical = json.dumps(
         {
-            "admitted_skill": skill,
+            "admitted_skill": admitted_skill,
             "installed_skill": installed_skill,
             "registry_claims": claims,
         },
@@ -721,7 +740,16 @@ def _validate_registry_bindings(
         expected_evidence = _review_attestation_digest(
             skill, entry, installed_skill
         )
-        if entry["evaluation_evidence"] != [expected_evidence]:
+        legacy_evidence = _review_attestation_digest(
+            skill,
+            entry,
+            installed_skill,
+            legacy_runtime_default=True,
+        )
+        if entry["evaluation_evidence"] not in (
+            [expected_evidence],
+            [legacy_evidence],
+        ):
             raise ValueError(f"compatibility registry evidence mismatch: {name}")
 
 

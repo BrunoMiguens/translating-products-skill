@@ -520,12 +520,12 @@ Expected: PASS with no unexplained failures.
 Run the installed skill creator validator separately for each changed skill directory:
 
 ```sh
-python3 /Users/brunomiguens/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/translating-products
-python3 /Users/brunomiguens/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/reviewing-translations
-python3 /Users/brunomiguens/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/translating-mobile
-python3 /Users/brunomiguens/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/translating-ios
-python3 /Users/brunomiguens/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/translating-android
-python3 /Users/brunomiguens/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/translating-flutter
+python3 "${CODEX_HOME}/skills/.system/skill-creator/scripts/quick_validate.py" skills/translating-products
+python3 "${CODEX_HOME}/skills/.system/skill-creator/scripts/quick_validate.py" skills/reviewing-translations
+python3 "${CODEX_HOME}/skills/.system/skill-creator/scripts/quick_validate.py" skills/translating-mobile
+python3 "${CODEX_HOME}/skills/.system/skill-creator/scripts/quick_validate.py" skills/translating-ios
+python3 "${CODEX_HOME}/skills/.system/skill-creator/scripts/quick_validate.py" skills/translating-android
+python3 "${CODEX_HOME}/skills/.system/skill-creator/scripts/quick_validate.py" skills/translating-flutter
 ```
 
 Expected: each command succeeds. If the installed validator path differs or is unavailable, record that exact limitation and rely on repository validation.

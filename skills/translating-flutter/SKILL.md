@@ -83,6 +83,11 @@ This skill owns Flutter resource classification, generation boundaries, ICU/runt
 
 ## QA Handoff and Release Gates
 
+Perform these checks only after the orchestrator supplies a resolved `run`
+decision. Use the smallest relevant runtime scope for the affected resources and
+states; do not independently choose the runtime-review budget or expand it to
+the whole application.
+
 Pass template and target ARBs, localization configuration, generated-output policy/diff, key/placeholder/ICU inventory, locale/build/device matrix, screenshots, accessibility intent, and these checks to `reviewing-translations` and CI:
 
 - validate JSON and compile generated localizations; compare keys, metadata, placeholders, ICU selectors/branches, protected values, and target coverage
