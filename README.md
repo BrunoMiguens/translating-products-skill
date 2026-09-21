@@ -162,3 +162,13 @@ license, and SHA-256 checksum. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md
 contains their attribution and license terms. Source updates require a reviewed
 diff, compatible license, new immutable pin and checksum, updated adapter
 evidence, and passing evaluations.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=brunomiguens%2Ftranslating-products-skill&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=brunomiguens/translating-products-skill&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=brunomiguens/translating-products-skill&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=brunomiguens/translating-products-skill&type=date&legend=top-left" />
+ </picture>
+</a>
