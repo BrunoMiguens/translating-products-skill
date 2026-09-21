@@ -32,7 +32,7 @@ validator = load_validator()
 
 def request_fixture() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "review_id": "review-001",
         "source_locale": "en",
         "targets": [{
@@ -40,6 +40,11 @@ def request_fixture() -> dict:
             "review_depth": "selective_challenge",
             "selected_capabilities": ["reviewing-translations"],
             "missing_capabilities": [],
+            "runtime_ui_review": {
+                "decision": "skip",
+                "required": False,
+                "reasons": ["no-applicable-runtime-surface"],
+            },
             "units": [
                 {
                     "unit_id": "message.title",
@@ -97,7 +102,7 @@ def review_issue(label: str, *, owner: str = "translation") -> dict:
 
 def result_fixture() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "review_id": "review-001",
         "source_locale": "en",
         "locales": [{
@@ -106,6 +111,11 @@ def result_fixture() -> dict:
             "execution_mode": "sequential",
             "selected_capabilities": ["reviewing-translations"],
             "missing_capabilities": [],
+            "runtime_ui_review": {
+                "status": "not_applicable",
+                "reason": None,
+                "evidence": [],
+            },
             "units": [
                 {
                     "unit_id": "message.title",
@@ -156,6 +166,22 @@ def result_fixture() -> dict:
     }
 
 
+def runtime_required_fixtures() -> tuple[dict, dict]:
+    request = request_fixture()
+    request["targets"][0]["runtime_ui_review"] = {
+        "decision": "run",
+        "required": True,
+        "reasons": ["caller-required"],
+    }
+    result = result_fixture()
+    result["locales"][0]["runtime_ui_review"] = {
+        "status": "completed",
+        "reason": None,
+        "evidence": ["artifacts/signup-fr-FR-compact.png"],
+    }
+    return request, result
+
+
 class ReviewArtifactTests(unittest.TestCase):
     def validate(self, request: dict | None = None, result: dict | None = None):
         return validator.validate_review_artifact(
@@ -204,7 +230,7 @@ class ReviewArtifactTests(unittest.TestCase):
     def test_schema_declares_request_and_result_vocabularies(self):
         """Break: producers could lack a canonical machine-readable request/result contract."""
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
-        self.assertEqual(schema["schema_version"], 1)
+        self.assertEqual(schema["schema_version"], 2)
         self.assertEqual(
             schema["classifications"],
             ["no_issue_detected", "change_recommended", "blocked_by_source", "unresolved"],
@@ -241,6 +267,72 @@ class ReviewArtifactTests(unittest.TestCase):
             },
         )
         self.assertNotIn("research", schema["$defs"]["result_locale"]["required"])
+
+    def test_completed_runtime_ui_review_requires_evidence(self):
+        request, result = runtime_required_fixtures()
+        result["locales"][0]["runtime_ui_review"] = {
+            "status": "completed",
+            "reason": None,
+            "evidence": [],
+        }
+
+        self.assert_invalid(
+            result, "completed runtime UI review requires evidence", request
+        )
+
+    def test_required_runtime_ui_review_rejects_not_run_but_accepts_unavailable(self):
+        request, result = runtime_required_fixtures()
+        result["locales"][0]["runtime_ui_review"] = {
+            "status": "not_run",
+            "reason": "skipped",
+            "evidence": [],
+        }
+        self.assert_invalid(
+            result, "required runtime UI review cannot be not_run", request
+        )
+
+        result["locales"][0]["runtime_ui_review"] = {
+            "status": "unavailable",
+            "reason": "validation state has no reproducible path",
+            "evidence": [],
+        }
+        self.assertEqual(self.validate(request, result), ())
+
+    def test_runtime_ui_review_outcomes_enforce_reason_and_evidence_shapes(self):
+        request, result = runtime_required_fixtures()
+        cases = (
+            (
+                {"status": "completed", "reason": "done", "evidence": ["shot.png"]},
+                "reason must be null",
+            ),
+            (
+                {"status": "unavailable", "reason": " ", "evidence": []},
+                "reason must be nonblank",
+            ),
+            (
+                {"status": "not_run", "reason": "skipped", "evidence": ["shot.png"]},
+                "evidence must be empty",
+            ),
+        )
+        for runtime_record, fragment in cases:
+            with self.subTest(status=runtime_record["status"]):
+                result["locales"][0]["runtime_ui_review"] = runtime_record
+                self.assert_invalid(result, fragment, request)
+
+    def test_runtime_ui_review_outcome_must_match_request_decision(self):
+        request, result = runtime_required_fixtures()
+        result["locales"][0]["runtime_ui_review"] = {
+            "status": "not_applicable",
+            "reason": None,
+            "evidence": [],
+        }
+        self.assert_invalid(
+            result, "not_applicable requires a skip decision", request
+        )
+
+        request, result = runtime_required_fixtures()
+        result["locales"][0]["target_locale"] = "de-DE"
+        self.assert_invalid(result, "unknown target locale", request)
 
     def test_schema_nonblank_strings_reject_whitespace_only_values(self):
         """Break: schema consumers could accept whitespace rejected by the runtime gate."""
