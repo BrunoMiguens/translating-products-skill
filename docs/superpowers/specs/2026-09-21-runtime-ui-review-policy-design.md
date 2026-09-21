@@ -87,6 +87,7 @@ Resolution rules:
 
 | Effective input | Result |
 | --- | --- |
+| No applicable user-visible runtime surface | `skip` as not applicable, while preserving whether review was configured as required |
 | Highest non-`auto` caller or project value is `required` | `run` |
 | Highest non-`auto` caller or project value is `disabled` | `skip` |
 | Effective intent is `auto`, route says `required` | `run` |
@@ -94,7 +95,8 @@ Resolution rules:
 | Effective intent is `auto`, route says `recommended`, and availability or material cost is unresolved | `ask` |
 | Effective intent is `auto`, route says `none`, with no applicable UI surface | `skip` as not applicable |
 
-`run` means attempt the smallest relevant runtime review. It is not a promise
+Applicability is resolved before execution because a required review cannot run
+against a task with no user-visible runtime surface. `run` means attempt the smallest relevant runtime review. It is not a promise
 that the environment will succeed. A failed or blocked attempt becomes
 `unavailable` with a concise reason.
 
@@ -175,6 +177,10 @@ evidence.
 The canonical review request records the resolved decision and reasons. The
 canonical review result records the execution outcome. Both live at the target
 locale level rather than being repeated for every string.
+
+This is a public shape change to the canonical review artifact, so its
+`schema_version` advances from `1` to `2`. Repository producers and tests move
+to version `2`; unrelated benchmark and dataset schemas keep their own version.
 
 ## Completion semantics
 
