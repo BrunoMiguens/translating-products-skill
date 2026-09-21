@@ -1367,6 +1367,19 @@ def route_profile(profile: dict, catalog: dict) -> dict:
     verification_requirements = {
         "independent_review_required": bool(required_by),
         "required_by": required_by,
+        "runtime_ui_review": max(
+            (
+                by_name[name]["verification"]["runtime_ui_review"]
+                for name in selected_in_load_order
+            ),
+            key={"none": 0, "recommended": 1, "required": 2}.__getitem__,
+            default="none",
+        ),
+        "runtime_ui_review_declared_by": [
+            name
+            for name in selected_in_load_order
+            if by_name[name]["verification"]["runtime_ui_review"] != "none"
+        ],
     }
     external_snapshots = catalog.get("external_skill_snapshots", {})
     return {

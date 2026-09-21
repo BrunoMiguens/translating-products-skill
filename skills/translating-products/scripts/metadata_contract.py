@@ -38,7 +38,9 @@ SKILL_REQUIRED_FIELDS = frozenset(
     )
 )
 SKILL_OPTIONAL_FIELDS = frozenset(("selectors", "ownership", "verification"))
-VERIFICATION_FIELDS = frozenset(("independent_review_required",))
+VERIFICATION_FIELDS = frozenset(
+    ("independent_review_required", "runtime_ui_review")
+)
 MANIFEST_FIELDS = frozenset(
     (
         "schema_version", "suite_version", "orchestrator",
@@ -137,15 +139,24 @@ def _validate_locale(value: str, label: str) -> None:
         raise ValueError(f"{label} has invalid selector locale: {value}")
 
 
-def validate_verification(value: object, label: str) -> dict[str, bool]:
+def validate_verification(value: object, label: str) -> dict[str, object]:
     if value is None:
-        return {"independent_review_required": False}
+        return {
+            "independent_review_required": False,
+            "runtime_ui_review": "none",
+        }
     if not isinstance(value, dict) or set(value) != VERIFICATION_FIELDS:
         raise ValueError(f"{label} has invalid verification")
     required = value["independent_review_required"]
     if type(required) is not bool:
         raise ValueError(f"{label} verification must use a boolean")
-    return {"independent_review_required": required}
+    runtime_ui_review = value["runtime_ui_review"]
+    if runtime_ui_review not in {"required", "recommended", "none"}:
+        raise ValueError(f"{label} verification has invalid runtime_ui_review")
+    return {
+        "independent_review_required": required,
+        "runtime_ui_review": runtime_ui_review,
+    }
 
 
 def validate_skill_record(item: object, *, label_prefix: str = "skill") -> dict:

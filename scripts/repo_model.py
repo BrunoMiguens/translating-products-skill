@@ -67,8 +67,9 @@ class SkillRecord:
     conflicts: tuple[str, ...]
     supersedes: tuple[str, ...]
     ownership: tuple[tuple[str, tuple[str, ...]], ...]
-    verification: tuple[tuple[str, bool], ...] = (
+    verification: tuple[tuple[str, object], ...] = (
         ("independent_review_required", False),
+        ("runtime_ui_review", "none"),
     )
 
 

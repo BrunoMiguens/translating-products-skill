@@ -184,6 +184,7 @@ def _render_markdown(catalog: dict) -> str:
         independent_review_required = str(
             item["verification"]["independent_review_required"]
         ).lower()
+        runtime_ui_review = item["verification"]["runtime_ui_review"]
         lines.extend(
             (
                 f"### {item['name']}",
@@ -201,6 +202,7 @@ def _render_markdown(catalog: dict) -> str:
                 f"- Ownership: {ownership}",
                 "- Independent review required: "
                 f"`{independent_review_required}`",
+                f"- Runtime UI review: `{runtime_ui_review}`",
                 "",
             )
         )
