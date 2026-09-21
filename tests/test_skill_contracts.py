@@ -324,6 +324,29 @@ class SkillContractTests(unittest.TestCase):
                 self.assertIn("do not independently choose", normalized)
                 self.assertIn("smallest relevant runtime scope", normalized)
 
+    def test_runtime_ui_review_skip_preserves_static_and_structural_qa(self):
+        static_markers = {
+            "translating-mobile": ("keys", "placeholders"),
+            "translating-ios": ("build and extract", "compile catalogs"),
+            "translating-android": ("compile resources", "lint"),
+            "translating-flutter": (
+                "validate JSON",
+                "compile generated localizations",
+            ),
+        }
+        for skill_name, markers in static_markers.items():
+            with self.subTest(skill=skill_name):
+                text = (ROOT / f"skills/{skill_name}/SKILL.md").read_text(
+                    encoding="utf-8"
+                )
+                handoff = markdown_section(text, "QA Handoff and Release Gates")
+                static_qa, separator, runtime_qa = handoff.partition("resolved `run`")
+                self.assertTrue(separator, skill_name)
+                self.assertIn("Always perform", static_qa)
+                for marker in markers:
+                    self.assertIn(marker, static_qa)
+                self.assertIn("screenshots", runtime_qa)
+
     def assert_holistic_workflow(self, text: str) -> None:
         steps = numbered_steps(markdown_section(text, "Holistic review workflow"))
         expected = (

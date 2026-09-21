@@ -618,6 +618,142 @@ class BootstrapPolicyTests(unittest.TestCase):
                     (decision.decision, decision.required, decision.reasons), expected
                 )
 
+    def test_runtime_ui_review_cli_uses_approved_project_and_compact_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            (translation_dir / "project-brief.md").write_text(
+                PROJECT_BRIEF + "\n- Runtime UI review: required\n",
+                encoding="utf-8",
+            )
+            approve(translation_dir)
+            request = root / "runtime-ui-review-request.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "runtime_ui_review": "auto",
+                        "route_requirement": "none",
+                        "applicable_surface": True,
+                        "bounded_execution_path": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(POLICY),
+                    "runtime-ui-review",
+                    "--project-root",
+                    str(root),
+                    "--request-json",
+                    str(request),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout,
+                '{"decision":"run","required":true,'
+                '"reasons":["project-required"]}\n',
+            )
+
+    def test_runtime_ui_review_cli_uses_legacy_auto_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            approve(translation_dir)
+            request = root / "runtime-ui-review-request.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "route_requirement": "recommended",
+                        "applicable_surface": True,
+                        "bounded_execution_path": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(POLICY),
+                    "runtime-ui-review",
+                    "--project-root",
+                    str(root),
+                    "--request-json",
+                    str(request),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(result.stdout),
+                {
+                    "decision": "run",
+                    "required": False,
+                    "reasons": ["route-recommended-path-available"],
+                },
+            )
+
+    def test_runtime_ui_review_cli_rejects_invalid_and_unknown_request_fields(self):
+        requests = {
+            "invalid": {
+                "runtime_ui_review": "sometimes",
+                "route_requirement": "none",
+                "applicable_surface": True,
+                "bounded_execution_path": None,
+            },
+            "unknown": {
+                "route_requirement": "none",
+                "applicable_surface": True,
+                "bounded_execution_path": None,
+                "extra": True,
+            },
+        }
+        for name, payload in requests.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                translation_dir = root / ".translation"
+                write_context(translation_dir)
+                approve(translation_dir)
+                request = root / "runtime-ui-review-request.json"
+                request.write_text(json.dumps(payload), encoding="utf-8")
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(POLICY),
+                        "runtime-ui-review",
+                        "--project-root",
+                        str(root),
+                        "--request-json",
+                        str(request),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                self.assertEqual(result.returncode, 2)
+                if name == "invalid":
+                    self.assertIn("caller_intent is invalid", result.stderr)
+                else:
+                    self.assertIn(
+                        "unknown runtime-ui-review request fields: extra",
+                        result.stderr,
+                    )
+
     def test_review_depth_cli_uses_approved_project_and_route_requirements(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

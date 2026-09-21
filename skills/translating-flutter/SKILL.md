@@ -83,17 +83,18 @@ This skill owns Flutter resource classification, generation boundaries, ICU/runt
 
 ## QA Handoff and Release Gates
 
-Perform these checks only after the orchestrator supplies a resolved `run`
-decision. Use the smallest relevant runtime scope for the affected resources and
-states; do not independently choose the runtime-review budget or expand it to
-the whole application.
-
-Pass template and target ARBs, localization configuration, generated-output policy/diff, key/placeholder/ICU inventory, locale/build/device matrix, screenshots, accessibility intent, and these checks to `reviewing-translations` and CI:
+Always perform file and structural checks, including:
 
 - validate JSON and compile generated localizations; compare keys, metadata, placeholders, ICU selectors/branches, protected values, and target coverage
 - exercise every target plural category, select key, formatted value, missing/partial locale path, and fallback path
 - verify delegate and supported-locale wiring in every shipped target and reject manual generated-code edits
-- run long-text, text-scale, screen-reader, RTL/directional, target-locale, and responsive window/device tests
-- detect source-equal targets outside the allowlist, unintended fallback, raw identifiers, accidental mixed language, clipping, overlap, or inaccessible controls
+- detect source-equal targets outside the allowlist, raw identifiers, invalid ICU, and accidental mixed-language target files
 
-Block release on invalid ARB/ICU or generation failure; key, metadata, placeholder, plural, or select corruption; generated-code drift or manual edits; missing delegate/locale wiring; hardcoded or incorrectly formatted copy; unintended fallback/mixed language; accessibility meaning loss; RTL defects; or required content hidden by layout. Route the exact key, consumer, locale, configuration, and evidence to its responsible installed skill.
+Perform the following runtime checks only after the orchestrator supplies a resolved `run` decision. Use the smallest relevant runtime scope for the affected resources and states; do not independently choose the runtime-review budget or expand it to the whole application:
+
+- run long-text, text-scale, screen-reader, RTL/directional, target-locale, and responsive window/device tests
+- detect unintended fallback, accidental mixed language, clipping, overlap, or inaccessible controls in rendered states
+
+Pass template and target ARBs, localization configuration, generated-output policy/diff, key/placeholder/ICU inventory, locale/build/device matrix, available screenshots, accessibility intent, and applicable results to `reviewing-translations` and CI.
+
+Always block release on invalid ARB/ICU or generation failure; key, metadata, placeholder, plural, or select corruption; generated-code drift or manual edits; missing delegate/locale wiring; or hardcoded or incorrectly formatted copy. When runtime review runs, also block on unintended fallback or mixed language, accessibility meaning loss, RTL defects, or required content hidden by layout. Route the exact key, consumer, locale, configuration, and evidence to its responsible installed skill.

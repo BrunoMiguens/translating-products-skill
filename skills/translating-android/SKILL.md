@@ -78,17 +78,18 @@ This skill owns Android resource classification, syntax, formatting, layout, and
 
 ## QA Handoff and Release Gates
 
-Perform these checks only after the orchestrator supplies a resolved `run`
-decision. Use the smallest relevant runtime scope for the affected resources and
-states; do not independently choose the runtime-review budget or expand it to
-the whole application.
-
-Pass base and target resources, call-site inventory, locale/build/device matrix, screenshots, accessibility intent, and these checks to `reviewing-translations` and CI:
+Always perform file and structural checks, including:
 
 - compile resources and lint all shipped variants; compare resource names/types, placeholders, plural schemas, markup, escapes, protected values, and `translatable="false"` policy
 - execute every plural branch and representative formatted value under the target locale
 - verify Compose and XML contain no unintended user-facing literals or physical-direction assumptions
-- run `en-XA`, `ar-XB`, target-locale screenshots, TalkBack, font-scale, window-size, and RTL interaction tests
-- detect raw keys, copied-English targets, unintended fallback, accidental mixed-language output, clipping, overlap, or inaccessible controls
+- detect raw keys, copied-English targets, malformed resources, and accidental mixed-language target files
 
-Block release on resource compile/lint failure; missing, renamed, or corrupted resources; placeholder/plural/quantity damage; invalid escapes or markup; altered protected constants; hardcoded or incorrectly formatted values; unintended English fallback; TalkBack meaning loss; start/end or RTL defects; or required content hidden by layout. Route the exact resource, consumer, configuration, and evidence to its responsible installed skill.
+Perform the following runtime checks only after the orchestrator supplies a resolved `run` decision. Use the smallest relevant runtime scope for the affected resources and states; do not independently choose the runtime-review budget or expand it to the whole application:
+
+- run `en-XA`, `ar-XB`, target-locale screenshots, TalkBack, font-scale, window-size, and RTL interaction tests
+- detect unintended fallback, accidental mixed-language output, clipping, overlap, or inaccessible controls in rendered states
+
+Pass base and target resources, call-site inventory, locale/build/device matrix, available screenshots, accessibility intent, and applicable results to `reviewing-translations` and CI.
+
+Always block release on resource compile/lint failure; missing, renamed, or corrupted resources; placeholder/plural/quantity damage; invalid escapes or markup; altered protected constants; or hardcoded or incorrectly formatted values. When runtime review runs, also block on unintended English fallback, TalkBack meaning loss, start/end or RTL defects, or required content hidden by layout. Route the exact resource, consumer, configuration, and evidence to its responsible installed skill.
