@@ -524,6 +524,236 @@ class BootstrapPolicyTests(unittest.TestCase):
                     requirement = self.policy.project_independent_review_required(root)
                     self.assertEqual(requirement, expected_requirement)
 
+    def test_runtime_ui_review_declaration_is_optional_and_strict(self):
+        declarations = {
+            "absent": ("", "auto", None),
+            "required": ("\n- Runtime UI review: required\n", "required", None),
+            "auto": ("\n- Runtime UI review: auto\n", "auto", None),
+            "disabled": ("\n- Runtime UI review: disabled\n", "disabled", None),
+            "duplicate": (
+                "\n- Runtime UI review: required\n"
+                "- Runtime UI review: disabled\n",
+                None,
+                "malformed:project-brief.md",
+            ),
+            "invalid": (
+                "\n- Runtime UI review: sometimes\n",
+                None,
+                "malformed:project-brief.md",
+            ),
+        }
+        for name, (declaration, expected_intent, expected_issue) in declarations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                translation_dir = root / ".translation"
+                write_context(translation_dir)
+                (translation_dir / "project-brief.md").write_text(
+                    PROJECT_BRIEF + declaration, encoding="utf-8"
+                )
+                approve(translation_dir)
+
+                self.assertEqual(self.policy.bootstrap_issue(root, {}), expected_issue)
+                if expected_issue is None:
+                    self.assertEqual(
+                        self.policy.project_runtime_ui_review(root), expected_intent
+                    )
+
+    def test_runtime_ui_review_resolution_uses_authority_and_auto_delegation(self):
+        cases = [
+            (
+                {
+                    "caller_intent": "disabled",
+                    "project_intent": "required",
+                    "route_requirement": "required",
+                    "applicable_surface": True,
+                    "bounded_execution_path": True,
+                },
+                ("skip", False, ("caller-disabled",)),
+            ),
+            (
+                {
+                    "caller_intent": "auto",
+                    "project_intent": "required",
+                    "route_requirement": "none",
+                    "applicable_surface": True,
+                    "bounded_execution_path": None,
+                },
+                ("run", True, ("project-required",)),
+            ),
+            (
+                {
+                    "caller_intent": None,
+                    "project_intent": "auto",
+                    "route_requirement": "recommended",
+                    "applicable_surface": True,
+                    "bounded_execution_path": True,
+                },
+                ("run", False, ("route-recommended-path-available",)),
+            ),
+            (
+                {
+                    "caller_intent": None,
+                    "project_intent": "auto",
+                    "route_requirement": "recommended",
+                    "applicable_surface": True,
+                    "bounded_execution_path": None,
+                },
+                ("ask", False, ("runtime-path-unresolved",)),
+            ),
+            (
+                {
+                    "caller_intent": None,
+                    "project_intent": "auto",
+                    "route_requirement": "none",
+                    "applicable_surface": False,
+                    "bounded_execution_path": None,
+                },
+                ("skip", False, ("no-applicable-runtime-surface",)),
+            ),
+        ]
+        for arguments, expected in cases:
+            with self.subTest(arguments=arguments):
+                decision = self.policy.select_runtime_ui_review(**arguments)
+                self.assertEqual(
+                    (decision.decision, decision.required, decision.reasons), expected
+                )
+
+    def test_runtime_ui_review_cli_uses_approved_project_and_compact_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            (translation_dir / "project-brief.md").write_text(
+                PROJECT_BRIEF + "\n- Runtime UI review: required\n",
+                encoding="utf-8",
+            )
+            approve(translation_dir)
+            request = root / "runtime-ui-review-request.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "runtime_ui_review": "auto",
+                        "route_requirement": "none",
+                        "applicable_surface": True,
+                        "bounded_execution_path": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(POLICY),
+                    "runtime-ui-review",
+                    "--project-root",
+                    str(root),
+                    "--request-json",
+                    str(request),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout,
+                '{"decision":"run","required":true,'
+                '"reasons":["project-required"]}\n',
+            )
+
+    def test_runtime_ui_review_cli_uses_legacy_auto_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            translation_dir = root / ".translation"
+            write_context(translation_dir)
+            approve(translation_dir)
+            request = root / "runtime-ui-review-request.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "route_requirement": "recommended",
+                        "applicable_surface": True,
+                        "bounded_execution_path": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(POLICY),
+                    "runtime-ui-review",
+                    "--project-root",
+                    str(root),
+                    "--request-json",
+                    str(request),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(result.stdout),
+                {
+                    "decision": "run",
+                    "required": False,
+                    "reasons": ["route-recommended-path-available"],
+                },
+            )
+
+    def test_runtime_ui_review_cli_rejects_invalid_and_unknown_request_fields(self):
+        requests = {
+            "invalid": {
+                "runtime_ui_review": "sometimes",
+                "route_requirement": "none",
+                "applicable_surface": True,
+                "bounded_execution_path": None,
+            },
+            "unknown": {
+                "route_requirement": "none",
+                "applicable_surface": True,
+                "bounded_execution_path": None,
+                "extra": True,
+            },
+        }
+        for name, payload in requests.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                translation_dir = root / ".translation"
+                write_context(translation_dir)
+                approve(translation_dir)
+                request = root / "runtime-ui-review-request.json"
+                request.write_text(json.dumps(payload), encoding="utf-8")
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(POLICY),
+                        "runtime-ui-review",
+                        "--project-root",
+                        str(root),
+                        "--request-json",
+                        str(request),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                self.assertEqual(result.returncode, 2)
+                if name == "invalid":
+                    self.assertIn("caller_intent is invalid", result.stderr)
+                else:
+                    self.assertIn(
+                        "unknown runtime-ui-review request fields: extra",
+                        result.stderr,
+                    )
+
     def test_review_depth_cli_uses_approved_project_and_route_requirements(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

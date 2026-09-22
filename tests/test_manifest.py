@@ -96,8 +96,28 @@ class ManifestTests(unittest.TestCase):
             with self.subTest(skill=skill["name"]):
                 self.assertEqual(
                     set(skill.get("verification", {})),
-                    {"independent_review_required"},
+                    {"independent_review_required", "runtime_ui_review"},
                 )
+
+    def test_manifest_declares_mobile_runtime_ui_review_recommendations(self):
+        raw = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )
+        recommended = {
+            "translating-mobile",
+            "translating-ios",
+            "translating-android",
+            "translating-flutter",
+        }
+
+        self.assertEqual(
+            {
+                skill["name"]
+                for skill in raw["skills"]
+                if skill["verification"]["runtime_ui_review"] == "recommended"
+            },
+            recommended,
+        )
 
     def test_language_and_quality_records_have_distinct_ownership(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")

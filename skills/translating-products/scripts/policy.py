@@ -196,6 +196,19 @@ def _parse_independent_review_requirement(text: str) -> tuple[str | None, bool]:
     return None, values[0] == "true"
 
 
+def _parse_runtime_ui_review(text: str) -> tuple[str | None, str]:
+    values = []
+    for line in text.splitlines():
+        match = re.match(r"^-\s*Runtime UI review:\s*(.*)$", line.strip())
+        if match is not None:
+            values.append(match.group(1))
+    if not values:
+        return None, "auto"
+    if len(values) != 1 or values[0] not in {"required", "auto", "disabled"}:
+        return "malformed:project-brief.md", "auto"
+    return None, values[0]
+
+
 def _parse_yaml_string(value: str) -> str | None:
     value = value.strip()
     if not value:
@@ -352,6 +365,7 @@ def _inspect_semantics(
     text_files: Mapping[str, str],
     *,
     parse_independent_review_requirement: bool = True,
+    parse_runtime_ui_review: bool = True,
 ) -> tuple[str | None, dict[str, object]]:
     brief_malformed, brief_incomplete = _parse_labeled_markdown(
         text_files["project-brief.md"],
@@ -364,6 +378,11 @@ def _inspect_semantics(
             brief_malformed,
             independent_review_required,
         ) = _parse_independent_review_requirement(text_files["project-brief.md"])
+    runtime_ui_review = "auto"
+    if brief_malformed is None and parse_runtime_ui_review:
+        brief_malformed, runtime_ui_review = _parse_runtime_ui_review(
+            text_files["project-brief.md"]
+        )
     locales_malformed, locales_incomplete, locales = _parse_locales(
         text_files["locales.yaml"]
     )
@@ -401,6 +420,7 @@ def _inspect_semantics(
         {
             "locales": locales,
             "independent_review_required": independent_review_required,
+            "runtime_ui_review": runtime_ui_review,
             "empty_collections": {
                 "glossary.csv": glossary_entries == 0,
                 "protected-terms.txt": protected_entries == 0,
@@ -587,6 +607,26 @@ def project_independent_review_required(project_root: object) -> bool:
     return required
 
 
+def project_runtime_ui_review(project_root: object) -> str:
+    issue, translation_dir, raw_files, text_files = _load_context_files(project_root)
+    if issue is not None:
+        raise ValueError(issue)
+    assert translation_dir is not None
+    issue, semantic = _inspect_semantics(
+        text_files,
+        parse_runtime_ui_review=False,
+    )
+    if issue is not None:
+        raise ValueError(issue)
+    issue, _ = _load_approval(translation_dir, raw_files, semantic)
+    if issue is not None:
+        raise ValueError(issue)
+    issue, intent = _parse_runtime_ui_review(text_files["project-brief.md"])
+    if issue is not None:
+        raise ValueError(issue)
+    return intent
+
+
 def bootstrap_question(issue: str | None) -> str | None:
     if issue is None:
         return None
@@ -741,6 +781,61 @@ class ReviewDepthDecision:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class RuntimeUiReviewDecision:
+    decision: str
+    required: bool
+    reasons: tuple[str, ...]
+
+
+def select_runtime_ui_review(
+    *,
+    caller_intent: str | None,
+    project_intent: str,
+    route_requirement: str,
+    applicable_surface: bool,
+    bounded_execution_path: bool | None,
+) -> RuntimeUiReviewDecision:
+    intents = {"required", "auto", "disabled"}
+    requirements = {"required", "recommended", "none"}
+    if caller_intent is not None and caller_intent not in intents:
+        raise ValueError("caller_intent is invalid")
+    if project_intent not in intents:
+        raise ValueError("project_intent is invalid")
+    if route_requirement not in requirements:
+        raise ValueError("route_requirement is invalid")
+    if type(applicable_surface) is not bool:
+        raise ValueError("applicable_surface must be boolean")
+    if bounded_execution_path is not None and type(bounded_execution_path) is not bool:
+        raise ValueError("bounded_execution_path must be boolean or null")
+
+    configured = caller_intent if caller_intent not in {None, "auto"} else project_intent
+    required = configured == "required" or (
+        configured == "auto" and route_requirement == "required"
+    )
+    if not applicable_surface:
+        return RuntimeUiReviewDecision(
+            "skip", required, ("no-applicable-runtime-surface",)
+        )
+    if configured == "disabled":
+        source = "caller" if caller_intent == "disabled" else "project"
+        return RuntimeUiReviewDecision("skip", False, (f"{source}-disabled",))
+    if required:
+        source = (
+            "caller"
+            if caller_intent == "required"
+            else "project"
+            if project_intent == "required"
+            else "route"
+        )
+        return RuntimeUiReviewDecision("run", True, (f"{source}-required",))
+    if route_requirement == "recommended" and bounded_execution_path is True:
+        return RuntimeUiReviewDecision(
+            "run", False, ("route-recommended-path-available",)
+        )
+    return RuntimeUiReviewDecision("ask", False, ("runtime-path-unresolved",))
+
+
 def select_review_depth(
     *,
     task_kind: str,
@@ -844,6 +939,32 @@ def _review_depth_request(request: object) -> dict[str, object]:
     }
 
 
+def _runtime_ui_review_request(request: object) -> dict[str, object]:
+    if not isinstance(request, Mapping):
+        raise ValueError("runtime-ui-review request must be an object")
+    allowed = {
+        "runtime_ui_review",
+        "route_requirement",
+        "applicable_surface",
+        "bounded_execution_path",
+    }
+    unknown = set(request) - allowed
+    if unknown:
+        raise ValueError(
+            "unknown runtime-ui-review request fields: "
+            + ", ".join(sorted(unknown))
+        )
+    for name in ("route_requirement", "applicable_surface", "bounded_execution_path"):
+        if name not in request:
+            raise ValueError(f"runtime-ui-review request missing {name}")
+    return {
+        "caller_intent": request.get("runtime_ui_review"),
+        "route_requirement": request["route_requirement"],
+        "applicable_surface": request["applicable_surface"],
+        "bounded_execution_path": request["bounded_execution_path"],
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect translation bootstrap policy")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -853,6 +974,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     review_depth_parser = subparsers.add_parser("review-depth")
     review_depth_parser.add_argument("--project-root", required=True)
     review_depth_parser.add_argument("--request-json", required=True)
+    runtime_ui_parser = subparsers.add_parser("runtime-ui-review")
+    runtime_ui_parser.add_argument("--project-root", required=True)
+    runtime_ui_parser.add_argument("--request-json", required=True)
     approve_parser = subparsers.add_parser("approve")
     approve_parser.add_argument("--project-root", required=True)
     approve_parser.add_argument("--approved-by", required=True)
@@ -893,6 +1017,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 json.dumps(
                     {"review_depth": decision.depth, "reasons": list(decision.reasons)},
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        if args.command == "runtime-ui-review":
+            request = _runtime_ui_review_request(
+                _request_from_json(args.request_json)
+            )
+            decision = select_runtime_ui_review(
+                caller_intent=request["caller_intent"],  # type: ignore[arg-type]
+                project_intent=project_runtime_ui_review(args.project_root),
+                route_requirement=request["route_requirement"],  # type: ignore[arg-type]
+                applicable_surface=request["applicable_surface"],  # type: ignore[arg-type]
+                bounded_execution_path=request["bounded_execution_path"],  # type: ignore[arg-type]
+            )
+            print(
+                json.dumps(
+                    {
+                        "decision": decision.decision,
+                        "required": decision.required,
+                        "reasons": list(decision.reasons),
+                    },
                     separators=(",", ":"),
                 )
             )

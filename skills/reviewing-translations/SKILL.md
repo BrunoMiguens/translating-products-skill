@@ -103,6 +103,13 @@ request/result vocabulary. Record one result per unit with its primary pass,
 optional challenge, adjudication, recommendation and correction QA, source
 issue, and separate `human_review.status` provenance.
 
+Keep target-level `runtime_ui_review` coverage separate from per-unit
+classifications. Copy the resolved decision into the request and record only a
+compact outcome, reason, and evidence references in the result. A
+`no_issue_detected` unit does not prove the app ran. When required runtime review
+is unavailable, preserve the linguistic findings but do not make a runtime-safe
+or release-ready claim.
+
 Machine classifications: `no_issue_detected`, `change_recommended`, `blocked_by_source`, `unresolved`
 
 Human-review statuses: `not_requested`, `pending`, `completed`

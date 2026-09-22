@@ -47,7 +47,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -96,7 +97,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -139,7 +141,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -204,7 +207,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -270,7 +274,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -324,7 +329,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "recommended"
       }
     },
     {
@@ -383,7 +389,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "recommended"
       }
     },
     {
@@ -442,7 +449,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "recommended"
       }
     },
     {
@@ -501,7 +509,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "recommended"
       }
     },
     {
@@ -556,7 +565,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -612,7 +622,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -661,7 +672,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": true
+        "independent_review_required": true,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -720,7 +732,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -763,7 +776,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -806,7 +820,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -848,7 +863,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -894,7 +910,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -936,7 +953,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -982,7 +1000,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -1028,7 +1047,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -1074,7 +1094,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -1124,7 +1145,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     },
     {
@@ -1166,7 +1188,8 @@
         ]
       },
       "verification": {
-        "independent_review_required": false
+        "independent_review_required": false,
+        "runtime_ui_review": "none"
       }
     }
   ]

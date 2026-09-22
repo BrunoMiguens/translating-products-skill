@@ -656,8 +656,27 @@ def _authority_matches(scope: dict, skill: dict) -> bool:
 
 
 def _review_attestation_digest(
-    skill: dict, entry: dict, installed_skill: dict
+    skill: dict,
+    entry: dict,
+    installed_skill: dict,
+    *,
+    legacy_runtime_default: bool = False,
 ) -> str:
+    admitted_skill = skill
+    verification = skill.get("verification")
+    if (
+        legacy_runtime_default
+        and isinstance(verification, dict)
+        and verification.get("runtime_ui_review") == "none"
+    ):
+        admitted_skill = {
+            **skill,
+            "verification": {
+                key: value
+                for key, value in verification.items()
+                if key != "runtime_ui_review"
+            },
+        }
     claims = {
         field: value
         for field, value in entry.items()
@@ -666,7 +685,7 @@ def _review_attestation_digest(
     claims["reviewer"] = _validate_reviewer(entry["reviewer"], skill["name"])
     canonical = json.dumps(
         {
-            "admitted_skill": skill,
+            "admitted_skill": admitted_skill,
             "installed_skill": installed_skill,
             "registry_claims": claims,
         },
@@ -721,7 +740,16 @@ def _validate_registry_bindings(
         expected_evidence = _review_attestation_digest(
             skill, entry, installed_skill
         )
-        if entry["evaluation_evidence"] != [expected_evidence]:
+        legacy_evidence = _review_attestation_digest(
+            skill,
+            entry,
+            installed_skill,
+            legacy_runtime_default=True,
+        )
+        if entry["evaluation_evidence"] not in (
+            [expected_evidence],
+            [legacy_evidence],
+        ):
             raise ValueError(f"compatibility registry evidence mismatch: {name}")
 
 
@@ -1367,6 +1395,19 @@ def route_profile(profile: dict, catalog: dict) -> dict:
     verification_requirements = {
         "independent_review_required": bool(required_by),
         "required_by": required_by,
+        "runtime_ui_review": max(
+            (
+                by_name[name]["verification"]["runtime_ui_review"]
+                for name in selected_in_load_order
+            ),
+            key={"none": 0, "recommended": 1, "required": 2}.__getitem__,
+            default="none",
+        ),
+        "runtime_ui_review_declared_by": [
+            name
+            for name in selected_in_load_order
+            if by_name[name]["verification"]["runtime_ui_review"] != "none"
+        ],
     }
     external_snapshots = catalog.get("external_skill_snapshots", {})
     return {

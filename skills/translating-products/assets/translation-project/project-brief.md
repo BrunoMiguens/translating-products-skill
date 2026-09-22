@@ -26,3 +26,4 @@ Status: draft
 - Formats:
 - Delivery location:
 - Acceptance criteria:
+- Runtime UI review: auto

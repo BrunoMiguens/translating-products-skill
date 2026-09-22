@@ -32,6 +32,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `orchestrator`: `inspect`; `project-bootstrap`: `inspect`; `skill-routing`: `inspect`; `subagent-routing`: `inspect`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ## core
 
@@ -49,6 +50,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `core-translation`: `translate`; `terminology`: `translate`; `cultural-adaptation`: `translate`; `structural-fidelity`: `translate`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ## quality
 
@@ -66,6 +68,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `translation-qa`: `review`; `terminology-qa`: `review`; `structural-qa`: `review`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ## surface
 
@@ -83,6 +86,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `surface:web`: `inspect`, `integrate`; `html`: `inspect`, `integrate`; `markdown`: `inspect`, `integrate`; `accessibility`: `inspect`, `integrate`; `hreflang`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `none`
 
 ### localizing-software
 
@@ -98,6 +102,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `surface:software`: `inspect`, `integrate`; `icu`: `inspect`, `integrate`; `placeholders`: `inspect`, `integrate`; `plurals`: `inspect`, `integrate`; `locale-formatting`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `none`
 
 ### translating-mobile
 
@@ -113,6 +118,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `surface:mobile`: `inspect`, `integrate`; `mobile-ui`: `inspect`, `integrate`; `accessibility`: `inspect`, `integrate`; `pseudo-localization`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `recommended`
 
 ## platform
 
@@ -130,6 +136,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `platform:ios`: `inspect`, `integrate`; `xcstrings`: `inspect`, `integrate`; `swiftui`: `inspect`, `integrate`; `apple-locales`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `recommended`
 
 ### translating-android
 
@@ -145,6 +152,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `platform:android`: `inspect`, `integrate`; `string-resources`: `inspect`, `integrate`; `compose`: `inspect`, `integrate`; `android-locales`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `recommended`
 
 ### translating-flutter
 
@@ -160,6 +168,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `platform:flutter`: `inspect`, `integrate`; `arb`: `inspect`, `integrate`; `flutter-localizations`: `inspect`, `integrate`; `icu`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `recommended`
 
 ## surface
 
@@ -177,6 +186,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `surface:app-store`: `inspect`, `integrate`; `surface:play-store`: `inspect`, `integrate`; `aso`: `inspect`, `integrate`; `store-metadata`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `none`
 
 ### translating-marketing
 
@@ -192,6 +202,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `surface:marketing`: `inspect`, `integrate`; `transcreation`: `inspect`, `integrate`; `brand-voice`: `inspect`, `integrate`; `calls-to-action`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `none`
 
 ### translating-documentation
 
@@ -207,6 +218,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `surface:documentation`: `inspect`, `integrate`; `code-preservation`: `inspect`, `integrate`; `technical-terminology`: `inspect`, `integrate`
 - Independent review required: `true`
+- Runtime UI review: `none`
 
 ## script
 
@@ -224,6 +236,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `script:rtl`: `refine`, `integrate`; `bidi`: `refine`, `integrate`; `mirroring`: `refine`, `integrate`; `mixed-direction`: `refine`, `integrate`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ## language
 
@@ -241,6 +254,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:arabic`: `refine`; `locale:ar`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-hebrew
 
@@ -256,6 +270,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:hebrew`: `refine`; `locale:he`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-japanese
 
@@ -271,6 +286,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:japanese`: `refine`; `locale:ja`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-chinese
 
@@ -286,6 +302,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:chinese`: `refine`; `locale:zh-Hans`: `refine`; `locale:zh-Hant`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-korean
 
@@ -301,6 +318,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:korean`: `refine`; `locale:ko`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-portuguese
 
@@ -316,6 +334,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:portuguese`: `refine`; `locale:pt-BR`: `refine`; `locale:pt-PT`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-spanish
 
@@ -331,6 +350,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:spanish`: `refine`; `locale:es-ES`: `refine`; `locale:es-419`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-french
 
@@ -346,6 +366,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:french`: `refine`; `locale:fr-FR`: `refine`; `locale:fr-CA`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-german
 
@@ -361,6 +382,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:german`: `refine`; `locale:de-DE`: `refine`; `locale:de-AT`: `refine`; `locale:de-CH`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`
 
 ### translating-polish
 
@@ -376,3 +398,4 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Supersedes: none
 - Ownership: `language:polish`: `refine`; `locale:pl-PL`: `refine`
 - Independent review required: `false`
+- Runtime UI review: `none`

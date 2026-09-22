@@ -286,6 +286,44 @@ def reviewed_registry_entry(
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_runtime_ui_review_policy_is_resolved_once_and_handed_to_platforms(self):
+        orchestrator = (ROOT / "skills/translating-products/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        runtime_policy = " ".join(
+            markdown_section(orchestrator, "Runtime UI review policy").split()
+        )
+        self.assertIn("after routing", runtime_policy)
+        self.assertIn("runtime-ui-review", runtime_policy)
+        self.assertIn("`run`", runtime_policy)
+        self.assertIn("`skip`", runtime_policy)
+        self.assertIn("`ask`", runtime_policy)
+
+        reviewer = (ROOT / "skills/reviewing-translations/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        canonical = " ".join(
+            markdown_section(reviewer, "Canonical review record").split()
+        )
+        self.assertIn("target-level `runtime_ui_review`", canonical)
+        self.assertIn("separate from per-unit classifications", canonical)
+        self.assertIn("runtime-safe", canonical)
+
+        for skill_name in (
+            "translating-mobile",
+            "translating-ios",
+            "translating-android",
+            "translating-flutter",
+        ):
+            with self.subTest(skill=skill_name):
+                text = (ROOT / f"skills/{skill_name}/SKILL.md").read_text(
+                    encoding="utf-8"
+                )
+                normalized = " ".join(text.split())
+                self.assertIn("resolved `run` decision", normalized)
+                self.assertIn("do not independently choose", normalized)
+                self.assertIn("smallest relevant runtime scope", normalized)
+
     def assert_holistic_workflow(self, text: str) -> None:
         steps = numbered_steps(markdown_section(text, "Holistic review workflow"))
         expected = (
@@ -730,7 +768,10 @@ class SkillContractTests(unittest.TestCase):
 
         self.assertEqual(
             validated[0]["verification"],
-            {"independent_review_required": True},
+            {
+                "independent_review_required": True,
+                "runtime_ui_review": "none",
+            },
         )
 
     def test_installed_frontmatter_accepts_quoted_scalars_but_rejects_ambiguity(self):

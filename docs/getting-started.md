@@ -145,6 +145,13 @@ Useful inputs include:
 - platform, file format, and structural constraints; and
 - existing translations that are known to be reliable.
 
+New project briefs expose `Runtime UI review: auto`. Set it to `required` when
+the affected UI must be exercised, or `disabled` when project policy explicitly
+excludes runtime review. An explicit request overrides that project value.
+With `auto`, selected platform skills may recommend runtime review; the agent
+runs it when the project has a bounded path to the relevant state and otherwise
+asks one focused question.
+
 ## What to expect
 
 The route follows `inspect → translate → refine → integrate → review`.
@@ -159,6 +166,9 @@ The route follows `inspect → translate → refine → integrate → review`.
   question.
 - The agent reports a missing essential capability instead of inventing one or
   downloading an unknown skill.
+- Runtime UI coverage is recorded once per target locale with references to
+  screenshots, tests, or logs. The policy works across platforms, while the
+  available execution path depends on the host and project tooling.
 
 Translations remain AI-generated unless your own workflow records human
 review.

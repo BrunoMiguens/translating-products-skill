@@ -63,13 +63,18 @@ This skill owns shared mobile context, protected resource boundaries, layout con
 
 ## QA Handoff and Release Gates
 
-Pass source and target resources, locale pair, inventories, screenshots, supported device matrix, accessibility intent, build identifier, and these checks to `reviewing-translations`:
+Always perform file and structural checks, including:
 
 - keys, placeholders, markup, facts, protected terms, and runtime values preserve parity
+- every customer-facing string in the release locale is intentionally localized or explicitly approved to remain; accidental mixed-language output blocks release
+
+Perform the following runtime checks only after the orchestrator supplies a resolved `run` decision. Use the smallest relevant runtime scope for the affected resources and states; do not independently choose the runtime-review budget or expand it to the whole application:
+
 - screenshots cover relevant states, device sizes, text scales, orientations, and LTR or RTL direction
 - pseudo-localization exposes no fixed-width assumptions, fallback strings, broken placeholders, clipping, overlap, or inaccessible controls
 - visible and accessibility copy preserve their distinct purpose, and announcements occur in the correct state
-- every customer-facing string in the release locale is intentionally localized or explicitly approved to remain; accidental mixed-language output blocks release
 - approved target copy renders without truncation or meaning loss on every supported platform and required layout
 
-Block release on resource corruption, unintended fallback language, accidental mixed-language content, placeholder or runtime-format damage, lost accessibility meaning, unresolved short-string ambiguity, or required content hidden by layout. Route the smallest affected resource and evidence to its responsible installed skill.
+Pass source and target resources, locale pair, inventories, available screenshots, supported device matrix, accessibility intent, build identifier, and applicable results to `reviewing-translations`.
+
+Always block release on resource corruption, accidental mixed-language content, placeholder or runtime-format damage, or unresolved short-string ambiguity. When runtime review runs, also block on unintended fallback language, lost accessibility meaning, or required content hidden by layout. Route the smallest affected resource and evidence to its responsible installed skill.

@@ -1,0 +1,31 @@
+[
+  {
+    "id": "explicit-required",
+    "caller_intent": "required",
+    "project_intent": "disabled",
+    "route_requirement": "recommended",
+    "bounded_execution_path": false,
+    "applicable_surface": true,
+    "expected_decision": "run"
+  },
+  {
+    "id": "project-required",
+    "caller_intent": "auto",
+    "project_intent": "required",
+    "route_requirement": "none",
+    "bounded_execution_path": null,
+    "applicable_surface": true,
+    "expected_decision": "run"
+  },
+  {
+    "id": "mobile-validation-state-ask",
+    "caller_intent": null,
+    "project_intent": "auto",
+    "route_requirement": "recommended",
+    "bounded_execution_path": null,
+    "applicable_surface": true,
+    "screen": "signup",
+    "state": "validation-error",
+    "expected_decision": "ask"
+  }
+]

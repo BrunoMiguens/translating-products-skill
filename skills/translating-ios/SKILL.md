@@ -79,13 +79,20 @@ This skill owns Apple resource classification, catalog/extraction state, formatt
 
 ## QA Handoff and Release Gates
 
-Pass catalogs, source and target resources, target/build matrix, call-site inventory, screenshots, accessibility intent, and these checks to `reviewing-translations` and CI:
+Always perform file and structural checks, including:
 
 - build and extract every shipped target; reconcile missing, duplicate, stale, untranslated, and review-needed entries under the approved policy
 - preserve resource keys, tables/catalogs, substitutions, variation topology, protected identifiers, and source meaning
-- compile catalogs and execute localized strings with representative plural, number, date, currency, and identifier values
-- verify no raw key, source-language fallback, runtime concatenation, hard-coded formatting, or accidental mixed-language output reaches visible or VoiceOver content
+- compile catalogs and validate plural, number, date, currency, and identifier substitutions
+- reject raw keys, runtime concatenation, hard-coded formatting, and accidental mixed-language target resources
+
+Perform the following runtime checks only after the orchestrator supplies a resolved `run` decision. Use the smallest relevant runtime scope for the affected resources and states; do not independently choose the runtime-review budget or expand it to the whole application:
+
+- execute localized strings with representative plural, number, date, currency, and identifier values
+- verify no raw key, source-language fallback, hard-coded formatting, or accidental mixed-language output reaches visible or VoiceOver content
 - test screenshots and interaction on required iPhone/iPad sizes, Dynamic Type ranges, VoiceOver, and RTL layouts
 - confirm visible, spoken, formatted, and business-executed values remain consistent
 
-Block release on catalog or extraction drift without disposition, resource-key or substitution corruption, incomplete target plural behavior, unintended fallback, raw keys, incorrect locale formatting, misleading VoiceOver output, RTL ordering defects, or required content hidden by layout. Route the exact key, call site, state, and evidence to its responsible installed skill.
+Pass catalogs, source and target resources, target/build matrix, call-site inventory, available screenshots, accessibility intent, and applicable results to `reviewing-translations` and CI.
+
+Always block release on catalog or extraction drift without disposition, resource-key or substitution corruption, incomplete target plural behavior, raw keys, or invalid locale formatting. When runtime review runs, also block on unintended fallback, misleading VoiceOver output, RTL ordering defects, or required content hidden by layout. Route the exact key, call site, state, and evidence to its responsible installed skill.

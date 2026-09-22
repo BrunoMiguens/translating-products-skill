@@ -86,6 +86,7 @@ def synthetic_skill(
     supersedes=(),
     ownership=None,
     independent_review_required=False,
+    runtime_ui_review="none",
     category="language",
 ):
     skill = {
@@ -103,6 +104,7 @@ def synthetic_skill(
         "supersedes": list(supersedes),
         "verification": {
             "independent_review_required": independent_review_required,
+            "runtime_ui_review": runtime_ui_review,
         },
     }
     if ownership is not None:
@@ -454,7 +456,7 @@ class RoutingTests(unittest.TestCase):
             ],
         )
 
-    def test_route_aggregates_independent_review_requirements_in_selected_load_order(self):
+    def test_route_aggregates_runtime_ui_review_requirements_in_selected_load_order(self):
         router = load_module("route_capabilities_verification_requirements", ROUTER)
         selector = ({"domains": ["verification-demo"]},)
         catalog = synthetic_catalog(
@@ -463,12 +465,14 @@ class RoutingTests(unittest.TestCase):
                 selectors=selector,
                 phases=("review",),
                 independent_review_required=True,
+                runtime_ui_review="required",
             ),
             synthetic_skill(
                 "translate-first",
                 selectors=selector,
                 phases=("translate",),
                 independent_review_required=True,
+                runtime_ui_review="recommended",
             ),
             synthetic_skill(
                 "refine-middle",
@@ -486,7 +490,42 @@ class RoutingTests(unittest.TestCase):
             {
                 "independent_review_required": True,
                 "required_by": ["translate-first", "review-last"],
+                "runtime_ui_review": "required",
+                "runtime_ui_review_declared_by": [
+                    "translate-first",
+                    "review-last",
+                ],
             },
+        )
+
+    def test_route_uses_strongest_runtime_ui_review_value(self):
+        router = load_module("route_capabilities_runtime_ui_review", ROUTER)
+        selector = ({"domains": ["runtime-review-demo"]},)
+        catalog = synthetic_catalog(
+            synthetic_skill(
+                "recommended-first",
+                selectors=selector,
+                phases=("translate",),
+                runtime_ui_review="recommended",
+            ),
+            synthetic_skill(
+                "none-middle",
+                selectors=selector,
+                phases=("refine",),
+            ),
+        )
+
+        result = router.route_profile(
+            complete_profile(domains=["runtime-review-demo"]), catalog
+        )
+
+        self.assertEqual(
+            result["verification_requirements"]["runtime_ui_review"],
+            "recommended",
+        )
+        self.assertEqual(
+            result["verification_requirements"]["runtime_ui_review_declared_by"],
+            ["recommended-first"],
         )
 
     def test_selected_load_order_respects_transitive_cross_phase_dependencies(self):

@@ -26,17 +26,21 @@ def load_contract():
 
 
 class CatalogTests(unittest.TestCase):
-    def test_skill_verification_defaults_to_no_independent_review(self):
+    def test_skill_verification_defaults_runtime_ui_review_to_none(self):
         contract = load_contract()
         skill = json.loads(
             (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
         )["skills"][0]
+        skill.pop("verification", None)
 
         validated = contract.validate_skill_record(skill)
 
         self.assertEqual(
             validated["verification"],
-            {"independent_review_required": False},
+            {
+                "independent_review_required": False,
+                "runtime_ui_review": "none",
+            },
         )
 
     def test_skill_verification_accepts_independent_review_requirement(self):
@@ -44,14 +48,33 @@ class CatalogTests(unittest.TestCase):
         skill = json.loads(
             (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
         )["skills"][0]
-        skill["verification"] = {"independent_review_required": True}
+        skill["verification"] = {
+            "independent_review_required": True,
+            "runtime_ui_review": "required",
+        }
 
         validated = contract.validate_skill_record(skill)
 
         self.assertEqual(
             validated["verification"],
-            {"independent_review_required": True},
+            {
+                "independent_review_required": True,
+                "runtime_ui_review": "required",
+            },
         )
+
+    def test_skill_verification_rejects_unknown_runtime_ui_review_value(self):
+        contract = load_contract()
+        skill = json.loads(
+            (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
+        )["skills"][0]
+        skill["verification"] = {
+            "independent_review_required": False,
+            "runtime_ui_review": "sometimes",
+        }
+
+        with self.assertRaisesRegex(ValueError, "runtime_ui_review"):
+            contract.validate_skill_record(skill)
 
     def test_skill_verification_rejects_unknown_fields(self):
         contract = load_contract()
@@ -68,7 +91,10 @@ class CatalogTests(unittest.TestCase):
         skill = json.loads(
             (ROOT / "skills-manifest.json").read_text(encoding="utf-8")
         )["skills"][0]
-        skill["verification"] = {"independent_review_required": 1}
+        skill["verification"] = {
+            "independent_review_required": 1,
+            "runtime_ui_review": "none",
+        }
 
         with self.assertRaisesRegex(ValueError, "verification must use a boolean"):
             contract.validate_skill_record(skill)
@@ -216,7 +242,10 @@ class CatalogTests(unittest.TestCase):
         )
         self.assertEqual(
             catalog["skills"][0]["verification"],
-            {"independent_review_required": False},
+            {
+                "independent_review_required": False,
+                "runtime_ui_review": "none",
+            },
         )
 
     def test_catalog_preserves_absent_selectors_as_universal_scope(self):

@@ -73,8 +73,9 @@ LOCALE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
 REQUEST_FIELDS = ("schema_version", "review_id", "source_locale", "targets")
 REQUEST_TARGET_FIELDS = (
     "target_locale", "review_depth", "selected_capabilities",
-    "missing_capabilities", "units",
+    "missing_capabilities", "runtime_ui_review", "units",
 )
+RUNTIME_UI_REQUEST_FIELDS = ("decision", "required", "reasons")
 REQUEST_UNIT_FIELDS = (
     "unit_id", "source", "current_target", "protected_terms", "automatic_checks",
 )
@@ -82,9 +83,10 @@ REQUEST_UNIT_OPTIONAL_FIELDS = ("source_invariant",)
 RESULT_FIELDS = ("schema_version", "review_id", "source_locale", "locales", "summary")
 RESULT_LOCALE_FIELDS = (
     "target_locale", "review_depth", "execution_mode", "selected_capabilities",
-    "missing_capabilities", "units",
+    "missing_capabilities", "runtime_ui_review", "units",
 )
 RESULT_LOCALE_OPTIONAL_FIELDS = ("research",)
+RUNTIME_UI_RESULT_FIELDS = ("status", "reason", "evidence")
 RESULT_UNIT_FIELDS = (
     "unit_id", "source", "current_target", "classification", "primary", "challenge",
     "adjudication", "recommendation", "recommendation_qa", "source_issue",
@@ -361,14 +363,49 @@ def _validate_human_review(value: object, path: str, errors: list[str]) -> None:
                 errors.append(f"{path}.{field} must be null unless human review is completed")
 
 
+def _validate_runtime_ui_review_request(
+    value: object,
+    path: str,
+    errors: list[str],
+) -> Mapping[str, object] | None:
+    record = _object(value, path, RUNTIME_UI_REQUEST_FIELDS, errors)
+    if record is None:
+        return None
+    _enum(record.get("decision"), f"{path}.decision", ("run", "skip", "ask"), errors)
+    _boolean(record.get("required"), f"{path}.required", errors)
+    reasons = _string_list(record.get("reasons"), f"{path}.reasons", errors)
+    if reasons is not None and not reasons:
+        errors.append(f"{path}.reasons must not be empty")
+    return record
+
+
+def _validate_runtime_ui_review_result(
+    value: object,
+    path: str,
+    errors: list[str],
+) -> Mapping[str, object] | None:
+    record = _object(value, path, RUNTIME_UI_RESULT_FIELDS, errors)
+    if record is None:
+        return None
+    _enum(
+        record.get("status"),
+        f"{path}.status",
+        ("completed", "not_run", "unavailable", "not_applicable"),
+        errors,
+    )
+    _text(record.get("reason"), f"{path}.reason", errors, nonblank=True, nullable=True)
+    _string_list(record.get("evidence"), f"{path}.evidence", errors)
+    return record
+
+
 def _validate_request(request: Mapping[str, object], errors: list[str]) -> dict[str, dict]:
     root = _object(request, "request", REQUEST_FIELDS, errors)
     targets_by_locale: dict[str, dict] = {}
     if root is None:
         return targets_by_locale
     version = _integer(root.get("schema_version"), "request.schema_version", errors)
-    if version is not None and version != 1:
-        errors.append("request.schema_version must equal 1")
+    if version is not None and version != 2:
+        errors.append("request.schema_version must equal 2")
     _text(root.get("review_id"), "request.review_id", errors, nonblank=True)
     _locale(root.get("source_locale"), "request.source_locale", errors)
     targets = _list(root.get("targets"), "request.targets", errors, nonempty=True)
@@ -383,6 +420,9 @@ def _validate_request(request: Mapping[str, object], errors: list[str]) -> dict[
         depth = _enum(target.get("review_depth"), f"{path}.review_depth", REVIEW_DEPTHS, errors)
         selected = _string_list(target.get("selected_capabilities"), f"{path}.selected_capabilities", errors)
         missing = _string_list(target.get("missing_capabilities"), f"{path}.missing_capabilities", errors)
+        runtime_ui_review = _validate_runtime_ui_review_request(
+            target.get("runtime_ui_review"), f"{path}.runtime_ui_review", errors
+        )
         units = _list(target.get("units"), f"{path}.units", errors, nonempty=True)
         unit_map: dict[str, Mapping[str, object]] = {}
         if units is not None:
@@ -439,6 +479,7 @@ def _validate_request(request: Mapping[str, object], errors: list[str]) -> dict[
                     "depth": depth,
                     "selected": selected,
                     "missing": missing,
+                    "runtime_ui_review": runtime_ui_review,
                     "units": unit_map,
                 }
     return targets_by_locale
@@ -449,8 +490,8 @@ def _validate_result_shape(result: Mapping[str, object], errors: list[str]) -> l
     if root is None:
         return []
     version = _integer(root.get("schema_version"), "result.schema_version", errors)
-    if version is not None and version != 1:
-        errors.append("result.schema_version must equal 1")
+    if version is not None and version != 2:
+        errors.append("result.schema_version must equal 2")
     _text(root.get("review_id"), "result.review_id", errors, nonblank=True)
     _locale(root.get("source_locale"), "result.source_locale", errors)
     locales = _list(root.get("locales"), "result.locales", errors, nonempty=True)
@@ -472,6 +513,9 @@ def _validate_result_shape(result: Mapping[str, object], errors: list[str]) -> l
             _enum(locale.get("execution_mode"), f"{path}.execution_mode", ("sequential", "parallel"), errors)
             _string_list(locale.get("selected_capabilities"), f"{path}.selected_capabilities", errors)
             _string_list(locale.get("missing_capabilities"), f"{path}.missing_capabilities", errors)
+            _validate_runtime_ui_review_result(
+                locale.get("runtime_ui_review"), f"{path}.runtime_ui_review", errors
+            )
             _list(locale.get("units"), f"{path}.units", errors, nonempty=True)
             if "research" in locale:
                 _validate_research(locale.get("research"), f"{path}.research", errors)
@@ -794,6 +838,12 @@ def _validate_coverage_and_units(
                 errors.append(f"{path}.selected_capabilities do not match request")
             if locale_record.get("missing_capabilities") != request_target["value"].get("missing_capabilities"):
                 errors.append(f"{path}.missing_capabilities do not match request")
+            _validate_runtime_ui_review_relationship(
+                request_target.get("runtime_ui_review"),
+                locale_record.get("runtime_ui_review"),
+                f"{path}.runtime_ui_review",
+                errors,
+            )
         request_units = {} if request_target is None else request_target["units"]
         raw_units = locale_record.get("units")
         if type(raw_units) is not list:
@@ -829,6 +879,55 @@ def _validate_coverage_and_units(
         if locale not in seen_locales:
             errors.append(f"result.locales is missing target locale {locale!r}")
     return total_units, counts
+
+
+def _validate_runtime_ui_review_relationship(
+    request_record: object,
+    result_record: object,
+    path: str,
+    errors: list[str],
+) -> None:
+    if not isinstance(request_record, Mapping) or not isinstance(result_record, Mapping):
+        return
+    decision = request_record.get("decision")
+    required = request_record.get("required")
+    reasons = request_record.get("reasons")
+    status = result_record.get("status")
+    reason = result_record.get("reason")
+    evidence = result_record.get("evidence")
+    has_evidence = isinstance(evidence, list) and bool(evidence)
+    has_reason = isinstance(reason, str) and bool(reason.strip())
+
+    if status == "completed":
+        if not has_evidence:
+            errors.append(f"{path} completed runtime UI review requires evidence")
+        if reason is not None:
+            errors.append(f"{path}.reason must be null when status is completed")
+        if decision != "run":
+            errors.append(f"{path} completed requires a run decision")
+    elif status == "not_run":
+        if not has_reason:
+            errors.append(f"{path}.reason must be nonblank when status is not_run")
+        if has_evidence:
+            errors.append(f"{path}.evidence must be empty when status is not_run")
+        if decision != "skip":
+            errors.append(f"{path} not_run requires a skip decision")
+        if required is True:
+            errors.append(f"{path} required runtime UI review cannot be not_run")
+    elif status == "unavailable":
+        if not has_reason:
+            errors.append(f"{path}.reason must be nonblank when status is unavailable")
+        if decision != "run":
+            errors.append(f"{path} unavailable requires a run decision")
+    elif status == "not_applicable":
+        if has_evidence:
+            errors.append(f"{path}.evidence must be empty when status is not_applicable")
+        if decision != "skip":
+            errors.append(f"{path} not_applicable requires a skip decision")
+        if not isinstance(reasons, list) or "no-applicable-runtime-surface" not in reasons:
+            errors.append(
+                f"{path} not_applicable requires no-applicable-runtime-surface"
+            )
 
 
 def _validate_summary(
