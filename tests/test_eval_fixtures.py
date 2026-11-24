@@ -64,7 +64,7 @@ SCHEMAS = {
 }
 
 EXPECTED_COUNTS = {
-    "routing-cases.json": 42,
+    "routing-cases.json": 43,
     "bootstrap-cases.json": 14,
     "orchestration-cases.json": 17,
     "research-cases.json": 15,
