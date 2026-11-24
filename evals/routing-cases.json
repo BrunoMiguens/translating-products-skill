@@ -228,6 +228,7 @@
       "targets": [
         {"locale": "ur-PK", "scripts": ["Arab"]},
         {"locale": "he-IL", "scripts": ["Hebr"]},
+        {"locale": "yi", "scripts": ["hEbr"]},
         {"locale": "nqo", "scripts": ["Nkoo"]},
         {"locale": "syr", "scripts": ["Syrc"]},
         {"locale": "dv", "scripts": ["Thaa"]},
@@ -247,6 +248,7 @@
     "expected_routes": [
       {"target_locale": "ur-PK", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
       {"target_locale": "he-IL", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl", "translating-hebrew"]},
+      {"target_locale": "yi", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
       {"target_locale": "nqo", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
       {"target_locale": "syr", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
       {"target_locale": "dv", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
