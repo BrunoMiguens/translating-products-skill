@@ -91,6 +91,8 @@ Route the defect to the installed specialist that owns the affected artifact or 
 
 ## Surface QA
 
+For an assembled field with an approved limit, [measure the final field](references/field-budgets.md) using the declared counting method.
+
 Apply the explicit constraints supplied by each installed surface, platform, domain, or script specialist, such as visible-length limits, metadata fields, accessibility behavior, or bidirectional layout. Do not invent a specialist or infer constraints from one that is not installed.
 
 Route each failure to the specialist that supplied the constraint. When a hard explicit constraint conflicts with an approved term, name the conflict and route it to the constraint owner without silently changing either decision.

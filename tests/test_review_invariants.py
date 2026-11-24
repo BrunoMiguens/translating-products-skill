@@ -37,6 +37,43 @@ class ReviewInvariantTests(unittest.TestCase):
             checks=checks,
         )
 
+    def test_character_budget_can_use_the_platform_counting_method(self):
+        text = "Café 🌍"
+        for method, limit, passes in (
+            ("codepoints", 6, True), ("utf16", 6, False), ("utf8", 9, False),
+            ("utf16", 7, True), ("utf8", 10, True),
+        ):
+            with self.subTest(method=method, limit=limit):
+                findings = self.validate(source="Earth", candidate=text, checks=({
+                    "type": "character_limit", "severity": "critical",
+                    "max": limit, "counting": method,
+                },))
+                if passes:
+                    self.assertEqual(findings, ())
+                else:
+                    self.assertEqual(len(findings), 1)
+                    self.assertEqual(findings[0].check, "character_limit")
+
+    def test_character_budget_spans_use_candidate_string_offsets(self):
+        for candidate, check, span in (
+            ("abcd", {"max": 2}, (2, 4)),
+            ("a🌍b", {"max": 2, "counting": "utf16"}, (1, 3)),
+            ("é🌍x", {"max": 3, "counting": "utf8"}, (1, 3)),
+            ("🌍", {"max": 3, "counting": "utf8"}, (0, 1)),
+        ):
+            with self.subTest(candidate=candidate, check=check):
+                findings = self.validate(
+                    source="Earth", candidate=candidate,
+                    checks=({"type": "character_limit", "severity": "critical", **check},),
+                )
+                self.assertEqual([finding.span for finding in findings], [span])
+
+    def test_character_budget_rejects_unknown_counting_method(self):
+        with self.assertRaisesRegex(ValueError, "counting"):
+            validate_check_declaration({
+                "type": "character_limit", "severity": "critical", "counting": "unknown",
+            })
+
     def test_findings_preserve_declared_check_order_and_public_fields(self):
         """Break: installed validation could reorder checks or lose portable finding data."""
         findings = self.validate(
