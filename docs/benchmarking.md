@@ -11,6 +11,7 @@ matches the evidence you need.
 | Make a controlled, public quality claim on the frozen PT-PT dataset | [Controlled PT-PT benchmark](benchmarks/pt-pt.md) |
 | Test the suite against private strings from a real product | [Private product review](benchmarks/product-review.md) |
 | Read the completed 25-project results and follow the improvement plan | [v0.4.0 translation quality baseline](benchmarks/native-quality-baseline.md) |
+| Check the follow-up across native consumers and project order | [Native translation verification](benchmarks/native-quality-verification.md) |
 | Check that routing, schemas, structure, and commands still work | Repository tests in [Contributing](../CONTRIBUTING.md#run-the-checks) |
 
 The controlled benchmark is deliberately expensive: it requires a frozen
