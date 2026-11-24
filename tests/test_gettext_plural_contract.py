@@ -63,9 +63,15 @@ class GettextPluralContractTests(unittest.TestCase):
         self.assertIn("count 0", result.stderr)
 
     def test_duplicate_plural_headers_are_rejected(self):
-        result = self.check("nplurals=2; plural=n!=1;\nPlural-Forms: nplurals=2; plural=n>1;")
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("one Plural-Forms header", result.stderr)
+        for field in ("Plural-Forms", " Plural-Forms\t", "\u00a0Plural-Forms\u00a0"):
+            with self.subTest(field=field):
+                result = self.check(f"nplurals=2; plural=n!=1;\n{field}: nplurals=2; plural=n>1;")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("one Plural-Forms header", result.stderr)
+
+    def test_distinct_header_name_does_not_count_as_a_duplicate(self):
+        result = self.check("nplurals=2; plural=n>1;\nPlural-Form\u017f: annotation")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_equivalent_expressions_pass_the_same_samples(self):
         for expression in ("n>1", "n==0||n==1?0:1"):
