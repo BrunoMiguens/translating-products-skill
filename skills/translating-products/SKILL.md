@@ -48,7 +48,9 @@ Follow this order:
 15. After each primary locale review, execute the holistic review workflow below. Derive and call `SKILL_DIRECTORY/scripts/policy.py`'s `should_use_subagents` exactly as specified below, then branch only on its boolean result. A true result uses a fresh-agent context; a false result uses a sequential challenge pass and records that context isolation was unavailable.
 16. Append newly inferred decisions to `.translation/decisions.md` and newly inferred terms to draft terminology with `draft` status; do not silently promote either to approved policy.
 17. After saving the requested files and applying all accepted corrections,
-    verify the values at their final destinations against review. Follow
+    run the saved-resource checks required by the selected platform and
+    format skills, including when runtime UI review is skipped. Verify the
+    values at their final destinations against review. Follow
     `references/delivery-validation.md` in the selected reviewing skill for
     the applicable format. Compare the source files or shared-resource entries
     with their captured contents. Any unrequested source change or missing
