@@ -1050,13 +1050,16 @@ class ReviewArtifactCliTests(unittest.TestCase):
                     self.assertEqual(run("--allow-partial-delivery").returncode, 1)
 
     @unittest.skipUnless(shutil.which("msgfmt"), "GNU msgfmt is required")
-    def test_delivery_verifies_gettext_context_without_accepting_fallback(self):
+    def test_delivery_verifies_stored_gettext_context_and_plural_selection(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             po = root / "copy.po"
             po.write_text(
                 'msgid ""\nmsgstr ""\n"Content-Type: text/plain; charset=UTF-8\\n"\n\n'
-                'msgctxt "settings"\nmsgid "Hello {name}"\nmsgstr "Bonjour {name}"\n',
+                'msgctxt "settings"\nmsgid "Hello {name}"\n'
+                'msgid_plural "Hello everyone {name}"\n'
+                'msgstr[0] "Bonjour {name}"\n'
+                'msgstr[1] "Bonjour à tout le monde {name}"\n',
                 encoding="utf-8",
             )
             mo = root / "copy.mo"
@@ -1075,6 +1078,11 @@ class ReviewArtifactCliTests(unittest.TestCase):
                 return self.run_cli(json.dumps(request), json.dumps(result), "--delivery", str(manifest))
 
             self.assertEqual(run().returncode, 0)
+            mapping["count"] = 2
+            for row in (request["targets"][0], result["locales"][0]):
+                row["units"][0]["current_target"] = "Bonjour à tout le monde {name}"
+            self.assertEqual(run().returncode, 0)
+            del mapping["count"]
             mapping["context"] = "help"
             for row in (request["targets"][0], result["locales"][0]):
                 row["units"][0]["current_target"] = "Hello {name}"

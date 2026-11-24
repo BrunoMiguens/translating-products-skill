@@ -1056,7 +1056,9 @@ def _gettext_delivery_value(
     key = keys[0] if context is None else f"{context}\x04{keys[0]}"
     # The consumer's public lookups silently fall back to the source. Require a
     # stored translation even when the approved text equals the source.
-    lookup = key if count is None else (key, catalog.plural(count))
+    if count is None and key in catalog._catalog:
+        return catalog._catalog[key]
+    lookup = (key, catalog.plural(1 if count is None else count))
     if lookup not in catalog._catalog:
         raise ValueError("missing key in final gettext resource")
     return catalog._catalog[lookup]
