@@ -173,7 +173,7 @@ _CHECK_FIELDS.update({
         "source_decimal_separator", "source_grouping_separator",
         "target_decimal_separator", "target_grouping_separator",
     }),
-    "character_limit": frozenset({"type", "severity", "max"}),
+    "character_limit": frozenset({"type", "severity", "max", "counting"}),
     "line_count": frozenset({"type", "severity", "count", "lines"}),
     "csv_shape": frozenset({"type", "severity", "delimiter"}),
     "forbidden_locale_form": frozenset({
@@ -285,9 +285,11 @@ def validate_check_declaration(check: Mapping[str, object]) -> None:
         )
         if values is not None and len(values) != len(set(values)):
             raise ValueError(f"{check_type} values must not contain duplicates")
-    elif check_type == "character_limit" and "max" in check:
-        if type(check["max"]) is not int or check["max"] < 0:
+    elif check_type == "character_limit":
+        if "max" in check and (type(check["max"]) is not int or check["max"] < 0):
             raise ValueError("character_limit requires a non-negative integer max")
+        if check.get("counting", "codepoints") not in ("codepoints", "utf16", "utf8"):
+            raise ValueError("character_limit counting must be codepoints, utf16 or utf8")
     elif check_type == "number_multiset":
         source_format = _declared_number_format(check, "source")
         target_format = _declared_number_format(check, "target")
@@ -626,11 +628,21 @@ def check_character_limit(case: Mapping[str, object], output: str, check: Mappin
             maximum = constraints.get("character_limit")
     if type(maximum) is not int or maximum < 0:
         raise ValueError("character_limit requires a non-negative integer max")
-    if len(output) <= maximum:
+    method = check.get("counting", "codepoints")
+    if method == "utf16":
+        length = len(output.encode("utf-16-le")) // 2
+        unit = "UTF-16 code unit"
+    elif method == "utf8":
+        length = len(output.encode("utf-8"))
+        unit = "UTF-8 byte"
+    else:
+        length = len(output)
+        unit = "character"
+    if length <= maximum:
         return ()
     return (_InvariantEvidence(
-        "character_limit", _severity(check), {"max": maximum}, {"length": len(output)},
-        (maximum, len(output)), f"output exceeds the {maximum}-character limit",
+        "character_limit", _severity(check), {"max": maximum}, {"length": length},
+        (maximum, length), f"output exceeds the {maximum}-{unit} limit",
     ),)
 
 
