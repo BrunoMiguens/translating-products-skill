@@ -56,6 +56,15 @@ different, known-defective, and unverified in-scope targets. Prefer the term
 that preserves the source concept and product event across related units, then
 adapt its grammatical realization to each surface.
 
+Treat a named protocol, method, or standard as one concept. Check the whole
+name against the source mechanism before translating its individual words.
+If a literal target name could describe a different mechanism, use an
+unambiguous local name supported by the project context. When the source names
+the method without defining it and the brief permits, keep its established
+source name until the local name can be verified. Translate the surrounding
+prose and avoid adding speculative glosses. If the brief requires a localized
+name, route the unresolved wording through the terminology decision below.
+
 Before drafting a recurring or high-impact unapproved term, determine whether
 it materially affects domain meaning, legal meaning, participant roles, or the
 truth of an answer. Return such an unresolved term to the orchestrator for a
