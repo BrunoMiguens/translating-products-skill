@@ -26,7 +26,7 @@ def write_catalog(path, rule):
 
 
 class GettextPluralContractTests(unittest.TestCase):
-    def check(self, rule, authority=None, *, compile_native=False):
+    def check(self, rule, authority=None, *, compile_native=False, plural_forms=("zero-one", "many")):
         with tempfile.TemporaryDirectory() as location:
             root = Path(location)
             po = root / "catalog.po"
@@ -38,7 +38,7 @@ class GettextPluralContractTests(unittest.TestCase):
                     '"Content-Type: text/plain; charset=UTF-8\\n"\n'
                     f'"Plural-Forms: {rule}\\n"\n\n'
                     'msgid "marker"\nmsgid_plural "markers"\n'
-                    + "".join(f'msgstr[{i}] "{value}"\n' for i, value in enumerate(("zero-one", "many"))),
+                    + "".join(f'msgstr[{i}] "{value}"\n' for i, value in enumerate(plural_forms)),
                     encoding="utf-8",
                 )
                 subprocess.run(["msgfmt", "-o", str(mo), str(po)], capture_output=True, check=True)
@@ -77,6 +77,22 @@ class GettextPluralContractTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn("authority", result.stderr)
 
+
+    @unittest.skipUnless(shutil.which("msgfmt"), "GNU msgfmt is required")
+    def test_required_message_has_a_nonempty_form_in_every_branch(self):
+        approved = {
+            "nplurals": 2, "selections": {"0": 0, "2": 1},
+            "required_messages": [{"msgid": "marker"}],
+        }
+        full = self.check("nplurals=2; plural=n>1;", approved, compile_native=True)
+        self.assertEqual(full.returncode, 0, full.stderr)
+        blank = self.check("nplurals=2; plural=n>1;", approved,
+                           compile_native=True, plural_forms=("zero-one", ""))
+        self.assertEqual(blank.returncode, 1, blank.stderr)
+        self.assertIn("required message 1 has no translation for branch 1", blank.stderr)
+        wrong_context = dict(approved, required_messages=[{"msgid": "marker", "context": "other"}])
+        missing = self.check("nplurals=2; plural=n>1;", wrong_context, compile_native=True)
+        self.assertEqual(missing.returncode, 1, missing.stderr)
 
     def test_malformed_authority_uses_the_input_error_exit(self):
         with tempfile.TemporaryDirectory() as location:
