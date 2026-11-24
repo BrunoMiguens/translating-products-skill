@@ -69,6 +69,8 @@ This skill owns software field classification, protected syntax, runtime constra
 
 ## QA and CI Handoff
 
+For a GNU gettext catalog with an approved plural rule, use the [compiled plural check](references/gettext-plural-contract.md) to verify arity and branch selection at the approved counts.
+
 Pass source and target catalogs, locale pair, runtime/version, key and placeholder inventories, resource comments, rendering context, fallback policy, and these gates to `reviewing-translations` and CI:
 
 - parse or compile every catalog and ICU message with the production runtime
