@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gettext
 import importlib.util
 import json
 import math
@@ -1077,7 +1078,10 @@ class ReviewArtifactCliTests(unittest.TestCase):
                 }}}), encoding="utf-8")
                 return self.run_cli(json.dumps(request), json.dumps(result), "--delivery", str(manifest))
 
-            self.assertEqual(run().returncode, 0)
+            with mo.open("rb") as resource:
+                consumer = gettext.GNUTranslations(resource)
+            expected = consumer.pgettext("settings", "Hello {name}")
+            self.assertEqual(run().returncode, 0 if expected == "Bonjour {name}" else 1)
             mapping["count"] = 2
             for row in (request["targets"][0], result["locales"][0]):
                 row["units"][0]["current_target"] = "Bonjour à tout le monde {name}"
@@ -1089,6 +1093,16 @@ class ReviewArtifactCliTests(unittest.TestCase):
             output = run()
             self.assertEqual(output.returncode, 1)
             self.assertIn("missing key", output.stderr)
+
+            # Without --check, msgfmt can write metadata with an invalid selector.
+            metadata = '"Plural-Forms: nplurals=2; plural=INTERNAL_PROJECT_MARKER;\\n"'
+            source = po.read_text(encoding="utf-8").replace("\n\nmsgctxt", f"\n{metadata}\n\nmsgctxt")
+            po.write_text(source, encoding="utf-8")
+            subprocess.run(["msgfmt", "-o", str(mo), str(po)], check=True, capture_output=True)
+            output = run()
+            self.assertEqual(output.returncode, 1, output.stderr)
+            self.assertIn("invalid compiled gettext resource", output.stderr)
+            self.assertNotIn("INTERNAL_PROJECT_MARKER", output.stderr)
 
     def test_delivery_rejects_duplicate_final_resource_keys(self):
         output = self.verify_final_resource(

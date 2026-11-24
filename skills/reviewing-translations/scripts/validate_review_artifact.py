@@ -1036,6 +1036,15 @@ def _same_delivery_value(left: object, right: object) -> bool:
     return left == right
 
 
+class _RejectGettextFallback(gettext.NullTranslations):
+    """Require a stored value even when source and target text are identical."""
+
+    def _missing(self, *args: object) -> str:
+        raise ValueError("missing key in final gettext resource")
+
+    gettext = pgettext = ngettext = npgettext = _missing
+
+
 def _gettext_delivery_value(
     path: Path, unit: dict[str, object], parsed: dict[tuple[Path, str], object]
 ) -> str:
@@ -1050,18 +1059,20 @@ def _gettext_delivery_value(
         raise ValueError("gettext count must be a non-negative integer or null")
     cache_key = path, "gettext"
     if cache_key not in parsed:
-        with path.open("rb") as resource:
-            parsed[cache_key] = gettext.GNUTranslations(resource)
+        try:
+            with path.open("rb") as resource:
+                catalog = gettext.GNUTranslations(resource)
+        except (ValueError, LookupError, struct.error):
+            raise ValueError("invalid compiled gettext resource") from None
+        catalog.add_fallback(_RejectGettextFallback())
+        parsed[cache_key] = catalog
     catalog = parsed[cache_key]
-    key = keys[0] if context is None else f"{context}\x04{keys[0]}"
-    # The consumer's public lookups silently fall back to the source. Require a
-    # stored translation even when the approved text equals the source.
-    if count is None and key in catalog._catalog:
-        return catalog._catalog[key]
-    lookup = (key, catalog.plural(1 if count is None else count))
-    if lookup not in catalog._catalog:
-        raise ValueError("missing key in final gettext resource")
-    return catalog._catalog[lookup]
+    message = keys[0]
+    if count is None:
+        return catalog.gettext(message) if context is None else catalog.pgettext(context, message)
+    if context is None:
+        return catalog.ngettext(message, message, count)
+    return catalog.npgettext(context, message, message, count)
 
 
 def _delivery_matches_review(
