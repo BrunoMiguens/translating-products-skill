@@ -44,6 +44,8 @@ For notifications, confirm who acted, what changed, and which value anchors the 
 
 Maintain the approved politeness level across instructions, conditions, warnings, and calls to action. Prefer coherent Japanese information order and explicit logical connections over sentence-by-sentence English calques. Resolve who performs each action before omitting the subject. When English makes a product the grammatical agent of a causative or continuing state (“X keeps Y ready”), express the capability through a natural Japanese state, means, or possibility construction; do not force the product into an animate-subject template. Keep headings concise while allowing explanatory prose to breathe.
 
+In a procedure, identify the two actions linked by a time expression and check their order in the Japanese. For “check the links before publishing the report,” use `レポートを公開する前に、リンクを確認します` or another construction that makes publication the later action. When the source orders items in a list or timeline, keep the named item as the point of comparison.
+
 ## Common Literal-Translation Failures
 
 - retaining `あなた`, pronouns, or possessives where Japanese naturally omits them
@@ -64,9 +66,10 @@ Pass source, core draft, revision, locale/market, surface register, relationship
 - meaning, actors, facts, names, numbers, links, placeholders, and structure remain complete
 - politeness level and honorific treatment match the configured relationship consistently
 - omitted subjects remain recoverable and do not alter who acts or owns a state
+- procedural timing still connects the same actions in the same order
 - counters and surrounding grammar work for representative runtime values
 - approved loanwords, native terms, abbreviations, and script choices remain consistent
 - punctuation, spacing, and full-width/half-width behavior fit the output format without corrupting protected syntax
 - UI copy is concise and unambiguous in context; long-form prose has natural Japanese information flow
 
-Block the affected segment on missing locale/register, unjustified honorifics, unclear actor after omission, counter mismatch, register drift, literal word order, glossary inconsistency, or protected-value corruption. Return only the smallest failing segment to the responsible specialist.
+Block the affected segment on missing locale/register, unjustified honorifics, unclear actor after omission, counter mismatch, register drift, changed procedural timing or event dependencies, literal word order, glossary inconsistency, or protected-value corruption. Return only the smallest failing segment to the responsible specialist.
