@@ -30,6 +30,8 @@ Inspect the base `res/values` resources, every relevant locale qualifier, Gradle
 
 Never infer meaning from a resource name alone. Send complete phrases and context to `translating-core`; preserve Android syntax while installed language specialists choose grammar and word order.
 
+Resolve the locale's Android resource directory before drafting. For Hebrew without a verified project mapping, use `values-iw` and retain the exact requested locale tag. Choose `values-iw-rIL` only for a required separate Israel layer.
+
 ## Preserve the Resource Contract
 
 Keep resource names and types, positional placeholder indices and types, markup topology, protected identifiers, URLs, product facts, and runtime data unchanged. Allow target text to reorder numbered string or integer format arguments; never replace them with translated names or unnumbered concatenation.
@@ -84,6 +86,7 @@ This skill owns Android resource classification, syntax, formatting, layout, and
 
 Always perform file and structural checks, including:
 
+- for every saved Hebrew resource file, run `python3 ANDROID_SKILL_DIRECTORY/scripts/check_resource_destination.py --locale TARGET_LOCALE RESOURCE_FILE` before delivery. Resolve `ANDROID_SKILL_DIRECTORY` from the selected Android skill. Supply `--runtime-verified-directory DIRECTORY_NAME` only for a different path with a demonstrated lookup for this target on the supported runtime. Treat a failed path check as a delivery blocker even when runtime UI review is skipped.
 - compile resources and lint all shipped variants; compare resource names/types, placeholders, plural schemas, markup, escapes, protected values, and `translatable="false"` policy
 - execute every plural branch and representative formatted value under the target locale
 - verify Compose and XML contain no unintended user-facing literals or physical-direction assumptions
