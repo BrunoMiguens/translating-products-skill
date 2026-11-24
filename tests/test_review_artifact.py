@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import copy
+import gettext
 import importlib.util
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -929,6 +931,188 @@ class ReviewArtifactCliTests(unittest.TestCase):
             '"change_recommended":1,"blocked_by_source":0,"unresolved":0}}\n',
         )
         self.assertEqual(completed.stderr, "")
+
+    def verify_final_resource(self, resource_text, *, review_id="review-001", locale="fr-FR",
+                              pointer=("messages", "payment.action")):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "localized.json").write_text(resource_text, encoding="utf-8")
+            manifest = {
+                "review_id": review_id,
+                "locales": {locale: {
+                    "message.title": {"path": "localized.json", "keys": ["messages", "message.title"]},
+                    "payment.action": {"path": "localized.json", "keys": list(pointer)},
+                }},
+            }
+            path = root / "delivery.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            return self.run_cli(json.dumps(request_fixture()), json.dumps(result_fixture()),
+                                "--delivery", str(path))
+
+    def test_delivery_reopens_native_values_and_accepts_reviewed_correction(self):
+        output = self.verify_final_resource(
+            r'{"messages":{"message.title":"Bonjour \u007bname}","payment.action":"Payer {amount}"}}'
+        )
+        self.assertEqual(output.returncode, 0, output.stderr)
+
+    def test_delivery_rejects_changed_value_and_original_unapplied_correction(self):
+        for value in ("Verser {amount}", "Débiter {amount}"):
+            with self.subTest(value=value):
+                output = self.verify_final_resource(json.dumps({"messages": {
+                    "message.title": "Bonjour {name}", "payment.action": value,
+                }}))
+                self.assertEqual(output.returncode, 1, output.stderr)
+                self.assertIn("fr-FR/payment.action", output.stderr)
+                self.assertNotIn(value, output.stderr)
+
+    def test_delivery_rejects_another_review_or_locale_and_non_text_values(self):
+        resource = '{"messages":{"message.title":"Bonjour {name}","payment.action":100}}'
+        for options, diagnostic in (
+            ({"review_id": "previous-review"}, "review_id"),
+            ({"locale": "fr-CA"}, "locale"),
+            ({}, "must be a string"),
+            ({"pointer": ("stale", "payment.action")}, "missing key"),
+        ):
+            with self.subTest(options=options):
+                output = self.verify_final_resource(resource, **options)
+                self.assertEqual(output.returncode, 1, output.stderr)
+                self.assertIn(diagnostic, output.stderr)
+
+    def test_delivery_preserves_named_plural_arms_in_typed_json(self):
+        request, result = request_fixture(), result_fixture()
+        for record in (request["targets"][0], result["locales"][0]):
+            record["units"][0]["source"] = '{"one":"Hello {name}","other":"Hi {name}"}'
+            record["units"][0]["current_target"] = '{"one":"Bonjour {name}","other":"Salut {name}"}'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            resource = root / "localized.json"
+            path = root / "delivery.json"
+            path.write_text(json.dumps({
+                "review_id": request["review_id"],
+                "locales": {"fr-FR": {
+                    "message.title": {"path": resource.name, "keys": ["greeting", 0], "typed_json": True},
+                    "payment.action": {"path": resource.name, "keys": ["payment.action"]},
+                }},
+            }), encoding="utf-8")
+            for arms, exit_code in (
+                ({"other": "Salut {name}", "one": "Bonjour {name}"}, 0),
+                ({"one": "Salut {name}", "other": "Bonjour {name}"}, 1),
+            ):
+                resource.write_text(json.dumps({"greeting": [arms], "payment.action": "Payer {amount}"}),
+                                    encoding="utf-8")
+                output = self.run_cli(json.dumps(request), json.dumps(result), "--delivery", str(path))
+                self.assertEqual(output.returncode, exit_code, output.stderr)
+
+    def test_typed_delivery_compares_decimal_values_exactly(self):
+        approved = '1.00000000000000001'
+        candidate = '1.00000000000000002'
+        request, result = request_fixture(), result_fixture()
+        for record in (request["targets"][0], result["locales"][0]):
+            record["units"][0].update(source="1", current_target=approved)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "quoted.json").write_text(candidate, encoding="utf-8")
+            (root / "payment.txt").write_text("Payer {amount}", encoding="utf-8")
+            manifest = root / "delivery.json"
+            manifest.write_text(json.dumps({"review_id": "review-001", "locales": {"fr-FR": {
+                "message.title": {"path": "quoted.json", "keys": [], "typed_json": True},
+                "payment.action": {"path": "payment.txt", "keys": None},
+            }}}), encoding="utf-8")
+            response = self.run_cli(json.dumps(request), json.dumps(result), "--delivery", str(manifest))
+        self.assertEqual(response.returncode, 1, response.stderr)
+        self.assertIn("differs from the reviewed value", response.stderr)
+
+    def test_partial_delivery_requires_explicit_withholds_matching_review(self):
+        request, result = request_fixture(), result_fixture()
+        locale = "fr-FR"
+        units = result["locales"][0]["units"]
+        units[1].update(classification="unresolved", recommendation_qa={"status": "unresolved",
+                        "issues": ["Wording needs a decision"]})
+        result["summary"]["counts"].update(change_recommended=0, unresolved=1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "greeting.txt").write_text("Bonjour {name}", encoding="utf-8")
+            path = root / "delivery.json"
+            manifest = {"review_id": "review-001", "locales": {locale: {
+                "message.title": {"path": "greeting.txt", "keys": None},
+            }}, "withheld": {locale: ["payment.action"]}}
+
+            def run(*extra):
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                return self.run_cli(json.dumps(request), json.dumps(result),
+                                    "--delivery", str(path), *extra)
+
+            accepted = run("--allow-partial-delivery")
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertEqual(run().returncode, 1)
+            for held in ([], ["payment.action", "message.title"], ["unknown"], ["payment.action"] * 2):
+                with self.subTest(held=held):
+                    manifest["withheld"][locale] = held
+                    self.assertEqual(run("--allow-partial-delivery").returncode, 1)
+
+    @unittest.skipUnless(shutil.which("msgfmt"), "GNU msgfmt is required")
+    def test_delivery_verifies_stored_gettext_context_and_plural_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            po = root / "copy.po"
+            po.write_text(
+                'msgid ""\nmsgstr ""\n"Content-Type: text/plain; charset=UTF-8\\n"\n\n'
+                'msgctxt "settings"\nmsgid "Hello {name}"\n'
+                'msgid_plural "Hello everyone {name}"\n'
+                'msgstr[0] "Bonjour {name}"\n'
+                'msgstr[1] "Bonjour à tout le monde {name}"\n',
+                encoding="utf-8",
+            )
+            mo = root / "copy.mo"
+            subprocess.run(["msgfmt", "-o", str(mo), str(po)], check=True, capture_output=True)
+            (root / "action.txt").write_text("Payer {amount}", encoding="utf-8")
+            request, result = request_fixture(), result_fixture()
+            mapping = {"path": mo.name, "keys": ["Hello {name}"],
+                       "format": "gettext", "context": "settings"}
+            manifest = root / "delivery.json"
+
+            def run():
+                manifest.write_text(json.dumps({"review_id": "review-001", "locales": {"fr-FR": {
+                    "message.title": mapping,
+                    "payment.action": {"path": "action.txt", "keys": None},
+                }}}), encoding="utf-8")
+                return self.run_cli(json.dumps(request), json.dumps(result), "--delivery", str(manifest))
+
+            with mo.open("rb") as resource:
+                consumer = gettext.GNUTranslations(resource)
+            expected = consumer.pgettext("settings", "Hello {name}")
+            self.assertEqual(run().returncode, 0 if expected == "Bonjour {name}" else 1)
+            mapping["count"] = 2
+            for row in (request["targets"][0], result["locales"][0]):
+                row["units"][0]["current_target"] = "Bonjour à tout le monde {name}"
+            self.assertEqual(run().returncode, 0)
+            del mapping["count"]
+            mapping["context"] = "help"
+            for row in (request["targets"][0], result["locales"][0]):
+                row["units"][0]["current_target"] = "Hello {name}"
+            output = run()
+            self.assertEqual(output.returncode, 1)
+            self.assertIn("missing key", output.stderr)
+
+            # Without --check, msgfmt can write metadata with an invalid selector.
+            metadata = '"Plural-Forms: nplurals=2; plural=INTERNAL_PROJECT_MARKER;\\n"'
+            source = po.read_text(encoding="utf-8").replace("\n\nmsgctxt", f"\n{metadata}\n\nmsgctxt")
+            po.write_text(source, encoding="utf-8")
+            subprocess.run(["msgfmt", "-o", str(mo), str(po)], check=True, capture_output=True)
+            output = run()
+            self.assertEqual(output.returncode, 1, output.stderr)
+            self.assertIn("invalid compiled gettext resource", output.stderr)
+            self.assertNotIn("INTERNAL_PROJECT_MARKER", output.stderr)
+
+    def test_delivery_rejects_duplicate_final_resource_keys(self):
+        output = self.verify_final_resource(
+            '{"messages":{"message.title":"Bonjour {name}",'
+            '"payment.action":"Payer {amount}","payment.action":"Verser {amount}"}}'
+        )
+        self.assertEqual(output.returncode, 1, output.stderr)
+        self.assertIn("duplicate JSON key", output.stderr)
+        self.assertNotIn("Bonjour", output.stderr)
+        self.assertNotIn("duplicate JSON key: payment.action", output.stderr)
 
     def test_validator_accepts_execution_mode_metadata_with_only_mode_difference(self):
         """Break: validator behavior could differ for otherwise identical execution metadata."""

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import gettext
 import importlib.util
 import json
 import math
 import re
+import struct
 import sys
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -1001,8 +1004,173 @@ def _load_json(path: Path, label: str) -> object:
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_nonfinite,
         )
-    except (json.JSONDecodeError, UnicodeError, ValueError) as error:
+    except (ValueError, RecursionError) as error:
         raise ValueError(f"invalid {label} JSON in {path}: {error}") from error
+
+
+def _delivery_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    values = dict(pairs)
+    if len(values) != len(pairs):
+        raise ValueError("duplicate JSON key")
+    return values
+
+
+def _decode_delivery_value(text: str) -> object:
+    return json.loads(
+        text, object_pairs_hook=_delivery_object, parse_float=Decimal,
+        parse_constant=_reject_nonfinite,
+    )
+
+
+def _same_delivery_value(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_delivery_value(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_delivery_value(a, b) for a, b in zip(left, right)
+        )
+    return left == right
+
+
+class _RejectGettextFallback(gettext.NullTranslations):
+    """Require a stored value even when source and target text are identical."""
+
+    def _missing(self, *args: object) -> str:
+        raise ValueError("missing key in final gettext resource")
+
+    gettext = pgettext = ngettext = npgettext = _missing
+
+
+def _gettext_delivery_value(
+    path: Path, unit: dict[str, object], parsed: dict[tuple[Path, str], object]
+) -> str:
+    if set(unit) - {"path", "keys", "format", "context", "count"}:
+        raise ValueError("unsupported gettext resource fields")
+    keys, context, count = unit["keys"], unit.get("context"), unit.get("count")
+    if not isinstance(keys, list) or len(keys) != 1 or not isinstance(keys[0], str) or not keys[0]:
+        raise ValueError("gettext keys must contain exactly one non-empty msgid")
+    if context is not None and not isinstance(context, str):
+        raise ValueError("gettext context must be a string or null")
+    if count is not None and (type(count) is not int or count < 0):
+        raise ValueError("gettext count must be a non-negative integer or null")
+    cache_key = path, "gettext"
+    if cache_key not in parsed:
+        try:
+            with path.open("rb") as resource:
+                catalog = gettext.GNUTranslations(resource)
+        except (ValueError, LookupError, struct.error):
+            raise ValueError("invalid compiled gettext resource") from None
+        catalog.add_fallback(_RejectGettextFallback())
+        parsed[cache_key] = catalog
+    catalog = parsed[cache_key]
+    message = keys[0]
+    if count is None:
+        return catalog.gettext(message) if context is None else catalog.pgettext(context, message)
+    if context is None:
+        return catalog.ngettext(message, message, count)
+    return catalog.npgettext(context, message, message, count)
+
+
+def _delivery_matches_review(
+    unit: object, reviewed: str, directory: Path, parsed: dict[tuple[Path, str], object]
+) -> bool:
+    if not isinstance(unit, dict) or not {"path", "keys"} <= set(unit):
+        raise ValueError("resource must contain path and keys")
+    resource, keys, typed = unit["path"], unit["keys"], unit.get("typed_json", False)
+    if not isinstance(resource, str) or not resource.strip():
+        raise ValueError("resource path must be a non-empty string")
+    path = (directory / resource).resolve()
+    if unit.get("format") == "gettext":
+        return _gettext_delivery_value(path, unit, parsed) == reviewed
+    if set(unit) - {"path", "keys", "typed_json"}:
+        raise ValueError("unsupported JSON or text resource fields")
+    if type(typed) is not bool:
+        raise ValueError("typed_json must be a boolean")
+    if keys is None:
+        if typed:
+            raise ValueError("typed_json requires a JSON resource")
+        return path.read_bytes().decode("utf-8") == reviewed
+    if not isinstance(keys, list) or any(
+        not isinstance(key, str) and not (type(key) is int and key >= 0) for key in keys
+    ):
+        raise ValueError("keys must contain JSON object names or non-negative array indices")
+    cache_key = path, "json"
+    if cache_key not in parsed:
+        parsed[cache_key] = _decode_delivery_value(path.read_text(encoding="utf-8"))
+    value = parsed[cache_key]
+    for key in keys:
+        if isinstance(key, str) and isinstance(value, dict) and key in value:
+            value = value[key]
+        elif type(key) is int and isinstance(value, list) and key < len(value):
+            value = value[key]
+        else:
+            raise ValueError("missing key in final resource")
+    if typed:
+        return _same_delivery_value(value, _decode_delivery_value(reviewed))
+    if not isinstance(value, str):
+        raise ValueError("final resource value must be a string")
+    return value == reviewed
+
+
+def _validate_delivery(
+    result: Mapping[str, object], manifest: object, directory: Path, *, allow_partial: bool
+) -> list[str]:
+    fields = {"review_id", "locales", "withheld"} if allow_partial else {"review_id", "locales"}
+    if not isinstance(manifest, dict) or set(manifest) != fields:
+        return ["delivery must contain " + ", ".join(sorted(fields))]
+    if manifest["review_id"] != result["review_id"]:
+        return ["delivery review_id must match the current review"]
+    locations = manifest["locales"]
+    locales = {locale["target_locale"]: locale["units"] for locale in result["locales"]}
+    if not isinstance(locations, dict) or set(locations) != set(locales):
+        return ["delivery locale set must match the current review"]
+
+    withheld = manifest["withheld"] if allow_partial else {}
+    if not isinstance(withheld, dict) or not set(withheld) <= set(locales):
+        return ["withheld locales must belong to the current review"]
+    if not any(locations.values()):
+        return ["delivery requires at least one released unit"]
+
+    errors = []
+    parsed: dict[tuple[Path, str], object] = {}
+    for locale, units in locales.items():
+        scoped = locations[locale]
+        held = withheld.get(locale, [])
+        if not isinstance(held, list) or any(not isinstance(uid, str) for uid in held):
+            errors.append(f"withheld units for {locale} must be a list of reviewed unit IDs")
+            continue
+        if (not isinstance(scoped, dict) or set(scoped).intersection(held)
+                or len(held) != len(set(held))
+                or set(scoped).union(held) != {unit["unit_id"] for unit in units}):
+            errors.append(f"released and withheld units for {locale} must partition the current review")
+            continue
+        for unit in units:
+            uid = unit["unit_id"]
+            label = f"{locale}/{uid}"
+            classification = unit["classification"]
+            if uid in held:
+                if classification not in {"blocked_by_source", "unresolved"}:
+                    errors.append(f"{label}: only unresolved or source-blocked units may be withheld")
+                continue
+            if classification == "no_issue_detected":
+                expected = unit["current_target"]
+            elif classification == "change_recommended":
+                expected = unit["recommendation"]["text"]
+            else:
+                errors.append(f"{label}: review has not cleared this unit for delivery")
+                continue
+            try:
+                matches = _delivery_matches_review(scoped[uid], expected, directory, parsed)
+            except (ValueError, OSError, RuntimeError, LookupError, ArithmeticError, struct.error) as error:
+                errors.append(f"{label}: {error}")
+                continue
+            if not matches:
+                errors.append(f"{label}: final resource differs from the reviewed value")
+    return errors
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1013,14 +1181,21 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--result", required=True, type=Path)
     parser.add_argument("--draft-terminology", type=Path)
+    parser.add_argument("--delivery", type=Path, help="Check final resource locations for this review")
+    parser.add_argument("--allow-partial-delivery", action="store_true",
+                        help="Allow explicitly withheld unresolved or source-blocked units")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.allow_partial_delivery and args.delivery is None:
+        parser.error("--allow-partial-delivery requires --delivery")
     try:
         request = _load_json(args.request, "request")
         result = _load_json(args.result, "result")
+        delivery = _load_json(args.delivery, "delivery") if args.delivery is not None else None
         draft_text = (
             args.draft_terminology.read_text(encoding="utf-8")
             if args.draft_terminology is not None
@@ -1038,6 +1213,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     errors = list(validate_review_artifact(request, result))
     if draft_text is not None:
         errors.extend(_load_draft_terminology_validator()(draft_text))
+    if not errors and args.delivery is not None:
+        errors.extend(_validate_delivery(
+            result, delivery, args.delivery.parent, allow_partial=args.allow_partial_delivery
+        ))
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
