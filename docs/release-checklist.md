@@ -28,6 +28,10 @@ that runtime translations were reviewed by a human.
 | Remote skills preview reviewed | Repeat for release | The canonical repository listing contains the exact release inventory. |
 | Release worktree clean | Repeat for release | No tracked or untracked release artifacts remain after the final commit. |
 
+Maintainers can record [community reviews](translation-review.md) as bilingual
+evidence for the exact commit and fixture reviewed. The stable tag stays
+pending until all release gates are complete.
+
 ## Verification commands
 
 Run from the repository root:
