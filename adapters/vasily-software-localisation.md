@@ -3,7 +3,8 @@
 ## Source contract
 
 - Source ID: `vasily-software-localisation`
-- Repository: https://github.com/vasilyu1983/AI-Agents-public
+- Original repository: https://github.com/vasilyu1983/AI-Agents-public
+- Verification mirror: https://github.com/fxlrnrpt/AI-Agents-public
 - Path: `frameworks/shared-skills/skills/software-localisation/SKILL.md`
 - Immutable commit: `6a223ba13c311c09b41c1dc09c14ab75e703894b`
 - License: `MIT`
