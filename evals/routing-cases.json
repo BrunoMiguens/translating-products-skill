@@ -219,5 +219,42 @@
     "id": "empty-classification",
     "request": {"schema_version": 2, "source_locale": "en-US", "targets": [{"locale": "en-GB"}], "surfaces": [], "platforms": [], "formats": [], "domains": [], "capabilities": [], "audience": "Adults", "purpose": "Product onboarding", "register": "neutral product"},
     "expected_routes": [{"target_locale": "en-GB", "selected": ["reviewing-translations", "translating-core"]}]
+  },
+  {
+    "id": "explicit-writing-system-direction",
+    "request": {
+      "schema_version": 2,
+      "source_locale": "en",
+      "targets": [
+        {"locale": "ur-PK", "scripts": ["Arab"]},
+        {"locale": "he-IL", "scripts": ["Hebr"]},
+        {"locale": "yi", "scripts": ["hEbr"]},
+        {"locale": "nqo", "scripts": ["Nkoo"]},
+        {"locale": "syr", "scripts": ["Syrc"]},
+        {"locale": "dv", "scripts": ["Thaa"]},
+        {"locale": "pa-IN", "scripts": ["Guru"]},
+        {"locale": "sr-Latn", "scripts": ["Latn"]},
+        {"locale": "fr-FR", "scripts": ["rtl"]}
+      ],
+      "surfaces": ["software"],
+      "platforms": [],
+      "formats": ["gettext"],
+      "domains": [],
+      "capabilities": [],
+      "audience": "Account owners",
+      "purpose": "Account settings",
+      "register": "neutral"
+    },
+    "expected_routes": [
+      {"target_locale": "ur-PK", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
+      {"target_locale": "he-IL", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl", "translating-hebrew"]},
+      {"target_locale": "yi", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
+      {"target_locale": "nqo", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
+      {"target_locale": "syr", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
+      {"target_locale": "dv", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl"]},
+      {"target_locale": "pa-IN", "selected": ["reviewing-translations", "translating-core", "localizing-software"]},
+      {"target_locale": "sr-Latn", "selected": ["reviewing-translations", "translating-core", "localizing-software"]},
+      {"target_locale": "fr-FR", "selected": ["reviewing-translations", "translating-core", "localizing-software", "translating-rtl", "translating-french"]}
+    ]
   }
 ]

@@ -228,7 +228,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 - Description: Use when applying right-to-left script and bidirectional UI rules for Arabic, Hebrew, Persian, Urdu, or mixed RTL/LTR product content.
 - Capabilities: `script:rtl`, `bidi`, `mirroring`, `mixed-direction`
 - Depends on: `translating-core`, `reviewing-translations`
-- Selectors: `scripts`: `rtl` OR `capabilities`: `bidi`
+- Selectors: `scripts`: `rtl`, `Arab`, `Hebr`, `Nkoo`, `Syrc`, `Thaa` OR `capabilities`: `bidi`
 - Phases: `refine`, `integrate`
 - Specificity: `writing-system`
 - Required context: `target_locale`
