@@ -45,6 +45,14 @@ Use project context and pinned knowledge first. Research only a specific unresol
 
 Prioritize a clear action or state. Once the inclusive convention is approved, choose an ordinary contemporary clause that preserves the actor and action. Use contextual infinitives, nouns, passive constructions, or sentence restructuring only when they remain natural in that exact UI context; do not replace a clear action with an awkward nominalization or erase who acted merely to avoid gender. Keep buttons short and parallel without treating English fragments as a template.
 
+When an instruction identifies an item by who created, owns, or changed it,
+keep that actor identifiable in the Hebrew clause through wording or verb
+inflection. Follow the approved inclusive convention and check that the same
+items still qualify. Verb inflection can carry the actor without a separate
+pronoun. Use a natural actorless construction when the source leaves the actor
+unspecified or when the surrounding Hebrew identifies the actor and the actor
+plays no part in which item qualifies.
+
 Counts require representative values. Do not place every `{count}` beside one fixed noun and plural verb: verify one, two, and other relevant values and the platform's message variants. Check prefixed prepositions and articles around placeholders without altering placeholder names or raw values.
 
 ### Media terminology
