@@ -31,8 +31,8 @@ Resolve `SKILL_DIRECTORY` to the absolute directory containing this `SKILL.md`. 
 
 Follow this order:
 
-1. Put the request's actual `source_locale` and `target_locale` or `target_locales` fields in a temporary JSON object. Do not infer readiness from filenames.
-2. Run `python3 SKILL_DIRECTORY/scripts/policy.py bootstrap --project-root PROJECT_ROOT --request-json REQUEST_JSON` so the policy reads the real `.translation` bytes.
+1. Identify the active project for this request. Put its requested `target_locale` or `target_locales` in a temporary JSON object. Include `source_locale` when the caller supplies an exact tag or the source declares one. A language name alone, such as “English”, supplies no exact tag. Do not infer one from a filename or a previous project.
+2. Run `python3 SKILL_DIRECTORY/scripts/policy.py bootstrap --project-root PROJECT_ROOT --request-json REQUEST_JSON` so the policy reads the real `.translation` bytes. If it returns `translate` and the request left the source tag unspecified, use the exact source tag in this project's approved `locales.yaml`. Ask before drafting if the source language or an explicit tag conflicts with that configuration.
 3. When the result is `setup-one-question-at-a-time`, ask only its `question`, withhold all target copy, and wait for the answer. Resolve the first issue before rerunning the command.
 4. During setup, ask one focused question at a time, then present the complete proposed configuration. Include intentionally empty glossary or protected-term collections explicitly. Wait for approval before writing project context or translating.
 5. After approval, copy the files from `SKILL_DIRECTORY/assets/translation-project/` into `.translation/` as needed, fill every required value, and change both document statuses to `approved`. Do not overwrite existing project decisions silently.
