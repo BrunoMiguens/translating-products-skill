@@ -62,6 +62,10 @@ Keep the formatted value as a typed/opaque substitution inside one complete loca
 
 ## Pseudo-Locales and Fallback
 
+Record the requested locale tag and the module's actual resource qualifier separately. Follow the existing source set, resource generator or working locale directory. Keep the exact requested locale tag in the project configuration. For a new Hebrew directory without a project mapping, start with the legacy Android qualifier `values-iw`. Use `values-iw-rIL` only for a required separate Israel layer. Any other Hebrew qualifier needs a demonstrated lookup under the requested locale on the supported runtime.
+
+For a new or changed qualifier, check the compiled resource with the project's Android toolchain and resolve a translated string and an applicable quantity under the requested locale when runtime review is authorized. Use distinct base and target values, and verify that an intentionally missing key still falls back. If the qualifier cannot be established from the project or a consumer check, record the resource location as unresolved before claiming a usable delivery.
+
 Run the Android pseudo-locales `en-XA` for expansion/accent pressure and `ar-XB` for forced RTL/bidirectional pressure in a debuggable or test configuration. Exercise screenshots, navigation, formatted values, placeholders, plurals, markup, and TalkBack. Pseudo-locales validate engineering and are never target translations.
 
 Do not copy English text into a target locale directory to make completeness checks pass. Missing target content must follow the approved fallback policy and remain detectable; unintended source-language or mixed-language customer output blocks release.
