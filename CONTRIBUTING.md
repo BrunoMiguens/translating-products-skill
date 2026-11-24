@@ -9,6 +9,7 @@ specialist.
 
 ## Help review translations
 
+Pick a case from the [open translation review issues](https://github.com/BrunoMiguens/translating-products-skill/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22+in%3Atitle+%22Translation+review%22).
 You can contribute by reviewing a single public or synthetic example in a
 language you know. The [translation review guide](docs/translation-review.md)
 explains what to check and how to submit findings.
