@@ -42,6 +42,12 @@ Use project context, glossary, and pinned knowledge first. Research only a concr
 
 Use concise, idiomatic commands and states familiar in the target market. Resolve noun/verb ambiguity from screen context, keep adjacent actions parallel, and avoid importing long explanatory syntax into labels. Test expansion, truncation, accessibility speech, and agreement around placeholders with representative runtime values.
 
+### Formatter Day Periods
+
+For each day-period field, record its resource key, width (narrow, abbreviated, or wide), and role as a standalone label or part of a formatted time. Choose the Spanish form for that slot using approved project or locale evidence. Check the labels together for ambiguity at the same width and in the same role.
+
+Use the project's formatter to inspect midnight, noon, and neighboring periods. Include rendered examples by role and width in the QA handoff. When a field's role, width, or Spanish convention remains unresolved, ask for the missing detail through the orchestrator and hold the affected field. Record any gap in runtime verification separately from the linguistic decision.
+
 ## Long-Form Content
 
 Maintain the approved reader relationship and regional register across headings, explanations, instructions, and calls to action. Prefer cohesive Spanish prose over sentence-by-sentence English order. Avoid unnecessary subject pronouns, literal gerunds, stacked nouns, and repeated possessives. Allow long-form copy to express transitions and relationships that compact UI omits.
