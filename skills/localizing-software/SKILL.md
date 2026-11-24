@@ -69,7 +69,7 @@ This skill owns software field classification, protected syntax, runtime constra
 
 ## QA and CI Handoff
 
-For a GNU gettext catalog with an approved plural rule, use the [compiled plural check](references/gettext-plural-contract.md) to verify arity and branch selection at the approved counts.
+For compiled gettext consumed by Python's `gettext.GNUTranslations`, use the [compiled plural check](references/gettext-plural-contract.md) to verify arity and branch selection against an approved rule. For other consumers, check branch selection in the application runtime.
 
 Pass source and target catalogs, locale pair, runtime/version, key and placeholder inventories, resource comments, rendering context, fallback policy, and these gates to `reviewing-translations` and CI:
 

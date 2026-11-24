@@ -59,6 +59,9 @@ def load_authority(path: Path) -> tuple[int, dict[int, int], list[str]]:
 def check_catalog(
     catalog: gettext.GNUTranslations, arity: int, selections: dict[int, int], required_messages: list[str]
 ) -> list[str]:
+    headers = re.findall(r"^[ \t]*plural-forms[ \t]*:", catalog.gettext(""), re.IGNORECASE | re.MULTILINE)
+    if len(headers) != 1:
+        return ["catalog requires exactly one Plural-Forms header"]
     rule = catalog.info().get("plural-forms", "")
     arities = re.findall(r"(?:^|;)\s*nplurals\s*=\s*([0-9]+)\s*(?=;|$)", rule)
     selectors = re.findall(r"(?:^|;)\s*plural\s*=\s*[^;]+", rule)
