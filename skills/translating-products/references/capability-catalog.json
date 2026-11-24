@@ -694,7 +694,12 @@
       "selectors": [
         {
           "scripts": [
-            "rtl"
+            "rtl",
+            "Arab",
+            "Hebr",
+            "Nkoo",
+            "Syrc",
+            "Thaa"
           ]
         },
         {
