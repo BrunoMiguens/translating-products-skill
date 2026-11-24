@@ -54,6 +54,20 @@ class ReviewInvariantTests(unittest.TestCase):
                     self.assertEqual(len(findings), 1)
                     self.assertEqual(findings[0].check, "character_limit")
 
+    def test_character_budget_spans_use_candidate_string_offsets(self):
+        for candidate, check, span in (
+            ("abcd", {"max": 2}, (2, 4)),
+            ("a🌍b", {"max": 2, "counting": "utf16"}, (1, 3)),
+            ("é🌍x", {"max": 3, "counting": "utf8"}, (1, 3)),
+            ("🌍", {"max": 3, "counting": "utf8"}, (0, 1)),
+        ):
+            with self.subTest(candidate=candidate, check=check):
+                findings = self.validate(
+                    source="Earth", candidate=candidate,
+                    checks=({"type": "character_limit", "severity": "critical", **check},),
+                )
+                self.assertEqual([finding.span for finding in findings], [span])
+
     def test_character_budget_rejects_unknown_counting_method(self):
         with self.assertRaisesRegex(ValueError, "counting"):
             validate_check_declaration({

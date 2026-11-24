@@ -629,20 +629,26 @@ def check_character_limit(case: Mapping[str, object], output: str, check: Mappin
     if type(maximum) is not int or maximum < 0:
         raise ValueError("character_limit requires a non-negative integer max")
     method = check.get("counting", "codepoints")
-    if method == "utf16":
-        length = len(output.encode("utf-16-le")) // 2
-        unit = "UTF-16 code unit"
-    elif method == "utf8":
-        length = len(output.encode("utf-8"))
-        unit = "UTF-8 byte"
-    else:
+    if method == "codepoints":
         length = len(output)
         unit = "character"
-    if length <= maximum:
-        return ()
+        start = maximum
+        if length <= maximum:
+            return ()
+    else:
+        if method == "utf16":
+            encoding, width, unit = "utf-16-le", 2, "UTF-16 code unit"
+        else:
+            encoding, width, unit = "utf-8", 1, "UTF-8 byte"
+        encoded = output.encode(encoding)
+        length = len(encoded) // width
+        if length <= maximum:
+            return ()
+        # The byte budget can end inside a character. Report string offsets.
+        start = len(encoded[:maximum * width].decode(encoding, errors="ignore"))
     return (_InvariantEvidence(
         "character_limit", _severity(check), {"max": maximum}, {"length": length},
-        (maximum, length), f"output exceeds the {maximum}-{unit} limit",
+        (start, len(output)), f"output exceeds the {maximum}-{unit} limit",
     ),)
 
 
