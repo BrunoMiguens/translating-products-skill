@@ -47,6 +47,22 @@ Prioritize a clear action or state. Once the inclusive convention is approved, c
 
 Counts require representative values. Do not place every `{count}` beside one fixed noun and plural verb: verify one, two, and other relevant values and the platform's message variants. Check prefixed prepositions and articles around placeholders without altering placeholder names or raw values.
 
+### Media terminology
+
+Identify the role of each media term before choosing the Hebrew noun. A codec
+names the coding system for a media stream, including in playback-only
+settings. Follow approved terminology for this role. If the project has no
+approved term, default to the established Hebrew loanword for codec. Use the
+Hebrew nouns for encoder and decoder when the source names the component that
+produces or reads the encoded stream. A container format names how the
+streams are packaged.
+
+Before approving saved copy, read related settings together. Identify the
+technical role named by each Hebrew noun and compare it with the role in the
+source. Correct any mismatch and check that every named format and component
+remains explicit. Send unresolved terminology that affects the stated
+capability to the orchestrator.
+
 ## Long-Form Content
 
 Use a consistent contemporary register across paragraphs. Restructure direct second-person address according to the approved inclusive convention, then check that references remain clear and prose does not become a sequence of heavy doubled forms. Maintain coherent transitions, construct relationships, terminology, and pronoun reference. Preserve code, links, examples, and protected Latin terms.
