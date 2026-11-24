@@ -200,3 +200,24 @@ The audit catalogued 42 behavior groups. Some had only routing or partial, isola
 | Does the skill improve thinly evidenced languages and markets? | Fresh attributable material or qualified bilingual reviewers in the uncovered strata | Record locale, script, register and reviewer qualifications. Evaluate generic or regional choices in their actual context and report their own denominators. |
 
 The private audit directory is `benchmark-private/open-source-project-audit/`. Within it, `RESULTS.md`, `FEATURE-BEHAVIOR-COVERAGE.md`, `REGIONAL-RESULTS.md` and `IMPROVEMENT-PLAN.md` index the mechanisms and their retained proofs. `final-analysis/all-project-locale-runs.csv` distinguishes original outcomes from assisted runs. Use those artifacts for evaluator diagnosis; build fresh development and acceptance cases outside the historical answer set.
+
+## Implementation evidence
+
+The first implementation pass covered the mechanical checks below. The fresh trials used isolated workspaces containing only synthetic source-side fixtures. Bilingual acceptance remains open.
+
+| Plan task | Implemented or verified |
+|---|---|
+| 1. Benchmark setup | Published the aggregate baseline and its archive hash. Fresh handoff trials used separate worker directories and locally retained receipts. |
+| 2. Review-to-delivery verification | The v2 validator can reopen final JSON, text and compiled gettext. In five paired synthetic handoffs, both revisions made the same release decisions. The candidate used the deterministic verifier in all five. The automated suite also covers stale IDs, duplicate keys, exact decimals, plural arms and unapplied corrections. |
+| 3. Document completeness | Four fresh baseline defect cases correctly held English prose, a missing condition, a wrong table entry or a changed operational token. A separate control with an explicit French market passed. The large-document benchmark failures remain a reason to test a fresh long native generation run. |
+| 4. Literals and credits | The documentation token control passed. The delivery verifier now rejects a missing gettext context even when fallback yields the expected source text. Contributor authorization still needs a dedicated workflow trial. |
+| 5. Plural contracts | The new checker reproduced all 23 benchmarked contract mismatches after compiling the saved catalogs, including 10 arity and 13 selector mismatches. Equivalent selector expressions pass at the approved counts. Arabic rendered agreement still needs bilingual review. |
+| 6. Native runtime | Release verification supports compiled gettext lookup. Android resource lookup and TypeScript consumer checks retain their original benchmark evidence and still need fresh native acceptance for a changed skill. |
+| 7. RTL routing | The new fixture catches five explicit right-to-left scripts. The old and new router returned identical decisions on all 42 previous fixtures. New device visual behavior remains outside this result. |
+| 8. Product meaning | The specialist casebook remains diagnostic. Bilingual judgments on fresh text are required for a language improvement claim. |
+| 9. Regional and field rules | Field limits can use UTF-16 units or UTF-8 bytes when the product declares that counting method. The existing Unicode code-point default remains. Regional wording and punctuation need their own locale trials. |
+| 10. Partial delivery | The validator can reconcile a caller-approved subset against explicitly withheld unresolved or source-blocked units. The final packager still owns which values enter the public artifact. |
+| 11. Order and evaluation | The release verifier rejects stale review identities and scoped key mismatches. The complete counterbalanced project/locale run and collector follow-ups remain open. |
+| 12. Release acceptance | The combined implementation passed 636 tests and disposable installation for the supported agents. The public mirror restored verification of all seven immutable upstream pins. Bilingual review and a fresh native comparison still gate the linguistic claim. |
+
+The source lock uses the public mirror of the original pinned commit. The source file bytes and license match the existing recorded provenance.
