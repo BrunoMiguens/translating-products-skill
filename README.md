@@ -112,6 +112,7 @@ never downloaded during a translation task.
   benchmark and private product-review regression workflows.
 - [Contributing](CONTRIBUTING.md) — add a language, surface, platform, adapter,
   source, or evaluation.
+- [Help review translations](docs/translation-review.md) — contribute bilingual feedback in a language you know.
 - [Release checklist](docs/release-checklist.md) — prerelease gates and evidence.
 
 ## Included skills

@@ -7,6 +7,12 @@ Before changing behavior, read the [architecture](docs/architecture.md),
 [`skills-manifest.json`](skills-manifest.json), and the closest existing
 specialist.
 
+## Help review translations
+
+You can contribute by reviewing a single public or synthetic example in a
+language you know. The [translation review guide](docs/translation-review.md)
+explains what to check and how to submit findings.
+
 ## Choose the contribution path
 
 | Change | Main files |
