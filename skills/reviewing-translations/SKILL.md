@@ -177,6 +177,8 @@ Add `--draft-terminology DRAFT_TERMINOLOGY.csv` when inferred terms were
 recorded. Validation is the deterministic completion gate; draft terms remain
 non-authoritative and cannot satisfy approved terminology requirements.
 
+For saved JSON, whole-file text or compiled GNU gettext, use [delivery validation](references/delivery-validation.md) to check the final values against this review after integration.
+
 Under an orchestrator, the canonical record is an internal QA handoff unless
 the caller requests it. For an unstructured QA handoff, return one finding per
 independently correctable segment with pass, issue, owner, affected segment, and
