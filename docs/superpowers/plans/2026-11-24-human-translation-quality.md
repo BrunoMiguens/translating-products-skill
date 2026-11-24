@@ -203,7 +203,7 @@ The private audit directory is `benchmark-private/open-source-project-audit/`. W
 
 ## Implementation evidence
 
-The first implementation pass covered the mechanical checks below. The fresh trials used isolated workspaces containing only synthetic source-side fixtures. Bilingual acceptance remains open.
+The first implementation pass covered the mechanical checks below. The fresh trials used isolated workspaces with synthetic sources, reviewed values and delivery files. The evaluator retained the expected decisions separately. Bilingual acceptance remains open.
 
 | Plan task | Implemented or verified |
 |---|---|
@@ -218,6 +218,8 @@ The first implementation pass covered the mechanical checks below. The fresh tri
 | 9. Regional and field rules | Field limits can use UTF-16 units or UTF-8 bytes when the product declares that counting method. The existing Unicode code-point default remains. Regional wording and punctuation need their own locale trials. |
 | 10. Partial delivery | The validator can reconcile a caller-approved subset against explicitly withheld unresolved or source-blocked units. The final packager still owns which values enter the public artifact. |
 | 11. Order and evaluation | The release verifier rejects stale review identities and scoped key mismatches. The complete counterbalanced project/locale run and collector follow-ups remain open. |
-| 12. Release acceptance | The combined implementation passed 636 tests and disposable installation for the supported agents. The public mirror restored verification of all seven immutable upstream pins. Bilingual review and a fresh native comparison still gate the linguistic claim. |
+| 12. Release acceptance | At the close of the first implementation pass, local integration commit `0878342` passed 637 tests and disposable installation for the supported agents. The public mirror restored verification of all seven immutable upstream pins. Bilingual review and a fresh native comparison still gate the linguistic claim. |
 
 The source lock uses the public mirror of the original pinned commit. The source file bytes and license match the existing recorded provenance.
+
+The implementation evidence refers to these changes in the repository. [RTL routing](https://github.com/BrunoMiguens/translating-products-skill/pull/4) · [Delivery verification](https://github.com/BrunoMiguens/translating-products-skill/pull/5) · [Gettext plurals](https://github.com/BrunoMiguens/translating-products-skill/pull/6) · [Field budgets](https://github.com/BrunoMiguens/translating-products-skill/pull/7) · [Source lock](https://github.com/BrunoMiguens/translating-products-skill/pull/8)
