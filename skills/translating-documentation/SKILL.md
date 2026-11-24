@@ -50,6 +50,7 @@ Translate a link label, not its destination. Translate a diagram's confirmed dis
 - Preserve document topology: heading levels/order, lists, table shape, callout type, code/inline boundaries, references, media, and diagrams.
 - Keep each executable example runnable and semantically equivalent. Do not translate a literal token merely because readers can see it.
 - Apply the approved technical glossary consistently by concept and context. Record a missing term as a draft terminology decision for core/domain ownership; do not silently coin an approved term.
+- When the source spells out a technical acronym or initialism, preserve every defining part of the full term, including qualifiers that distinguish it from related concepts. If a reliable target equivalent is unavailable, retain the source full form where project terminology rules permit and record the gap through the draft terminology process. Keep the abbreviation as supplied unless the approved glossary specifies a localized form. Keep bare abbreviations unexpanded during localization. Treat any requested expansion as a separate documentation change that requires approval and an update to the source before translation.
 - Keep references resolvable. A localized link or anchor requires a verified mapping supplied by documentation ownership; otherwise retain the source destination.
 - Keep prose and examples aligned: parameter names, return fields, sequence, prerequisites, outcomes, and version scope must agree.
 - Preserve deliberately mixed-language technical terms and distinguish them from accidental untranslated prose.
@@ -76,6 +77,7 @@ Pass source and target documents, locale pair, product/version scope, technical 
 - link and anchor checks confirm internal and external cross-references resolve to approved destinations
 - diagram renderer confirms valid syntax, unchanged nodes/edges, and complete translatable display labels
 - glossary, concept, parameter, return-value, prerequisite, and version references remain consistent across prose and examples
+- each abbreviation remains visible in its supplied or approved form. For each occurrence, source and target both include the expansion or both use the abbreviation alone. Each localized full term retains every defining part, even when the source full term is also shown
 - no accidental untranslated prose or full-width/localized characters enter protected literals
 
-Block publication for broken executable content, changed technical behavior, corrupted identifiers, unverified version/API correction, broken cross-reference, altered diagram connectivity, glossary conflict, or accidental mixed-language prose. Route the exact affected span or enclosing example to its responsible installed skill.
+Block publication for added or missing technical expansions, changed or missing defining parts, missing abbreviations or unapproved abbreviation forms, broken executable content, changed technical behavior, corrupted identifiers, unverified version/API correction, broken cross-reference, altered diagram connectivity, glossary conflict, or accidental mixed-language prose. Route the exact affected span or enclosing example to its responsible installed skill.
