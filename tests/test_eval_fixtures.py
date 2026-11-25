@@ -69,7 +69,7 @@ EXPECTED_COUNTS = {
     "orchestration-cases.json": 17,
     "research-cases.json": 15,
     "prompt-injection-cases.json": 10,
-    "translation-quality-cases.json": 27,
+    "translation-quality-cases.json": 28,
     "structural-fidelity-cases.json": 12,
     "runtime-ui-review-cases.json": 3,
 }
