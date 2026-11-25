@@ -51,7 +51,16 @@ Compare meaning unit by unit and across each semantic group. Find omissions, add
 For each event or state, map the participants and roles: initiator, affected
 object, recipient or owner, result, and responsible actor. Reject wording that
 changes agency merely because the source and target prefer different
-grammatical subjects. For assessments, review the stem and all answer choices
+grammatical subjects.
+
+When a later step uses an earlier result, compare the object of that step
+in the source and target. To test a target pronoun or omitted object,
+substitute the result and each plausible alternative, such as the original
+input. Flag a wrong referent or two readings that make sense in context and
+tell the reader to act on different objects. Keep natural references when
+the target wording and context identify the intended object.
+
+For assessments, review the stem and all answer choices
 together; verify that translation has not changed which options are true,
 false, plausible, exclusive, or responsive to the stem.
 
