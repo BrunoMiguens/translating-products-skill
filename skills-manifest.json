@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "suite_version": "0.6.0",
+  "suite_version": "0.6.1",
   "orchestrator": "translating-products",
   "minimum_skill_versions": {
     "translating-core": "0.2.0",
@@ -29,7 +29,7 @@
   "skills": [
     {
       "name": "translating-products",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "category": "orchestrator",
       "description": "Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.",
       "capabilities": [
@@ -99,7 +99,7 @@
     },
     {
       "name": "reviewing-translations",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "category": "quality",
       "description": "Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.",
       "capabilities": [

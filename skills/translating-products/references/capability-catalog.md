@@ -1,6 +1,6 @@
 # Capability catalog
 
-Suite version: `0.6.0`
+Suite version: `0.6.1`
 
 ## Disclosure
 
@@ -20,7 +20,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 
 ### translating-products
 
-- Version: `0.6.0`
+- Version: `0.6.1`
 - Description: Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.
 - Capabilities: `orchestrator`, `project-bootstrap`, `skill-routing`, `subagent-routing`
 - Depends on: `translating-core`, `reviewing-translations`
@@ -56,7 +56,7 @@ Translations produced with this suite are AI-generated and have not been reviewe
 
 ### reviewing-translations
 
-- Version: `0.3.1`
+- Version: `0.3.2`
 - Description: Use when reviewing AI-generated translations for meaning, naturalness, terminology, locale, and structure after translation or when auditing localized content.
 - Capabilities: `translation-qa`, `terminology-qa`, `structural-qa`
 - Depends on: none
