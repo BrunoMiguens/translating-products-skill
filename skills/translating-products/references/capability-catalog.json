@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "suite_version": "0.4.0",
+  "suite_version": "0.6.0",
   "disclosure": "Translations produced with this suite are AI-generated and have not been reviewed by a human translator.",
   "skills": [
     {
       "name": "translating-products",
-      "version": "0.4.0",
+      "version": "0.6.0",
       "category": "orchestrator",
       "description": "Use when orchestrating product translation projects that may need project setup, language routing, platform routing, multiple translation skills, or translation QA.",
       "capabilities": [

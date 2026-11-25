@@ -126,7 +126,7 @@ contains the machine-oriented routing metadata.
 <summary>Show all bundled skills</summary>
 
 <!-- skill-inventory:start -->
-Suite version: `0.4.0`
+Suite version: `0.6.0`
 
 | Skill | Category | When to use |
 | --- | --- | --- |
