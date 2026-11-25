@@ -53,6 +53,12 @@ object, recipient or owner, result, and responsible actor. Reject wording that
 changes agency merely because the source and target prefer different
 grammatical subjects.
 
+If a heading, label, or related string supplies the speaker or actor for a
+short fragment, read the target fragment with its corresponding context. Check
+whether the target wording still points to the same participant. Accept a
+natural omission when context carries the role. Flag wording, including verb
+inflection, that changes who is speaking or acting.
+
 When a later step uses an earlier result, compare the object of that step
 in the source and target. To test a target pronoun or omitted object,
 substitute the result and each plausible alternative, such as the original

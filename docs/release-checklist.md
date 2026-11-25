@@ -3,7 +3,7 @@
 ## Current state
 
 The suite remains a prerelease at
-`<!-- suite-version:start -->0.6.0<!-- suite-version:end -->` with 23 manifest
+`<!-- suite-version:start -->0.6.1<!-- suite-version:end -->` with 23 manifest
 skills and 7 pinned adapted sources. The canonical repository is
 [`BrunoMiguens/translating-products-skill`](https://github.com/BrunoMiguens/translating-products-skill).
 

@@ -25,11 +25,11 @@ class ManifestTests(unittest.TestCase):
         manifest = load_manifest(ROOT / "skills-manifest.json")
         by_name = {skill.name: skill for skill in manifest.skills}
         self.assertEqual(manifest.schema_version, 2)
-        self.assertEqual(manifest.suite_version, "0.6.0")
+        self.assertEqual(manifest.suite_version, "0.6.1")
         self.assertEqual(manifest.orchestrator, "translating-products")
-        self.assertEqual(by_name["translating-products"].version, "0.6.0")
+        self.assertEqual(by_name["translating-products"].version, "0.6.1")
         self.assertEqual(by_name["translating-core"].version, "0.2.0")
-        self.assertEqual(by_name["reviewing-translations"].version, "0.3.1")
+        self.assertEqual(by_name["reviewing-translations"].version, "0.3.2")
         self.assertEqual(
             manifest.minimum_skill_versions["reviewing-translations"],
             "0.3.0",
@@ -52,7 +52,7 @@ class ManifestTests(unittest.TestCase):
     def test_manifest_exposes_declarative_routing_metadata(self):
         manifest = load_manifest(ROOT / "skills-manifest.json")
         self.assertEqual(manifest.schema_version, 2)
-        self.assertEqual(manifest.suite_version, "0.6.0")
+        self.assertEqual(manifest.suite_version, "0.6.1")
 
         web = skill_by_name(manifest, "translating-web")
         self.assertEqual(
